@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  排除安全存储与 Cookie 快照，避免换机恢复后密钥对不上：
+  flutter_secure_storage 的 EncryptedSharedPreferences 主密钥在 Android Keystore 里，
+  不会随备份迁移，恢复出来的密文解不开，反而让用户以为"密码丢了"。
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="." />
+</full-backup-content>

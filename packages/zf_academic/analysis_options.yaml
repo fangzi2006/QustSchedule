@@ -1,0 +1,16 @@
+include: package:lints/recommended.yaml
+
+analyzer:
+  # example/ 里的 Flutter 实现依赖 flutter_secure_storage（Flutter 插件），
+  # 不属于本纯 Dart 包，不参与静态检查——用法见 README「在 Flutter 应用里接入」。
+  exclude:
+    - example/**
+  language:
+    strict-casts: true
+    strict-raw-types: true
+
+linter:
+  rules:
+    - always_declare_return_types
+    - prefer_final_locals
+    - unawaited_futures

@@ -1,0 +1,444 @@
+/// 设置页：课表 / 账号 / 关于三组。
+///
+/// - 课表：作息时间表入口、周次校准、显示教师、显示地点、显示课表备注、静默更新；
+/// - 账号：身份、教务地址、修改密码、退出登录；
+/// - 关于：调试信息、版本号。
+///
+/// 账号区只有四行：身份、教务地址、修改密码、退出登录。
+/// 退出只有一个入口，且**同时清掉保存的密码**——这个 app 不提供"记住密码"开关，
+/// 密码只是为了 Cookie 失效时能自动重登。
+library;
+
+import 'package:flutter/material.dart';
+import 'package:zf_academic/zf_academic.dart' show AcademicError;
+
+import '../src/app_model.dart';
+import '../src/preferences_repository.dart';
+import '../src/timetable.dart' show formatMonthDayDate;
+import '../widgets/floating_dock.dart';
+import 'debug_page.dart';
+import 'schedule_page.dart' show showCalibrateSheet;
+import 'school_address_page.dart';
+import 'timetable_list_page.dart';
+
+class SettingsPage extends StatelessWidget {
+  const SettingsPage({super.key, required this.model});
+
+  final AppModel model;
+
+  static const String appVersion = '1.1.0';
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: model,
+      builder: (context, _) {
+        final theme = Theme.of(context);
+        final active = model.activeTimetable;
+        return Scaffold(
+          appBar: AppBar(title: const Text('设置')),
+          body: ListView(
+            padding: EdgeInsets.fromLTRB(
+              16,
+              4,
+              16,
+              FloatingDock.contentInset(context),
+            ),
+            children: <Widget>[
+              _SectionTitle('课表'),
+              Card(
+                child: Column(
+                  children: <Widget>[
+                    ListTile(
+                      leading: const Icon(Icons.schedule_rounded, size: 20),
+                      title: const Text('作息时间表'),
+                      subtitle: Text(
+                        active == null
+                            ? '未配置'
+                            : '${active.name} · ${active.sectionCount} 节 · ${formatMonthDayDate(active.effectiveFrom)} 起',
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => TimetableListPage(model: model),
+                        ),
+                      ),
+                    ),
+                    const Divider(height: 0, indent: 56),
+                    ListTile(
+                      leading: const Icon(Icons.date_range_rounded, size: 20),
+                      title: const Text('学期周次校准'),
+                      subtitle: Text(
+                        model.termStart == null
+                            ? '未定位'
+                            : '今天第 ${model.currentWeekOfToday} 周 · 第 1 周 ${_dateText(model.termStart!)} 起',
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => showCalibrateSheet(context, model),
+                    ),
+                    const Divider(height: 0, indent: 56),
+                    SwitchListTile(
+                      secondary: const Icon(
+                        Icons.person_outline_rounded,
+                        size: 20,
+                      ),
+                      title: const Text('显示教师'),
+                      subtitle: const Text('关掉后格子里只有课程名和地点'),
+                      value: model.showTeacher,
+                      onChanged: model.setShowTeacher,
+                    ),
+                    const Divider(height: 0, indent: 56),
+                    SwitchListTile(
+                      secondary: const Icon(Icons.place_outlined, size: 20),
+                      title: const Text('显示上课地点'),
+                      subtitle: const Text('关掉后格子里只有课程名和教师'),
+                      value: model.showLocation,
+                      onChanged: model.setShowLocation,
+                    ),
+                    const Divider(height: 0, indent: 56),
+                    SwitchListTile(
+                      secondary: const Icon(
+                        Icons.sticky_note_2_outlined,
+                        size: 20,
+                      ),
+                      title: const Text('显示课表备注'),
+                      subtitle: const Text('课表页下方显示实践课程与其他课程'),
+                      value: model.showScheduleRemarks,
+                      onChanged: model.setShowScheduleRemarks,
+                    ),
+                    const Divider(height: 0, indent: 56),
+                    SwitchListTile(
+                      secondary: const Icon(Icons.sync_rounded, size: 20),
+                      title: const Text('静默更新'),
+                      subtitle: const Text('打开 App 时在后台自动刷新课表'),
+                      value: model.autoRefresh,
+                      onChanged: model.setAutoRefresh,
+                    ),
+                    if (model.autoRefresh) ...<Widget>[
+                      const Divider(height: 0, indent: 56),
+                      ListTile(
+                        leading: const Icon(Icons.timer_outlined, size: 20),
+                        title: const Text('最小更新间隔'),
+                        subtitle: Text(
+                          '${model.autoRefreshIntervalMinutes} 分钟',
+                        ),
+                        trailing: _IntervalStepper(
+                          value: model.autoRefreshIntervalMinutes,
+                          onChanged: model.setAutoRefreshIntervalMinutes,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              _SectionTitle('账号'),
+              Card(
+                child: Column(
+                  children: <Widget>[
+                    ListTile(
+                      leading: const Icon(
+                        Icons.person_outline_rounded,
+                        size: 20,
+                      ),
+                      title: Text(_accountTitle),
+                      subtitle: Text(_accountSubtitle),
+                      trailing: model.signedIn
+                          ? const Icon(
+                              Icons.check_circle_rounded,
+                              size: 18,
+                              color: Color(0xFF2E7D32),
+                            )
+                          : null,
+                    ),
+                    const Divider(height: 0, indent: 56),
+                    ListTile(
+                      leading: const Icon(Icons.link_rounded, size: 20),
+                      title: const Text('教务地址'),
+                      subtitle: Text(
+                        model.schoolBaseUrl,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => SchoolAddressPage(model: model),
+                        ),
+                      ),
+                    ),
+                    const Divider(height: 0, indent: 56),
+                    ListTile(
+                      leading: const Icon(Icons.password_rounded, size: 20),
+                      title: const Text('修改密码'),
+                      subtitle: const Text('在教务网页改过密码后，用它更新本机保存的密码'),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => _changePassword(context),
+                    ),
+                    const Divider(height: 0, indent: 56),
+                    ListTile(
+                      leading: Icon(
+                        Icons.logout_rounded,
+                        size: 20,
+                        color: theme.colorScheme.error,
+                      ),
+                      title: Text(
+                        '退出登录',
+                        style: TextStyle(color: theme.colorScheme.error),
+                      ),
+                      subtitle: const Text('同时清除保存的账号密码'),
+                      onTap: () => _confirmSignOut(context),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              _SectionTitle('关于'),
+              Card(
+                child: Column(
+                  children: <Widget>[
+                    ListTile(
+                      leading: const Icon(Icons.bug_report_outlined, size: 20),
+                      title: const Text('调试信息'),
+                      subtitle: const Text('原始响应、解析结果、请求记录'),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => DebugPage(model: model),
+                        ),
+                      ),
+                    ),
+                    const Divider(height: 0, indent: 56),
+                    ListTile(
+                      leading: const Icon(Icons.description_outlined, size: 20),
+                      title: const Text('开源许可'),
+                      subtitle: const Text('本应用使用的第三方组件许可'),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => showLicensePage(
+                        context: context,
+                        applicationName: '青科课表通',
+                        applicationVersion: appVersion,
+                      ),
+                    ),
+                    const Divider(height: 0, indent: 56),
+                    const ListTile(
+                      leading: Icon(Icons.info_outline_rounded, size: 20),
+                      title: Text('版本'),
+                      subtitle: Text('青科课表通 $appVersion · 仅适配新正方教务系统'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// 姓名 → 学号 → "已登录 / 未登录"。
+  ///
+  /// 不能只看姓名：Cookie 免登时姓名可能读不到（课表照样能取）。
+  String get _accountTitle {
+    if (model.studentName.isNotEmpty) return model.studentName;
+    return model.signedIn ? '已登录' : '未登录';
+  }
+
+  String get _accountSubtitle {
+    if (model.studentId.isNotEmpty) return '学号 ${model.studentId}';
+    if (model.username.isNotEmpty) return model.username;
+    return model.signedIn ? '已连接教务系统' : '尚未登录';
+  }
+
+  Future<void> _confirmSignOut(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('退出登录？'),
+        content: const Text('会清除当前会话与保存的学号密码，下次需要重新输入。'),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('退出'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await model.signOut();
+  }
+
+  Future<void> _changePassword(BuildContext context) async {
+    final password = await showDialog<String>(
+      context: context,
+      builder: (context) => const _PasswordDialog(),
+    );
+    if (password == null) return;
+    try {
+      await model.changePassword(password);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('密码已更新')));
+    } on AcademicError catch (error) {
+      if (!context.mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('修改失败'),
+          content: Text(error.message),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  static String _dateText(DateTime value) =>
+      '${value.year}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
+}
+
+/// 修改密码：两次输入 + 一句"会用新密码登录验证"。
+class _PasswordDialog extends StatefulWidget {
+  const _PasswordDialog();
+
+  @override
+  State<_PasswordDialog> createState() => _PasswordDialogState();
+}
+
+class _PasswordDialogState extends State<_PasswordDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _password = TextEditingController();
+  final _confirm = TextEditingController();
+  bool _obscure = true;
+
+  @override
+  void dispose() {
+    _password.dispose();
+    _confirm.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.of(context).pop(_password.text);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('修改密码'),
+      content: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              '先到教务网页把密码改掉，再在这里填新密码。\n'
+              '点确定会用新密码登录一次验证，成功后才替换本机保存的密码。',
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: Theme.of(context).hintColor),
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _password,
+              obscureText: _obscure,
+              autofocus: true,
+              decoration: InputDecoration(
+                labelText: '新密码',
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscure
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                    size: 20,
+                  ),
+                  onPressed: () => setState(() => _obscure = !_obscure),
+                ),
+              ),
+              validator: (value) =>
+                  (value == null || value.isEmpty) ? '请输入新密码' : null,
+            ),
+            const SizedBox(height: 8),
+            TextFormField(
+              controller: _confirm,
+              obscureText: _obscure,
+              decoration: const InputDecoration(labelText: '再输一次'),
+              onFieldSubmitted: (_) => _submit(),
+              validator: (value) => value == _password.text ? null : '两次输入不一致',
+            ),
+          ],
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('确定')),
+      ],
+    );
+  }
+}
+
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+          color: Theme.of(context).hintColor,
+          letterSpacing: 0.3,
+        ),
+      ),
+    );
+  }
+}
+
+/// 最小更新间隔的步进器：- / + 各 5 分钟，夹在合法区间内。
+class _IntervalStepper extends StatelessWidget {
+  const _IntervalStepper({required this.value, required this.onChanged});
+
+  final int value;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        IconButton(
+          icon: const Icon(Icons.remove_circle_outline_rounded, size: 22),
+          visualDensity: VisualDensity.compact,
+          onPressed: value > minAutoRefreshIntervalMinutes
+              ? () => onChanged(value - 5)
+              : null,
+        ),
+        Text('$value', style: const TextStyle(fontSize: 14)),
+        IconButton(
+          icon: const Icon(Icons.add_circle_outline_rounded, size: 22),
+          visualDensity: VisualDensity.compact,
+          onPressed: value < maxAutoRefreshIntervalMinutes
+              ? () => onChanged(value + 5)
+              : null,
+        ),
+      ],
+    );
+  }
+}

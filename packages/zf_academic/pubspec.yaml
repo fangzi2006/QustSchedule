@@ -1,0 +1,16 @@
+name: zf_academic
+description: 新正方教务系统客户端基座（Dart）：凭据存储接口、RFC 6265 Cookie 管理、登录密码加密。
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  crypto: ^3.0.0
+  fast_gbk: ^1.0.0
+  pointycastle: ^3.9.0
+
+dev_dependencies:
+  lints: ^4.0.0
+  test: ^1.25.0

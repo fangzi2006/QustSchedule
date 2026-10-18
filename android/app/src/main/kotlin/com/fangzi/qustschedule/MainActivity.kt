@@ -1,0 +1,5 @@
+package com.fangzi.qustschedule
+
+import io.flutter.embedding.android.FlutterActivity
+
+class MainActivity : FlutterActivity()
