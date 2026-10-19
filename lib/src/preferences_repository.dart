@@ -27,7 +27,7 @@ import 'reschedule.dart';
 import 'school.dart';
 import 'timetable.dart';
 
-const int preferencesSchema = 6;
+const int preferencesSchema = 7;
 
 /// 课表格子（一节那一行）的高度，逻辑像素。
 ///
@@ -69,6 +69,7 @@ class Preferences {
     Map<PeriodGroup, int>? sectionCounts,
     List<String>? schools,
     String currentSchool = '',
+    Map<String, String>? lastAccounts,
     bool showTeacher = true,
     bool showLocation = true,
     double cellHeight = defaultCellHeight,
@@ -83,6 +84,7 @@ class Preferences {
        _quickSetup = quickSetup,
        _sectionCounts = clampCounts(sectionCounts ?? defaultSectionCounts),
        _schools = schools ?? <String>[defaultSchool.baseUrl],
+       _lastAccounts = lastAccounts ?? <String, String>{},
        _currentSchool = currentSchool.isEmpty
            ? (schools == null || schools.isEmpty
                  ? defaultSchool.baseUrl
@@ -111,6 +113,13 @@ class Preferences {
   /// 已添加的教务地址（换校用的地址簿），以及当前使用的那一个。
   List<String> _schools;
   String _currentSchool;
+
+  /// 每个学校上次登录用的账号（`baseUrl → 账号`）。
+  ///
+  /// 必须本地存：凭据是按「地址|账号」存进安全存储的，账号为空就取不到密码，
+  /// Cookie 失效后也就无法自动重登。不能指望从 Cookie 里读身份——
+  /// 免登冷启动时协议层拿不到用户名。
+  Map<String, String> _lastAccounts;
 
   /// 课表格子里是否显示教师 / 上课地点。
   ///
@@ -142,6 +151,7 @@ class Preferences {
     Map<PeriodGroup, int>? sectionCounts,
     List<String>? schools,
     String currentSchool = '',
+    Map<String, String>? lastAccounts,
     bool showTeacher = true,
     bool showLocation = true,
     double cellHeight = defaultCellHeight,
@@ -157,6 +167,7 @@ class Preferences {
     sectionCounts: sectionCounts,
     schools: schools,
     currentSchool: currentSchool,
+    lastAccounts: lastAccounts,
     showTeacher: showTeacher,
     showLocation: showLocation,
     cellHeight: cellHeight,
@@ -188,6 +199,7 @@ class Preferences {
     var sectionCounts = <PeriodGroup, int>{...defaultSectionCounts};
     var schools = <String>[defaultSchool.baseUrl];
     var currentSchool = defaultSchool.baseUrl;
+    var lastAccounts = <String, String>{};
     var showTeacher = true;
     var showLocation = true;
     var cellHeight = defaultCellHeight;
@@ -247,6 +259,15 @@ class Preferences {
           if (rawCurrent != null && rawCurrent.isNotEmpty) {
             currentSchool = rawCurrent;
           }
+          // schema 7：每个学校上次登录的账号（用于拼凭据的 key）。
+          final rawAccounts = decoded['lastAccounts'];
+          if (rawAccounts is Map<String, dynamic>) {
+            lastAccounts = <String, String>{
+              for (final entry in rawAccounts.entries)
+                if (entry.value is String && (entry.value as String).isNotEmpty)
+                  entry.key: entry.value as String,
+            };
+          }
           // 缺字段 = 旧版本存的设置，按"都显示"处理。
           final rawTeacher = decoded['showTeacher'];
           if (rawTeacher is bool) showTeacher = rawTeacher;
@@ -303,6 +324,7 @@ class Preferences {
       sectionCounts: sectionCounts,
       schools: schools,
       currentSchool: currentSchool,
+      lastAccounts: lastAccounts,
       showTeacher: showTeacher,
       showLocation: showLocation,
       cellHeight: cellHeight,
@@ -390,6 +412,47 @@ class Preferences {
     if (sameSchool(_currentSchool, text)) return;
     _currentSchool = text;
     await _flush();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 上次登录的账号（每个学校各记一个）
+  // ---------------------------------------------------------------------------
+
+  /// 某个学校上次登录用的账号；没登录过返回空串。
+  ///
+  /// 冷启动要靠它拼凭据的 key（`地址|账号`），否则取不到保存的密码，
+  /// Cookie 失效后就无法自动重登。
+  String accountOf(String url) {
+    for (final entry in _lastAccounts.entries) {
+      if (sameSchool(entry.key, url)) return entry.value;
+    }
+    return '';
+  }
+
+  Future<void> setAccountOf(String url, String account) async {
+    final text = url.trim();
+    final name = account.trim();
+    if (text.isEmpty || name.isEmpty) return;
+    if (accountOf(text) == name) return;
+    _lastAccounts = _accountsExcept(text)..[text] = name;
+    await _flush();
+  }
+
+  /// 退出登录时清掉该学校的账号记录（凭据本身也一并删除）。
+  Future<void> clearAccountOf(String url) async {
+    final text = url.trim();
+    if (text.isEmpty || accountOf(text).isEmpty) return;
+    _lastAccounts = _accountsExcept(text);
+    await _flush();
+  }
+
+  /// 复制一份"去掉某个学校"的账号表（Map 没有 where，用循环重建）。
+  Map<String, String> _accountsExcept(String url) {
+    final next = <String, String>{};
+    for (final entry in _lastAccounts.entries) {
+      if (!sameSchool(entry.key, url)) next[entry.key] = entry.value;
+    }
+    return next;
   }
 
   // ---------------------------------------------------------------------------
@@ -551,6 +614,7 @@ class Preferences {
         },
         'schools': _schools,
         'currentSchool': _currentSchool,
+        'lastAccounts': _lastAccounts,
         'showTeacher': _showTeacher,
         'showLocation': _showLocation,
         'cellHeight': _cellHeight,

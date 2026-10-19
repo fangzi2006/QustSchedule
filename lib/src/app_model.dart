@@ -495,6 +495,9 @@ class AppModel extends ChangeNotifier {
         if (savedSchool.isNotEmpty) _schoolBaseUrl = savedSchool;
       }
       service.switchSchool(_schoolBaseUrl);
+      // 账号必须本地恢复：凭据按「地址|账号」存，账号为空就取不到密码，
+      // Cookie 失效后也就没法自动重登。
+      _restoreAccount();
 
       final snapshot = await service.bootstrap();
       final cached = await _scheduleCache.load();
@@ -780,6 +783,8 @@ class AppModel extends ChangeNotifier {
         _captcha = null;
         // 登录成功才把地址收进地址簿：只记"能用的"地址，避免手滑打错也留着。
         await _preferences.setCurrentSchool(_schoolBaseUrl);
+        // 同时记住账号：下次冷启动要用它算凭据的 key。
+        await _rememberAccount(_username);
         await _loadSchedule();
       case CaptchaState():
         _captcha = state;
@@ -816,6 +821,11 @@ class AppModel extends ChangeNotifier {
     if (!sameSchool(_schoolBaseUrl, baseUrl)) {
       _schoolBaseUrl = baseUrl;
       service.switchSchool(baseUrl);
+      // 每个学校各记各的账号：切过去先把账号换成目标学校的。
+      _username = '';
+      _studentId = '';
+      _studentName = '';
+      _restoreAccount();
       _schedule = null;
       _terms = null;
       _termId = '';
@@ -851,6 +861,33 @@ class AppModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 冷启动恢复"上次在这个学校登录的账号"（不联网）。
+  ///
+  /// 作用有两个：
+  ///  1. 调试页 / 设置页立刻能显示学号，不必等网络把身份读回来；
+  ///  2. 凭据按「地址|账号」存，账号算不出来就取不到密码——Cookie 失效后
+  ///     会变成"明明存了密码却无法自动重登"。
+  void _restoreAccount() {
+    if (_username.isNotEmpty) return;
+    final saved = _preferences.accountOf(_schoolBaseUrl);
+    if (saved.isEmpty) return;
+    _username = saved;
+    service.accountHint = saved;
+    if (_studentId.isEmpty) _studentId = saved;
+  }
+
+  /// 记住"这台设备上次登录的账号"（按学校区分），供下次冷启动使用。
+  Future<void> _rememberAccount(String account) async {
+    final text = account.trim();
+    if (text.isEmpty) return;
+    _username = text;
+    service.accountHint = text;
+    if (_studentId.isEmpty) _studentId = text;
+    await _preferences.setAccountOf(_schoolBaseUrl, text);
+    if (_disposed) return;
+    notifyListeners();
+  }
+
   /// 读一次身份（姓名 / 学号）。
   ///
   /// 课表接口不返回"我是谁"：Cookie 免登冷启动时 `sessionInfo` 的姓名是空的，
@@ -868,6 +905,11 @@ class AppModel extends ChangeNotifier {
     // 还是读不到：至少用工号/学号顶上，别让界面显示"未登录"。
     if (_studentName.isEmpty && _studentId.isEmpty && username.isNotEmpty) {
       _studentId = username;
+    }
+    // 老安装升级上来的情况：以前没存账号，这次联网读到了学号，顺手补记，
+    // 下次 Cookie 失效就能直接自动重登。
+    if (_username.isEmpty && _studentId.isNotEmpty) {
+      unawaited(_rememberAccount(_studentId));
     }
   }
 
@@ -951,6 +993,10 @@ class AppModel extends ChangeNotifier {
   Future<void> signOut() async {
     await service.signOut(forgetCredentials: true);
     if (_disposed) return;
+    await _preferences.clearAccountOf(_schoolBaseUrl);
+    _username = '';
+    _studentId = '';
+    _studentName = '';
     _schedule = null;
     _terms = null;
     _termId = '';

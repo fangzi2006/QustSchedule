@@ -14,9 +14,13 @@ import 'pages/captcha_page.dart';
 import 'pages/home_shell.dart';
 import 'pages/login_page.dart';
 import 'src/app_model.dart';
+import 'src/app_version.dart';
 import 'theme/app_theme.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // 版本号从打包进来的 pubspec.yaml 读，界面不写死。
+  await loadAppVersion();
   runApp(const CourseApp());
 }
 

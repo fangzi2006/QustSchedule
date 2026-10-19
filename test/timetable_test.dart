@@ -666,4 +666,27 @@ void main() {
       await dir.delete(recursive: true);
     });
   });
+
+  test('上次登录的账号按学校分别记，旧文件缺字段时为空（schema 7）', () async {
+    final prefs = Preferences.inMemory();
+    await prefs.setAccountOf('https://a.edu.cn/jwglxt', '111');
+    await prefs.setAccountOf('https://b.edu.cn/jwglxt', '222');
+
+    expect(prefs.accountOf('https://a.edu.cn/jwglxt'), '111');
+    expect(prefs.accountOf('https://b.edu.cn/jwglxt'), '222');
+
+    await prefs.clearAccountOf('https://a.edu.cn/jwglxt');
+    expect(prefs.accountOf('https://a.edu.cn/jwglxt'), isEmpty);
+    expect(prefs.accountOf('https://b.edu.cn/jwglxt'), '222', reason: '别清错学校');
+
+    // 旧文件（schema 6）没有这个字段：读出来是空，不崩。
+    final legacy = Preferences.decode('{"schema":6,"termStarts":{}}');
+    expect(legacy.accountOf('https://a.edu.cn/jwglxt'), isEmpty);
+
+    // 新文件能读回，并且地址比较忽略写法差异（尾斜杠、大小写）。
+    final restored = Preferences.decode(
+      '{"schema":7,"lastAccounts":{"https://a.edu.cn/jwglxt/":"333"}}',
+    );
+    expect(restored.accountOf('https://a.edu.cn/jwglxt'), '333');
+  });
 }

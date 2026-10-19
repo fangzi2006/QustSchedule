@@ -64,6 +64,13 @@ class ScheduleService {
 
   String _baseUrl;
 
+  /// 上次登录的账号（由 app 从设置里恢复后传入）。
+  ///
+  /// 凭据按「地址|账号」存，账号必须能算出来；而免登冷启动时
+  /// `sessionInfo.username` 是空的（身份还没从网络读回来），
+  /// 只靠它拼 key 就会取不到保存的密码，Cookie 失效后无法自动重登。
+  String? accountHint;
+
   ScheduleBackend? _client;
 
   /// 单 flight：进行中的取课表任务。
@@ -121,6 +128,8 @@ class ScheduleService {
     _inFlight = null;
     _breakerOpen = false;
     _autoLogins.clear();
+    // 换了学校就不能沿用上一个学校的账号，等 app 恢复目标学校的账号。
+    accountHint = null;
   }
 
   /// 替换 Cookie 持久化目标（app 启动：path_provider 目录就绪后调用）。
@@ -304,6 +313,8 @@ class ScheduleService {
     final client = await _ensureClient();
     final state = await client.login(Credentials(username, password));
     if (state is AuthenticatedState) {
+      // 记下账号：后续所有凭据读写都靠它拼 key。
+      accountHint = username;
       if (remember) {
         await credentials.save(
           _accountKey(username: username),
@@ -359,6 +370,7 @@ class ScheduleService {
     _client?.close();
     _client = null;
     _inFlight = null;
+    accountHint = null;
     await cookieStorage.clear();
     if (forgetCredentials) {
       await credentials.remove(key);
@@ -372,8 +384,10 @@ class ScheduleService {
 
   String _accountKey({String? username}) {
     // accountKey 只用"地址 + 账号"：同一账号换学校不共享凭据。
+    // 账号的优先级：显式传入 > app 恢复的本地账号 > 当前会话里的用户名。
     final base = _baseUrl.toLowerCase();
-    return '$base|${username ?? sessionInfo?.username ?? ''}';
+    final account = username ?? accountHint ?? sessionInfo?.username ?? '';
+    return '$base|$account';
   }
 
   Future<ScheduleBackend> _ensureClient() async {

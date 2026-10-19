@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:zf_academic/zf_academic.dart' show AcademicError;
 
 import '../src/app_model.dart';
+import '../src/app_version.dart';
 import '../src/preferences_repository.dart';
 import '../src/timetable.dart' show formatMonthDayDate;
 import '../widgets/floating_dock.dart';
@@ -25,8 +26,6 @@ class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key, required this.model});
 
   final AppModel model;
-
-  static const String appVersion = '1.1.0';
 
   @override
   Widget build(BuildContext context) {
@@ -217,13 +216,13 @@ class SettingsPage extends StatelessWidget {
                       onTap: () => showLicensePage(
                         context: context,
                         applicationName: '青科课表通',
-                        applicationVersion: appVersion,
+                        applicationVersion: appVersionFull,
                       ),
                     ),
                     const Divider(height: 0, indent: 56),
-                    const ListTile(
-                      leading: Icon(Icons.info_outline_rounded, size: 20),
-                      title: Text('版本'),
+                    ListTile(
+                      leading: const Icon(Icons.info_outline_rounded, size: 20),
+                      title: const Text('版本'),
                       subtitle: Text('青科课表通 $appVersion · 仅适配新正方教务系统'),
                     ),
                   ],
@@ -236,7 +235,7 @@ class SettingsPage extends StatelessWidget {
     );
   }
 
-  /// 姓名 → 学号 → "已登录 / 未登录"。
+  /// 姓名 → "已登录 / 未登录"（学号放在副标题里，避免两行重复）。
   ///
   /// 不能只看姓名：Cookie 免登时姓名可能读不到（课表照样能取）。
   String get _accountTitle {

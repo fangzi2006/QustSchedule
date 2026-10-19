@@ -97,6 +97,79 @@ AppModel bootRig({
 }
 
 void main() {
+  group('账号本地记忆（凭据 key 依赖它）', () {
+    test('冷启动：本地记着账号时，不联网也能显示学号', () async {
+      // 没有 Cookie 快照、也没有保存的凭据 → 停在登录页；但账号应该已经从设置里读出来，
+      // 不用等任何网络请求（否则调试页永远是"-"，直到某次刷新成功）。
+      final prefs = Preferences.inMemory(
+        lastAccounts: <String, String>{_baseUrl: '2407720102'},
+      );
+      final model = bootRig(preferences: prefs);
+      await model.boot();
+
+      expect(model.status, AppStatus.needLogin);
+      expect(model.studentId, '2407720102');
+    });
+
+    test('登录成功后记住账号', () async {
+      final prefs = Preferences.inMemory();
+      final rig = buildRig(preferences: prefs);
+      await rig.model.signIn('2407720102', 'pw');
+
+      expect(prefs.accountOf(_baseUrl), '2407720102');
+      expect(rig.model.studentId, '2407720102');
+    });
+
+    test('冷启动遇到会话过期：用本地记住的账号 + 保存的密码自动重登', () async {
+      // 用户报告的确切场景：长时间不用 → Cookie 失效 → 冷启动刷新。
+      final credentials = InMemoryCredentialStore();
+      await credentials.save(
+        '$_baseUrl|2407720102',
+        const Credentials('2407720102', 'pw'),
+      );
+      final prefs = Preferences.inMemory(
+        lastAccounts: <String, String>{_baseUrl: '2407720102'},
+      );
+      final repo = FakeSessionRepository(snapshotOf(_baseUrl));
+      final backend = FakeBackend(studentId: '', studentName: '')
+        ..fetchBehavior = (call, termId) async {
+          if (call == 1) {
+            throw AcademicError(ErrorCode.sessionExpired, '登录已失效');
+          }
+          return sampleSchedule(termId ?? '2026-2027-1');
+        };
+      final model = AppModel(
+        service: ScheduleService(
+          credentials: credentials,
+          cookieStorage: repo,
+          backendFactory: (_) => backend,
+          baseUrl: _baseUrl,
+        ),
+        repository: repo,
+        preferences: prefs,
+        scheduleCache: FakeScheduleCache(),
+        schoolBaseUrl: _baseUrl,
+      );
+
+      await model.boot();
+
+      expect(backend.loginCount, 1, reason: 'Cookie 失效应触发自动重登');
+      expect(model.schedule?.entries, isNotEmpty, reason: '重登后课表要更新');
+      expect(model.studentId, isNotEmpty);
+    });
+
+    test('退出登录清掉记住的账号', () async {
+      final prefs = Preferences.inMemory(
+        lastAccounts: <String, String>{_baseUrl: '2407720102'},
+      );
+      final rig = buildRig(preferences: prefs);
+      await rig.model.signOut();
+
+      expect(prefs.accountOf(_baseUrl), isEmpty);
+      expect(rig.model.studentId, isEmpty);
+    });
+  });
+
   test('maxWeek 取自课表最晚周次，而不是 25 的兜底值', () {
     final model = buildModel();
     model.hydrateForTest(schedule: scheduleWithWeeks(<int>[1, 5, 17]));

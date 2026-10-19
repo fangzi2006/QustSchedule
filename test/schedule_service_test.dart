@@ -497,4 +497,62 @@ void main() {
       expect(h.backend.loginCount, 1);
     });
   });
+
+  group('凭据 key：冷启动必须能算出账号', () {
+    test('accountHint 补齐账号 → Cookie 失效后能用保存的账密重登', () async {
+      // 身份为空：模拟真机冷启动——Cookie 快照里没有用户名。
+      final h = _Harness(
+        backend: FakeBackend(studentId: '', studentName: ''),
+        storage: FakeSessionRepository(snapshotOf(_baseUrl)),
+      );
+      await h.credentials.save(
+        _Harness.accountKey,
+        const Credentials('2407720102', 'pw'),
+      );
+      h.backend.fetchBehavior = (call, termId) async {
+        if (call == 1) {
+          throw AcademicError(ErrorCode.sessionExpired, '登录已失效');
+        }
+        return sampleSchedule(termId ?? '2026-2027-1');
+      };
+      // 冷启动：Cookie 快照在，但快照里没有用户名，只能靠本地账号拼 key。
+      h.service.accountHint = '2407720102';
+      await h.service.bootstrap();
+
+      final schedule = await h.service.getSchedule();
+
+      expect(schedule.entries, isNotEmpty);
+      expect(h.backend.loginCount, 1, reason: '应该用保存的账密自动重登');
+    });
+
+    test('没有账号就取不到凭据（修复前的失败模式）', () async {
+      // 身份为空：模拟真机冷启动——Cookie 快照里没有用户名。
+      final h = _Harness(
+        backend: FakeBackend(studentId: '', studentName: ''),
+        storage: FakeSessionRepository(snapshotOf(_baseUrl)),
+      );
+      await h.credentials.save(
+        _Harness.accountKey,
+        const Credentials('2407720102', 'pw'),
+      );
+      h.backend.fetchBehavior = (call, termId) async {
+        throw AcademicError(ErrorCode.sessionExpired, '登录已失效');
+      };
+      await h.service.bootstrap();
+
+      await expectLater(
+        h.service.getSchedule(),
+        throwsA(
+          isA<AcademicError>()
+              .having((error) => error.code, 'code', ErrorCode.sessionExpired)
+              .having(
+                (error) => error.message,
+                'message',
+                contains('没有保存账号密码'),
+              ),
+        ),
+      );
+      expect(h.backend.loginCount, 0, reason: '账号为空时连凭据 key 都算不出来');
+    });
+  });
 }
