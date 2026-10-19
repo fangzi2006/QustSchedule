@@ -42,16 +42,20 @@ jobs:
           yes | sdkmanager --licenses
           sdkmanager "platforms;android-37" "build-tools;36.0.0"
 
-      # 可选：配置了 KEYSTORE_BASE64 等 secret 才用正式签名，
-      # 没配则退回 debug 签名（仍能产出 apk，但不能覆盖升级已装的 release 包）。
+      # 始终执行；若无 KEYSTORE_BASE64 secret 则跳过，退回 debug 签名。
+      # 注意：step 级 if 不允许引用 secrets 上下文，故改为在脚本里判空，
+      # 这样无论配没配 secret 都不会因 if 表达式非法而整条 workflow 启动失败。
       - name: Restore Android Keystore (optional)
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
+          if [ -z "${KEYSTORE_BASE64}" ]; then
+            echo "KEYSTORE_BASE64 secret 未配置，将使用 debug 签名（仍可产出 apk，但不能覆盖升级已装的 release 包）。"
+            exit 0
+          fi
           echo "$KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
           echo "storeFile=upload-keystore.jks" > android/key.properties
           echo "storePassword=$KEY_STORE_PASSWORD" >> android/key.properties
