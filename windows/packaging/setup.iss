@@ -6,7 +6,7 @@
 ;   flutter build windows --release
 ;   iscc /DAppVersion=1.1.2 windows\packaging\setup.iss
 ;
-; 产物：build\windows\installer\青科课表通_v1.1.2-windows-x64-setup.exe
+; 产物：build\windows\installer\QustSchedule_v1.1.2-windows-x64-setup.exe
 ;
 ; 注意：
 ; - 本文件必须保存为 UTF-8（带 BOM），否则里面的中文会乱码。
@@ -41,7 +41,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..\..\build\windows\installer
-OutputBaseFilename=青科课表通_v{#AppVersion}-windows-x64-setup
+OutputBaseFilename=QustSchedule_v{#AppVersion}-windows-x64-setup
 SetupIconFile=..\runner\resources\app_icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/max
