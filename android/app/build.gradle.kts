@@ -1,3 +1,4 @@
+import java.io.File
 import java.io.FileInputStream
 import java.util.Properties
 
@@ -75,4 +76,56 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+// ---------------------------------------------------------------------------
+// 产物命名：flutter-apk/青科课表通_v<版本号>[-abi].apk
+// ---------------------------------------------------------------------------
+// 为什么不能只改 AGP 的 outputFileName：Flutter 的 gradle 插件会在 assemble 任务的
+// doLast 里把 AGP 产物复制成固定名字（app[-abi]-<mode>.apk），而 Dart 侧的
+// `flutter build apk` 也按这个名字找产物——找不到会直接报
+// "Expected ...app-release.apk, file not found"。所以这里保留原名不动，
+// **额外复制一份人类可读的名字**（复制而非改名，Flutter 的构建链不受影响）。
+//
+// 版本号取 `defaultConfig.versionName`，它等于 pubspec.yaml 的 `version` 主版本段
+// （由 Flutter 注入），发版只改 pubspec 一处即可。
+val appDisplayName = "青科课表通"
+
+afterEvaluate {
+    val flutterApkDir = layout.buildDirectory.dir("outputs/flutter-apk")
+    val apkNamePattern =
+        Regex("^app(?:-([A-Za-z0-9_-]+))?-(debug|profile|release)\\.apk$")
+
+    listOf("assembleDebug", "assembleProfile", "assembleRelease").forEach { taskName ->
+        tasks.matching { it.name == taskName }.configureEach {
+            doLast {
+                val dir = flutterApkDir.get().asFile
+                if (!dir.isDirectory) return@doLast
+                val version = android.defaultConfig.versionName ?: "unknown"
+                // 先清掉上一次构建留下的带版本号的副本，避免目录里堆一堆旧版本。
+                dir.listFiles()
+                    ?.filter { it.isFile && it.name.startsWith("${appDisplayName}_v") }
+                    ?.forEach { it.delete() }
+                dir.listFiles()
+                    ?.filter { it.isFile }
+                    ?.forEach { apk ->
+                        val match = apkNamePattern.find(apk.name) ?: return@forEach
+                        val abi = match.groupValues[1]
+                        val mode = match.groupValues[2]
+                        val suffix = listOfNotNull(
+                            abi.takeIf { it.isNotEmpty() },
+                            mode.takeIf { it != "release" },
+                        ).joinToString("-")
+                        val target = File(
+                            dir,
+                            "${appDisplayName}_v${version}" +
+                                (if (suffix.isEmpty()) "" else "-$suffix") +
+                                ".apk",
+                        )
+                        apk.copyTo(target, overwrite = true)
+                        logger.lifecycle("APK 副本：${target.name}")
+                    }
+            }
+        }
+    }
 }
