@@ -89,7 +89,7 @@ flutter {
 //
 // 版本号取 `defaultConfig.versionName`，它等于 pubspec.yaml 的 `version` 主版本段
 // （由 Flutter 注入），发版只改 pubspec 一处即可。
-val appDisplayName = "青科课表通"
+val appDisplayName = "QustSchedule"
 
 afterEvaluate {
     val flutterApkDir = layout.buildDirectory.dir("outputs/flutter-apk")
