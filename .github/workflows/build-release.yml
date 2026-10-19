@@ -91,7 +91,7 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           mkdir -p dist
           shopt -s nullglob
-          SRC_APKS=(build/app/outputs/flutter-apk/青科课表通_v${VERSION}*.apk)
+          SRC_APKS=(build/app/outputs/flutter-apk/QustSchedule_v${VERSION}*.apk)
           if [ ${#SRC_APKS[@]} -gt 0 ]; then
             cp "${SRC_APKS[@]}" dist/
             echo "Collected APKs: ${SRC_APKS[*]##*/}"
@@ -150,7 +150,7 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$Version /O"dist" "windows\packaging\setup.iss"
 
           # 2. 打包免安装便携版 Zip 到 dist 目录
-          Compress-Archive -Path "build/windows/x64/runner/Release/*" -DestinationPath "dist/青科课表通_v${Version}-windows-x64.zip" -Force
+          Compress-Archive -Path "build/windows/x64/runner/Release/*" -DestinationPath "dist/QustSchedule_v${Version}-windows-x64.zip" -Force
 
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v4
@@ -226,8 +226,8 @@ jobs:
             echo
             echo "| OS | 下载 |"
             echo "|:--:|:--|"
-            echo "| **安卓** | [![APK ARMv8](https://img.shields.io/badge/APK-ARMv8-3DDC84)](${BASE}/$(enc "青科课表通_v${VERSION}-arm64-v8a.apk")) [![APK ARMv7](https://img.shields.io/badge/APK-ARMv7-3DDC84)](${BASE}/$(enc "青科课表通_v${VERSION}-armeabi-v7a.apk")) |"
-            echo "| **Windows** | [![Setup x64](https://img.shields.io/badge/Setup-x64-0078D6)](${BASE}/$(enc "青科课表通_v${VERSION}-windows-x64-setup.exe")) [![Portable x64](https://img.shields.io/badge/Portable-x64-0078D6)](${BASE}/$(enc "青科课表通_v${VERSION}-windows-x64.zip")) |"
+            echo "| **安卓** | [![APK ARMv8](https://img.shields.io/badge/APK-ARMv8-3DDC84)](${BASE}/QustSchedule_v${VERSION}-arm64-v8a.apk)<br>[![APK ARMv7](https://img.shields.io/badge/APK-ARMv7-3DDC84)](${BASE}/QustSchedule_v${VERSION}-armeabi-v7a.apk) |"
+            echo "| **Windows** | [![Setup x64](https://img.shields.io/badge/Setup-x64-0078D6)](${BASE}/QustSchedule_v${VERSION}-windows-x64-setup.exe)<br>[![Portable x64](https://img.shields.io/badge/Portable-x64-0078D6)](${BASE}/QustSchedule_v${VERSION}-windows-x64.zip) |"
             echo
             echo "所有变更列表：[ChangeLog](${CHANGELOG_URL})"
           } > body.md
