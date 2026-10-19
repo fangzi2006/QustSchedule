@@ -10,6 +10,8 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:zf_academic/zf_academic.dart' show AcademicError;
 
 import '../src/app_model.dart';
@@ -21,6 +23,9 @@ import 'debug_page.dart';
 import 'schedule_page.dart' show showCalibrateSheet;
 import 'school_address_page.dart';
 import 'timetable_list_page.dart';
+
+/// 项目主页（源码与发行版都在这里）：写入设置页「项目主页」，满足 GPL 的源码获取告知要求。
+const String kProjectHomeUrl = 'https://github.com/fangzi2006/QustSchedule';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key, required this.model});
@@ -221,6 +226,26 @@ class SettingsPage extends StatelessWidget {
                     ),
                     const Divider(height: 0, indent: 56),
                     ListTile(
+                      leading: const Icon(Icons.gavel_outlined, size: 20),
+                      title: const Text('开源协议'),
+                      subtitle: const Text('GNU GPL v3 · 本应用协议全文'),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const LicenseTextPage(),
+                        ),
+                      ),
+                    ),
+                    const Divider(height: 0, indent: 56),
+                    ListTile(
+                      leading: const Icon(Icons.code_rounded, size: 20),
+                      title: const Text('项目主页与源码'),
+                      subtitle: const Text(kProjectHomeUrl),
+                      trailing: const Icon(Icons.open_in_new_rounded, size: 18),
+                      onTap: () => _openProjectLink(context),
+                    ),
+                    const Divider(height: 0, indent: 56),
+                    ListTile(
                       leading: const Icon(Icons.info_outline_rounded, size: 20),
                       title: const Text('版本'),
                       subtitle: Text('青科课表通 $appVersion · 仅适配新正方教务系统'),
@@ -298,6 +323,18 @@ class SettingsPage extends StatelessWidget {
         ),
       );
     }
+  }
+
+  /// 打开项目主页（外部浏览器）。
+  Future<void> _openProjectLink(BuildContext context) async {
+    final opened = await launchUrl(
+      Uri.parse(kProjectHomeUrl),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!context.mounted || opened) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('无法打开链接')));
   }
 
   static String _dateText(DateTime value) =>
@@ -439,5 +476,87 @@ class _IntervalStepper extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+/// 本应用开源协议全文（GPL v3）：从 asset 里的 LICENSE 读取展示。
+///
+/// 用 StatefulWidget 在 initState 里加载一次（FutureBuilder 在 build 里创建 future
+/// 会导致每次重建都重新读盘）。样式跟随主题，浅色/暗色都清晰。
+class LicenseTextPage extends StatefulWidget {
+  const LicenseTextPage({super.key});
+
+  @override
+  State<LicenseTextPage> createState() => _LicenseTextPageState();
+}
+
+class _LicenseTextPageState extends State<LicenseTextPage> {
+  String? _text;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final text = await rootBundle.loadString('LICENSE');
+      if (!mounted) return;
+      setState(() => _text = text);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _failed = true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(title: const Text('开源协议')),
+      body: SafeArea(child: _buildBody(theme)),
+    );
+  }
+
+  Widget _buildBody(ThemeData theme) {
+    if (_failed) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            '协议文件读取失败',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.error,
+            ),
+          ),
+        ),
+      );
+    }
+    if (_text == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+      child: SelectableText(
+        _reflow(_text!),
+        textAlign: TextAlign.left,
+        style: theme.textTheme.bodySmall?.copyWith(
+          fontSize: 13,
+          height: 1.6,
+          color: theme.colorScheme.onSurface,
+        ),
+      ),
+    );
+  }
+
+  String _reflow(String raw) {
+    final normalized = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    return normalized
+        .split(RegExp(r'\n[ \t]*\n'))
+        .map((p) => p.replaceAll(RegExp(r'\s*\n\s*'), ' ').trim())
+        .where((p) => p.isNotEmpty)
+        .join('\n\n');
   }
 }

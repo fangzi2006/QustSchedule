@@ -724,6 +724,37 @@ void main() {
       model.dispose();
     });
 
+    test('编辑调课：updateReschedule 改目标日期、保留 id，渲染跟随', () async {
+      final model = bootRig();
+      model.hydrateForTest(schedule: sampleSchedule(), week: 1);
+
+      final start = model.termStart!;
+      final rule = await model.addReschedule(
+        fromMonth: start.month,
+        fromDay: start.day,
+        toMonth: start.add(const Duration(days: 5)).month,
+        toDay: start.add(const Duration(days: 5)).day,
+      );
+      expect(model.entriesForWeek(1).single.day, 6);
+
+      // 把目标日改到 3 天后（周四 = day 4），来源不变。
+      final newTo = start.add(const Duration(days: 3));
+      await model.updateReschedule(
+        rule.id,
+        fromMonth: start.month,
+        fromDay: start.day,
+        toMonth: newTo.month,
+        toDay: newTo.day,
+      );
+      // 仍是同一条（id 不变、数量不变），不是新增。
+      expect(model.reschedules, hasLength(1));
+      expect(model.reschedules.single.id, rule.id);
+      expect(model.reschedules.single.toDay, newTo.day);
+      // 渲染跟随新目标日。
+      expect(model.entriesForWeek(1).single.day, 4);
+      model.dispose();
+    });
+
     test('没匹配到日期的规则不影响渲染', () async {
       final model = bootRig();
       model.hydrateForTest(schedule: sampleSchedule(), week: 1);

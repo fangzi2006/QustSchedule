@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.1.2+6
+version: 1.1.2+7
 
 environment:
   sdk: ^3.13.5
@@ -40,6 +40,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_secure_storage: ^11.2.0
   path_provider: ^2.1.6
+  # 打开外部链接（设置页「项目主页」跳转到 GitHub 仓库）。
+  url_launcher: ^6.3.0
 
   # 教务登录 / Cookie / 课表模块（项目内 packages/，本仓库自包含）。
   # 纯 Dart 核心 + dart:io 传输层，通过 path 依赖直接集成。
@@ -71,6 +73,8 @@ flutter:
   assets:
     # 版本号的唯一来源：运行时读它解析 `version:`，界面不再硬编码版本号。
     - pubspec.yaml
+    # 开源协议全文（GPL v3）：设置页「开源协议」展示，满足 GPL 的源码/协议告知要求。
+    - LICENSE
 
   # To add assets to your application, add an assets section, like this:
   # assets:

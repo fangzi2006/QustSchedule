@@ -25,6 +25,15 @@ class StatusPopup extends StatelessWidget {
       duration: const Duration(milliseconds: 200),
       switchInCurve: Curves.easeOutCubic,
       switchOutCurve: Curves.easeInCubic,
+      layoutBuilder: (currentChild, previousChildren) {
+        return Stack(
+          alignment: Alignment.topRight,
+          children: <Widget>[
+            ...previousChildren,
+            if (currentChild != null) currentChild,
+          ],
+        );
+      },
       transitionBuilder: (child, animation) => FadeTransition(
         opacity: animation,
         child: SlideTransition(
@@ -40,7 +49,6 @@ class StatusPopup extends StatelessWidget {
           : _Bubble(
               key: ValueKey<String>('status-${data.text}-${data.error}'),
               data: data,
-              // 没有课表时（例如登录失败）不能给"重试"——那会去查课表而不是重登。
               canRetry: model.schedule != null,
               onDismiss: model.status == AppStatus.failed
                   ? model.dismissError
@@ -129,7 +137,7 @@ class _Bubble extends StatelessWidget {
     final accent = error ? scheme.error : const Color(0xFF2E7D32);
 
     return Container(
-      constraints: const BoxConstraints(maxWidth: 200),
+      constraints: const BoxConstraints(minWidth: 0, maxWidth: 200),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -156,6 +164,7 @@ class _Bubble extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
               child: Row(
+                mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   if (data.busy)
@@ -173,9 +182,10 @@ class _Bubble extends StatelessWidget {
                       color: accent,
                     ),
                   const SizedBox(width: 8),
-                  Expanded(
+                  Flexible(
                     child: Text(
                       data.text,
+                      softWrap: true,
                       style: TextStyle(
                         fontSize: 12,
                         height: 1.35,
@@ -191,6 +201,7 @@ class _Bubble extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
               child: Row(
+                mainAxisSize: MainAxisSize.min,
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: <Widget>[
                   if (canRetry && onOpenDebug != null)

@@ -633,7 +633,7 @@ class _WeekView extends StatelessWidget {
   }
 }
 
-/// 表头：周几 + 日期，今天所在列高亮；有调课冲突的列加**黄色背景**并可点击查看。
+/// 表头：周几 + 日期，今天所在列高亮；有调课冲突的列显示提示点并可点击查看。
 class _DayHeader extends StatelessWidget {
   const _DayHeader({
     required this.model,
@@ -647,13 +647,14 @@ class _DayHeader extends StatelessWidget {
   final int week;
   final double timeColumnWidth;
 
-  /// 本周每天的调课冲突（星期 → 被顶掉的原课）。表头据此画黄底。
+  /// 本周每天的调课冲突（星期 → 被顶掉的原课）。表头据此显示提示点。
   final Map<int, List<RescheduleConflict>> conflicts;
 
-  /// 本周哪些天有"课表时间冲突"（同一天多节课节次重叠、已并排显示）。表头也画黄底。
+  /// 本周哪些天有"课表时间冲突"（同一天多节课节次重叠、已并排显示）。表头也显示提示点。
   final Set<int> timetableConflictDays;
 
-  /// 表头"有调课冲突"的黄底与提示点：琥珀色，浅色主题下也醒目。
+  /// 调课冲突的提示点：琥珀色，浅色主题下也醒目。
+  /// （conflictHeaderColor 仍供冲突详情卡片 _ConflictCard 作背景使用。）
   static const Color conflictHeaderColor = Color(0xFFFFE9A8);
   static const Color conflictDotColor = Color(0xFFE6A700);
 
@@ -685,20 +686,16 @@ class _DayHeader extends StatelessWidget {
                   final hasTimetableConflict = timetableConflictDays.contains(
                     day,
                   );
-                  // 调课冲突、课表时间冲突，都在表头画黄底。
+                  // 调课冲突、课表时间冲突，都在表头显示提示点。
                   final hasConflict =
                       hasRescheduleConflict || hasTimetableConflict;
-                  // 冲突黄优先于"今天"高亮：冲突意味着"这里有课被盖掉"，更要看见。
-                  final Color? background = hasConflict
-                      ? conflictHeaderColor
-                      : (isToday
-                            ? theme.colorScheme.primary.withValues(alpha: 0.10)
-                            : null);
-                  // 有冲突时文字不跟随"今天"主色，避免和黄底撞色。
-                  final Color textColor = isToday && !hasConflict
+                  final Color? background = isToday
+                      ? theme.colorScheme.primary.withValues(alpha: 0.10)
+                      : null;
+                  final Color textColor = isToday
                       ? theme.colorScheme.primary
                       : theme.colorScheme.onSurface;
-                  final Color dateColor = isToday && !hasConflict
+                  final Color dateColor = isToday
                       ? theme.colorScheme.primary
                       : theme.hintColor;
 

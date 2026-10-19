@@ -48,5 +48,11 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- url_launcher：打开 http/https 链接（如设置页「项目主页」）时能发现浏览器，
+             Android 11+ 的包可见性限制下不声明会找不到可处理的应用。 -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
+        </intent>
     </queries>
 </manifest>

@@ -186,7 +186,7 @@ class CourseBlock extends StatelessWidget {
             if (conflict)
               Positioned(
                 top: 1,
-                right: 1,
+                left: 1,
                 child: Container(
                   key: const ValueKey<String>('course-conflict-badge'),
                   width: 6,

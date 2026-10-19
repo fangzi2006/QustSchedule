@@ -7,6 +7,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../src/app_model.dart';
+import '../src/reschedule.dart' show RescheduleRule;
 import '../src/timetable.dart' show formatMonthDay;
 import '../widgets/time_wheel_picker.dart' show showMonthDayWheel;
 
@@ -52,7 +53,7 @@ class ReschedulePage extends StatelessWidget {
                                 '${formatMonthDay(rule.fromMonth, rule.fromDay)}'
                                 '  →  ${formatMonthDay(rule.toMonth, rule.toDay)}',
                               ),
-                              subtitle: const Text('这一天的课整体调过去'),
+                              subtitle: const Text('点击可修改 · 这一天的课整体调过去'),
                               trailing: IconButton(
                                 icon: const Icon(
                                   Icons.delete_outline_rounded,
@@ -62,6 +63,7 @@ class ReschedulePage extends StatelessWidget {
                                 onPressed: () =>
                                     model.removeReschedule(rule.id),
                               ),
+                              onTap: () => _showAddSheet(context, initial: rule),
                             ),
                           );
                         },
@@ -79,12 +81,12 @@ class ReschedulePage extends StatelessWidget {
     );
   }
 
-  void _showAddSheet(BuildContext context) {
+  void _showAddSheet(BuildContext context, {RescheduleRule? initial}) {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (_) => _AddRescheduleSheet(model: model),
+      builder: (_) => _AddRescheduleSheet(model: model, initialRule: initial),
     );
   }
 }
@@ -115,9 +117,12 @@ class _Empty extends StatelessWidget {
 
 /// 添加调课：两个「月日」选择，从哪天调到哪天。
 class _AddRescheduleSheet extends StatefulWidget {
-  const _AddRescheduleSheet({required this.model});
+  const _AddRescheduleSheet({required this.model, this.initialRule});
 
   final AppModel model;
+
+  /// 非空表示"编辑"这条既有规则；为空表示"新增"。
+  final RescheduleRule? initialRule;
 
   @override
   State<_AddRescheduleSheet> createState() => _AddRescheduleSheetState();
@@ -132,11 +137,19 @@ class _AddRescheduleSheetState extends State<_AddRescheduleSheet> {
   @override
   void initState() {
     super.initState();
-    final today = DateTime.now();
-    _fromMonth = today.month;
-    _fromDay = today.day;
-    _toMonth = today.month;
-    _toDay = today.day;
+    final initial = widget.initialRule;
+    if (initial != null) {
+      _fromMonth = initial.fromMonth;
+      _fromDay = initial.fromDay;
+      _toMonth = initial.toMonth;
+      _toDay = initial.toDay;
+    } else {
+      final today = DateTime.now();
+      _fromMonth = today.month;
+      _fromDay = today.day;
+      _toMonth = today.month;
+      _toDay = today.day;
+    }
   }
 
   bool get _same => _fromMonth == _toMonth && _fromDay == _toDay;
@@ -173,7 +186,10 @@ class _AddRescheduleSheetState extends State<_AddRescheduleSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Text('添加调课', style: Theme.of(context).textTheme.titleMedium),
+          Text(
+            widget.initialRule != null ? '编辑调课' : '添加调课',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           const SizedBox(height: 8),
           _DateField(
             label: '从',
@@ -205,12 +221,23 @@ class _AddRescheduleSheetState extends State<_AddRescheduleSheet> {
                 onPressed: _same
                     ? null
                     : () {
-                        widget.model.addReschedule(
-                          fromMonth: _fromMonth,
-                          fromDay: _fromDay,
-                          toMonth: _toMonth,
-                          toDay: _toDay,
-                        );
+                        final initial = widget.initialRule;
+                        if (initial != null) {
+                          widget.model.updateReschedule(
+                            initial.id,
+                            fromMonth: _fromMonth,
+                            fromDay: _fromDay,
+                            toMonth: _toMonth,
+                            toDay: _toDay,
+                          );
+                        } else {
+                          widget.model.addReschedule(
+                            fromMonth: _fromMonth,
+                            fromDay: _fromDay,
+                            toMonth: _toMonth,
+                            toDay: _toDay,
+                          );
+                        }
                         Navigator.of(context).pop();
                       },
                 child: const Text('确定'),

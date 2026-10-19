@@ -392,6 +392,35 @@ class AppModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 修改一条调课规则的起止日期（保留原 id，渲染与冲突判定不变）。
+  Future<void> updateReschedule(
+    String id, {
+    required int fromMonth,
+    required int fromDay,
+    required int toMonth,
+    required int toDay,
+  }) async {
+    final updated = <RescheduleRule>[];
+    var changed = false;
+    for (final rule in _preferences.reschedules) {
+      if (rule.id == id) {
+        updated.add(RescheduleRule(
+          id: id,
+          fromMonth: fromMonth,
+          fromDay: fromDay,
+          toMonth: toMonth,
+          toDay: toDay,
+        ));
+        changed = true;
+      } else {
+        updated.add(rule);
+      }
+    }
+    if (!changed) return;
+    await _preferences.saveReschedules(updated);
+    notifyListeners();
+  }
+
   // ---------------------------------------------------------------------------
   // 外观（格子高度 / 课程卡片文字缩放）
   // ---------------------------------------------------------------------------

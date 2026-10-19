@@ -1486,6 +1486,39 @@ void main() {
       await tester.pump(const Duration(milliseconds: 250));
       expect(find.text('更新中…'), findsNothing);
     });
+
+    testWidgets('提示弹窗宽度跟随文字：短提示紧凑、长提示才扩展到上限', (tester) async {
+      final rig = buildModel();
+      rig.hydrateForTest(
+        schedule: sparseSchedule(),
+        week: 1,
+        termStart: DateTime(2026, 3, 2),
+      );
+      await tester.pumpWidget(wrap(HomeShell(model: rig)));
+
+      // AnimatedSwitcher 的尺寸即弹窗尺寸（Stack 包着 _Bubble，宽度取内容宽）。
+      Future<double> widthFor(String hint) async {
+        rig.setHintForTest(hint);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250)); // 等切换过渡结束
+        return tester.getSize(find.byType(AnimatedSwitcher)).width;
+      }
+
+      final shortW = await widthFor('已更新');
+      // 先清空再换长文，避免过渡期间 Stack 取新旧最大值干扰测量。
+      rig.clearHint();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      final longW = await widthFor('课表更新失败：连接教务系统超时，请检查网络后重试。' * 3);
+
+      // 短提示保持紧凑（远小于 200 上限）；长提示扩展到上限附近。
+      expect(shortW, lessThan(200), reason: '短提示不应被撑到接近上限');
+      expect(shortW, lessThan(120), reason: '短提示应当紧凑');
+      expect(longW, greaterThan(shortW), reason: '长提示应比短提示宽');
+      expect(longW, lessThanOrEqualTo(200));
+      expect(longW, greaterThan(150), reason: '长提示应扩展到接近上限');
+    });
   });
 
   group('设置页账号区', () {
