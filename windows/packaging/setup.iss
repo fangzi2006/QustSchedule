@@ -1,3 +1,5 @@
+﻿[Setup]
+
 ; 青科课表通 · Windows 安装程序（Inno Setup 6）
 ;
 ; 用法（在仓库根目录执行，先构建 Windows 版）：
@@ -22,7 +24,6 @@
 #define MyAppPublisher "com.fangzi.qustschedule"
 #define MyBuildDir "..\..\build\windows\x64\runner\Release"
 
-[Setup]
 ; AppId 必须固定不变，否则升级时会装成两份而不是覆盖
 AppId={{A7F3E2D1-6B4C-4E8A-9D52-1C3B5E7F9A24}
 AppName={#MyAppName}
