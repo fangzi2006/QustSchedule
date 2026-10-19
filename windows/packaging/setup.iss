@@ -1,4 +1,4 @@
-﻿﻿; 青科课表通 · Windows 安装程序（Inno Setup 6）
+﻿; 青科课表通 · Windows 安装程序（Inno Setup 6）
 ;
 ; 用法（在仓库根目录执行，先构建 Windows 版）：
 ;   flutter build windows --release
