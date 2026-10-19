@@ -1,0 +1,157 @@
+name: Build and Release
+
+on:
+  # 推送以 v 开头的标签（如 v1.1.2）时自动编译并发布
+  push:
+    tags:
+      - 'v*'
+  # 也可以在 GitHub Actions 页面手动点击运行
+  workflow_dispatch:
+
+permissions:
+  contents: write # 允许自动创建 Release 并上传文件
+
+env:
+  FLUTTER_VERSION: '3.47.7'
+
+jobs:
+  # ================= 1. 编译 Android APK =================
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      - name: Set up Android SDK (platform-37 / build-tools 36.0.0)
+        uses: android-actions/setup-android@v3
+      - name: Install SDK packages
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager "platforms;android-37" "build-tools;36.0.0"
+
+      # 可选：配置了 KEYSTORE_BASE64 等 secret 才用正式签名，
+      # 没配则退回 debug 签名（仍能产出 apk，但不能覆盖升级已装的 release 包）。
+      - name: Restore Android Keystore (optional)
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
+          echo "storeFile=upload-keystore.jks" > android/key.properties
+          echo "storePassword=$KEY_STORE_PASSWORD" >> android/key.properties
+          echo "keyAlias=$KEY_ALIAS" >> android/key.properties
+          echo "keyPassword=$KEY_PASSWORD" >> android/key.properties
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Build APK (release, universal)
+        run: flutter build apk --release
+
+      # gradle 的 afterEvaluate 已经把产物复制成「青科课表通_v<version>.apk」，
+      # 这里只是收集到统一目录，便于上传。
+      - name: Collect Android artifact
+        id: vars
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed -E 's/version: //; s/\+.*//')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          mkdir -p release_assets
+          cp "build/app/outputs/flutter-apk/青科课表通_v${VERSION}.apk" "release_assets/青科课表通_v${VERSION}.apk"
+
+      - name: Upload Android Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: release_assets/*.apk
+
+  # ================= 2. 编译 Windows 客户端 =================
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Build Windows Release
+        run: flutter build windows --release
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build Windows Installer
+        shell: pwsh
+        run: |
+          $Version = (Select-String -Path pubspec.yaml -Pattern '^version:').Line -replace '^version:\s*','' -replace '\+.*',''
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$Version "windows\packaging\setup.iss"
+
+      - name: Package Windows Zip
+        shell: pwsh
+        run: |
+          $Version = (Select-String -Path pubspec.yaml -Pattern '^version:').Line -replace '^version:\s*','' -replace '\+.*',''
+          Compress-Archive -Path "build/windows/x64/runner/Release/*" -DestinationPath "青科课表通_v${Version}-windows-x64.zip"
+
+      - name: Upload Windows Installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: build/windows/installer/*.exe
+
+      - name: Upload Windows Zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: "青科课表通_v*-windows-x64.zip"
+
+  # ================= 3. 汇总并自动发布到 GitHub Releases =================
+  create-release:
+    needs: [build-android, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compute version from pubspec
+        id: ver
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed -E 's/version: //; s/\+.*//')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: 青科课表通 v${{ steps.ver.outputs.version }}
+          files: artifacts/**/*
+          generate_release_notes: true # 自动从 commit 记录生成更新日志
+          draft: false
+          prerelease: false
