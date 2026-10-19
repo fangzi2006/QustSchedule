@@ -8,11 +8,18 @@ on:
   # 也可以在 GitHub Actions 页面手动点击运行
   workflow_dispatch:
 
+# 并发控制：同一分支/标签重复触发时，若非正式发版标签则自动取消旧任务
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+
 permissions:
   contents: write # 允许自动创建 Release 并上传文件
 
 env:
   FLUTTER_VERSION: '3.47.7'
+  # 判断是否为正式版（标签名不含 -beta / -rc 等连字符）
+  IS_STABLE: ${{ !contains(github.ref, '-') }}
 
 jobs:
   # ================= 1. 编译 Android APK =================
@@ -30,22 +37,21 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
+      # 使用 Gradle 官方缓存加速构建
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # 只接受 Android SDK 许可证；所需的 platform（如 compileSdk 对应的 android-37）
+      # 交由 AGP 在构建期按需自动下载（AGP 7.0+ 标准行为，免在 CI 里写死版本号）。
+      - name: Accept Android SDK licenses
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
           cache: true
-
-      - name: Set up Android SDK (platform-37 / build-tools 36.0.0)
-        uses: android-actions/setup-android@v3
-
-      # 显式安装本项目用到的 platform-37 / build-tools;36.0.0，避免依赖 Gradle 在构建期
-      # 自动拉取（更确定、更快、且不受网络/许可异常影响）。先接受全部许可证。
-      - name: Install SDK packages
-        run: |
-          yes | sdkmanager --licenses
-          sdkmanager "platforms;android-37" "build-tools;36.0.0"
 
       # 始终执行；若有 KEYSTORE_BASE64 secret 则用正式签名，否则退回 debug 签名。
       # 注意：step 级 if 不允许引用 secrets 上下文，故改为在脚本里判空，
@@ -60,10 +66,12 @@ jobs:
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "Restoring release keystore from secrets..."
             echo "$KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks
-            echo "storeFile=upload-keystore.jks" > android/key.properties
-            echo "storePassword=$KEY_STORE_PASSWORD" >> android/key.properties
-            echo "keyAlias=$KEY_ALIAS" >> android/key.properties
-            echo "keyPassword=$KEY_PASSWORD" >> android/key.properties
+            {
+              echo "storeFile=upload-keystore.jks"
+              echo "storePassword=$KEY_STORE_PASSWORD"
+              echo "keyAlias=$KEY_ALIAS"
+              echo "keyPassword=$KEY_PASSWORD"
+            } > android/key.properties
           else
             echo "KEYSTORE_BASE64 secret 未配置，将使用 debug 签名（仍可产出 apk，但不能覆盖升级已装的 release 包）。"
           fi
@@ -81,8 +89,8 @@ jobs:
         run: |
           VERSION=$(grep '^version:' pubspec.yaml | sed -E 's/version:[[:space:]]*//; s/\+.*//' | tr -d '\r ')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          mkdir -p release_assets
-          TARGET_APK="release_assets/青科课表通_v${VERSION}.apk"
+          mkdir -p dist
+          TARGET_APK="dist/青科课表通_v${VERSION}.apk"
           if [ -f "build/app/outputs/flutter-apk/青科课表通_v${VERSION}.apk" ]; then
             cp "build/app/outputs/flutter-apk/青科课表通_v${VERSION}.apk" "$TARGET_APK"
           elif [ -f "build/app/outputs/apk/release/青科课表通_v${VERSION}.apk" ]; then
@@ -94,8 +102,8 @@ jobs:
       - name: Upload Android Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-apk
-          path: release_assets/*.apk
+          name: artifact-android
+          path: dist/*.apk
           if-no-files-found: error
 
   # ================= 2. 编译 Windows 客户端 =================
@@ -104,6 +112,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Enable git long paths (Windows)
+        run: git config --global core.longpaths true
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -127,30 +138,25 @@ jobs:
             choco install innosetup -y --no-progress
           }
 
-      - name: Build Windows Installer
+      - name: Package Windows Installer & Zip
         shell: pwsh
         run: |
           $Version = ((Select-String -Path pubspec.yaml -Pattern '^version:').Line -replace '^version:\s*','' -replace '\+.*','').Trim()
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$Version /O"build\windows\installer" "windows\packaging\setup.iss"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
 
-      - name: Package Windows Zip
-        shell: pwsh
-        run: |
-          $Version = ((Select-String -Path pubspec.yaml -Pattern '^version:').Line -replace '^version:\s*','' -replace '\+.*','').Trim()
-          Compress-Archive -Path "build/windows/x64/runner/Release/*" -DestinationPath "青科课表通_v${Version}-windows-x64.zip" -Force
+          # 1. 编译 Inno Setup 安装包并直接输出到 dist 目录（/O"dist" 覆盖脚本里的 OutputDir）
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$Version /O"dist" "windows\packaging\setup.iss"
 
-      - name: Upload Windows Installer
+          # 2. 打包免安装便携版 Zip 到 dist 目录
+          Compress-Archive -Path "build/windows/x64/runner/Release/*" -DestinationPath "dist/青科课表通_v${Version}-windows-x64.zip" -Force
+
+      - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-installer
-          path: build/windows/installer/*.exe
-          if-no-files-found: error
-
-      - name: Upload Windows Zip
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-zip
-          path: "青科课表通_v*-windows-x64.zip"
+          name: artifact-windows
+          path: |
+            dist/*.exe
+            dist/*.zip
           if-no-files-found: error
 
   # ================= 3. 汇总并自动发布到 GitHub Releases =================
@@ -167,12 +173,19 @@ jobs:
           VERSION=$(grep '^version:' pubspec.yaml | sed -E 's/version:[[:space:]]*//; s/\+.*//' | tr -d '\r ')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      # merge-multiple: true 把各 artifact 平铺到 artifacts/ 根目录，便于直接上传
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: dist
+          pattern: artifact-*
           merge-multiple: true
+
+      # 生成所有安装包的 SHA256 校验值文件
+      - name: Generate SHA256SUMS
+        run: |
+          cd dist
+          sha256sum ./* > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -180,7 +193,7 @@ jobs:
           # 标签触发时用推送的标签名；手动触发时按 pubspec 版本号自动建标签
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.ver.outputs.version) }}
           name: 青科课表通 v${{ steps.ver.outputs.version }}
-          files: artifacts/*
-          generate_release_notes: true # 自动从 commit 记录生成更新日志
+          files: dist/*
+          generate_release_notes: true # 配合 .github/release.yml 自动生成分类更新日志
           draft: false
-          prerelease: false
+          prerelease: ${{ env.IS_STABLE != 'true' }}
