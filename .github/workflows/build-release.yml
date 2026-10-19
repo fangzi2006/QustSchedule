@@ -79,24 +79,26 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Build APK (release, universal)
-        run: flutter build apk --release
+      - name: "Build APK (release, split by ABI: arm64-v8a + armeabi-v7a)"
+        run: flutter build apk --release --split-per-abi --target-platform android-arm,android-arm64
 
-      # gradle 的 afterEvaluate 已经把产物复制成「青科课表通_v<version>.apk」；
-      # 这里用更稳健的方式解析版本号（去掉冒号后空白与 CRLF）并兜底查找产物。
-      - name: Collect Android artifact
+      # gradle 的 afterEvaluate 已把每个 ABI 产物复制成「青科课表通_v<version>-<abi>.apk」；
+      # 这里把所有带版本号前缀的 APK 一并收集进 dist/（拆分后会有 v7 / v8 两个）。
+      - name: Collect Android artifacts
         id: vars
         run: |
           VERSION=$(grep '^version:' pubspec.yaml | sed -E 's/version:[[:space:]]*//; s/\+.*//' | tr -d '\r ')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           mkdir -p dist
-          TARGET_APK="dist/青科课表通_v${VERSION}.apk"
-          if [ -f "build/app/outputs/flutter-apk/青科课表通_v${VERSION}.apk" ]; then
-            cp "build/app/outputs/flutter-apk/青科课表通_v${VERSION}.apk" "$TARGET_APK"
-          elif [ -f "build/app/outputs/apk/release/青科课表通_v${VERSION}.apk" ]; then
-            cp "build/app/outputs/apk/release/青科课表通_v${VERSION}.apk" "$TARGET_APK"
+          shopt -s nullglob
+          SRC_APKS=(build/app/outputs/flutter-apk/青科课表通_v${VERSION}*.apk)
+          if [ ${#SRC_APKS[@]} -gt 0 ]; then
+            cp "${SRC_APKS[@]}" dist/
+            echo "Collected APKs: ${SRC_APKS[*]##*/}"
           else
-            cp "build/app/outputs/flutter-apk/app-release.apk" "$TARGET_APK"
+            # 兜底：直接找 AGP 原始拆分产物
+            cp build/app/outputs/flutter-apk/app-*-release.apk dist/ 2>/dev/null || true
+            echo "未找到带版本号前缀的副本，已兜底复制 AGP 拆分产物"
           fi
 
       - name: Upload Android Artifact

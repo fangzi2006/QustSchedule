@@ -1,10 +1,10 @@
-﻿; 青科课表通 · Windows 安装程序（Inno Setup 6）
+﻿﻿; 青科课表通 · Windows 安装程序（Inno Setup 6）
 ;
 ; 用法（在仓库根目录执行，先构建 Windows 版）：
 ;   flutter build windows --release
 ;   iscc /DAppVersion=1.1.2 windows\packaging\setup.iss
 ;
-; 产物：build\windows\installer\青科课表通_v1.1.2_安装程序.exe
+; 产物：build\windows\installer\青科课表通_v1.1.2-windows-x64-setup.exe
 ;
 ; 注意：
 ; - 本文件必须保存为 UTF-8（带 BOM），否则里面的中文会乱码。
@@ -40,7 +40,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..\..\build\windows\installer
-OutputBaseFilename=青科课表通_v{#AppVersion}_安装程序
+OutputBaseFilename=青科课表通_v{#AppVersion}-windows-x64-setup
 SetupIconFile=..\runner\resources\app_icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/max
