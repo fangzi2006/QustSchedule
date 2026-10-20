@@ -1861,4 +1861,51 @@ void main() {
       expect(find.text('登录中…'), findsOneWidget);
     });
   });
+
+  group('过渡动画可打断', () {
+    testWidgets('翻周动画未播完时再点一次「下一周」，两次点击都生效', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+      await tester.pumpAndSettle();
+
+      final next = find.widgetWithIcon(
+        IconButton,
+        Icons.chevron_right_rounded,
+      );
+      await tester.tap(next);
+      await tester.pump(); // 动画刚开始，远未结束
+      await tester.tap(next);
+      await tester.pump();
+
+      // 以前这里有 _syncing 布尔锁，第二次点击会被整个丢掉（只翻一周）。
+      expect(model.week, 3);
+      await tester.pumpAndSettle();
+      expect(model.week, 3);
+    });
+
+    testWidgets('切到设置的中途点回课表，动画被接管且终态正确', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+      await tester.pumpAndSettle();
+      expect(pageOpacity(tester, 0), 1);
+
+      final dock = find.byType(FloatingDock);
+      await tester.tap(
+        find.descendant(of: dock, matching: find.text('设置')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 60)); // 停在动画中途
+      await tester.tap(
+        find.descendant(of: dock, matching: find.text('课表')),
+      );
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      // 中断后不能停在半透明（更不该闪回 0），最终必须干净地回到课表。
+      expect(pageOpacity(tester, 0), 1);
+      expect(pageOpacity(tester, 1), 0);
+    });
+  });
 }

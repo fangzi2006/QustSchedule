@@ -45,6 +45,16 @@ ThemeData buildLightTheme() {
       clipBehavior: Clip.antiAlias,
       margin: EdgeInsets.zero,
     ),
+    // 页面进出用一个短促的淡入，替代默认 300ms 的缩放转场（见 [_QuickFadeTransitionsBuilder]）。
+    // 只列本项目实际发布的平台；其余平台走框架默认。
+    pageTransitionsTheme: const PageTransitionsTheme(
+      builders: <TargetPlatform, PageTransitionsBuilder>{
+        TargetPlatform.android: _QuickFadeTransitionsBuilder(),
+        TargetPlatform.windows: _QuickFadeTransitionsBuilder(),
+        TargetPlatform.linux: _QuickFadeTransitionsBuilder(),
+        TargetPlatform.fuchsia: _QuickFadeTransitionsBuilder(),
+      },
+    ),
     dividerTheme: DividerThemeData(
       color: scheme.outlineVariant.withValues(alpha: 0.5),
       thickness: 0.5,
@@ -102,4 +112,47 @@ class AppScrollBehavior extends MaterialScrollBehavior {
     PointerDeviceKind.stylus,
     PointerDeviceKind.invertedStylus,
   };
+}
+
+/// 页面进出转场：200ms 淡入 + 很小的上移。
+///
+/// 为什么不用默认的 zoom 转场：它要 300ms、带缩放与快照，画面在动的时间更长，
+/// 期间点下一条会像"没反应"；退出也一样拖沓。这里换成短促的淡入：
+///  - 进入 200ms、退出 160ms（退出更快，回到上一页更跟手）；
+///  - 只有 `FadeTransition` + 1.2% 位移，不做快照缩放，掉帧更少；
+///  - 不额外包 `IgnorePointer`：框架只在 pop 阶段忽略"正在退出的那一页"
+///    （routes.dart `_shouldIgnoreFocusRequest`），进入阶段页面一直可点。
+class _QuickFadeTransitionsBuilder extends PageTransitionsBuilder {
+  const _QuickFadeTransitionsBuilder();
+
+  static final Animatable<Offset> _slide = Tween<Offset>(
+    begin: const Offset(0, 0.012),
+    end: Offset.zero,
+  ).chain(CurveTween(curve: Curves.easeOutCubic));
+
+  @override
+  Duration get transitionDuration => const Duration(milliseconds: 200);
+
+  @override
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 160);
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    // 首个页面（启动直达）不需要转场。
+    if (route.isFirst) return child;
+    return FadeTransition(
+      opacity: CurvedAnimation(
+        parent: animation,
+        curve: Curves.easeOut,
+        reverseCurve: Curves.easeIn,
+      ),
+      child: SlideTransition(position: animation.drive(_slide), child: child),
+    );
+  }
 }

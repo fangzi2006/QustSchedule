@@ -364,7 +364,6 @@ class _WeekPagerState extends State<_WeekPager> {
   late final PageController _controller = PageController(
     initialPage: (widget.model.week - 1).clamp(0, widget.model.maxWeek - 1),
   );
-  bool _syncing = false;
 
   AppModel get model => widget.model;
 
@@ -382,22 +381,22 @@ class _WeekPagerState extends State<_WeekPager> {
   }
 
   /// 外部改了周次（点箭头 / 回到本周 / 校准）→ 动画滚到对应页。
+  ///
+  /// 刻意**不用**"动画进行中"的布尔锁：
+  ///  - 有锁时，动画期间再点一次箭头会被直接丢掉（连点两下只翻一周）；
+  ///  - 有锁时，用户在动画中滑到的页不会被写回 model，于是表头高亮和页面错位；
+  /// `animateToPage` 本身就能被拖拽立刻接管，新目标也会从当前位置续接，
+  /// 天然可打断，这里只判断"目标页是否已经是当前页"来避免重复启动。
   void _onModelChanged() {
-    if (!mounted || _syncing) return;
-    if (!_controller.hasClients) return;
+    if (!mounted || !_controller.hasClients) return;
     final target = (model.week - 1).clamp(0, model.maxWeek - 1);
-    final current = _controller.page?.round();
+    final current = (_controller.page ?? target.toDouble()).round();
     if (current == target) return;
-    _syncing = true;
-    _controller
-        .animateToPage(
-          target,
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOut,
-        )
-        .whenComplete(() {
-          if (mounted) _syncing = false;
-        });
+    _controller.animateToPage(
+      target,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOut,
+    );
   }
 
   @override
@@ -406,8 +405,8 @@ class _WeekPagerState extends State<_WeekPager> {
       controller: _controller,
       itemCount: model.maxWeek,
       onPageChanged: (index) {
-        if (_syncing) return;
-        model.goToWeek(index + 1);
+        // 用户滑到哪就记哪：动画期间滑动到的页面不再被丢弃。
+        if (model.week != index + 1) model.goToWeek(index + 1);
       },
       itemBuilder: (context, index) => _WeekView(model: model, week: index + 1),
     );
