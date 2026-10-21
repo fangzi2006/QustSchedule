@@ -19,10 +19,13 @@ import 'src/app_model.dart';
 import 'src/app_version.dart';
 import 'theme/app_theme.dart';
 
-Future<void> main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
   // 版本号从打包进来的 pubspec.yaml 读，界面不写死。
-  await loadAppVersion();
+  //
+  // 但**不能在 runApp 之前 await**：那等于让首帧先去读一次 asset，白等一个
+  // 资源往返。它只是设置页里的一行字，让它和首帧并行读，读不到就显示 `-`。
+  unawaited(loadAppVersion());
   runApp(const CourseApp());
 }
 

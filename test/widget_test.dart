@@ -561,13 +561,32 @@ void main() {
       expect(model.week, 2);
     });
 
-    testWidgets('慢慢拖不到半页松手：回到原页', (tester) async {
+    testWidgets('慢慢拖不到三分之一松手：回到原页', (tester) async {
       final model = buildModel();
       await pumpPhone(tester, model);
 
       final gesture = await tester.startGesture(
         tester.getCenter(find.byType(PageView)),
         pointer: 6,
+      );
+      for (var i = 0; i < 2; i++) {
+        await gesture.moveBy(const Offset(-50, 0)); // 共 100px = 0.25 页
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(pagerPage(tester), 0);
+      expect(model.week, 1);
+    });
+
+    testWidgets('慢慢拖过三分之一就翻页（比框架的"过半才翻"更容易）', (tester) async {
+      final model = buildModel();
+      await pumpPhone(tester, model);
+
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byType(PageView)),
+        pointer: 12,
       );
       for (var i = 0; i < 3; i++) {
         await gesture.moveBy(const Offset(-50, 0)); // 共 150px = 0.375 页
@@ -576,8 +595,27 @@ void main() {
       await gesture.up();
       await tester.pumpAndSettle();
 
-      expect(pagerPage(tester), 0);
-      expect(model.week, 1);
+      expect(pagerPage(tester), 1);
+      expect(model.week, 2);
+    });
+
+    testWidgets('缓慢拖动时第一段位移就生效（起拖不留死区）', (tester) async {
+      final model = buildModel();
+      await pumpPhone(tester, model);
+
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byType(PageView)),
+        pointer: 11,
+      );
+      // 一次事件走 40px：这一段原来会被框架的起拖阈值吃掉（页面纹丝不动），
+      // 现在从"按下那一点"算位移，页面立刻跟上 0.1 页。
+      await gesture.moveBy(const Offset(-40, 0));
+      await tester.pump();
+
+      expect(pagerPage(tester), greaterThan(0.07));
+
+      await gesture.up();
+      await tester.pumpAndSettle();
     });
 
     testWidgets('点箭头翻页在 180ms 内完成（比原来的 220ms 更快）', (tester) async {
@@ -670,6 +708,50 @@ void main() {
       expect(model.week, 2);
     });
 
+    testWidgets('格子的竖向滚动也从按下那一点算位移（慢拖跟手）', (tester) async {
+      final model = buildModel();
+      await pumpPhone(tester, model);
+
+      final grid = tester.state<ScrollableState>(find.byType(Scrollable).at(1));
+      expect(grid.position.pixels, 0);
+
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.text('第一周课')),
+        pointer: 14,
+      );
+      // 一次事件走 40px：原来这 40px 里有近 20px 被起拖阈值吃掉，
+      // 手指走了一截内容才动。
+      await gesture.moveBy(const Offset(0, -40));
+      await tester.pump();
+
+      expect(grid.position.pixels, greaterThan(30), reason: '40px 的位移应该基本都算进去');
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('滑到空周时，空态提示写的是那一页自己的周次', (tester) async {
+      // sparseSchedule：第 1-2 周、15-16 周有课，第 3-14 周是空周。
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 15);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      await tester.pumpAndSettle();
+
+      // 手势期 model 的周次还落后半页（状态等停稳才落定），
+      // 空态提示不能跟着 model 走，否则会写着"第 15 周没有课"却停在第 14 周。
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byType(PageView)),
+        pointer: 15,
+      );
+      await gesture.moveBy(const Offset(600, 0)); // 往回滑到第 14 周（空周）
+      await tester.pump();
+
+      expect(find.text('第 14 周没有课'), findsOneWidget);
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+    });
+
     testWidgets('竖向拖拽只滚格子，不翻周', (tester) async {
       final model = buildModel();
       await pumpPhone(tester, model);
@@ -692,7 +774,70 @@ void main() {
     });
   });
 
+  group('周次与内容分开通知（性能契约）', () {
+    testWidgets('换周只发周次通知，不牵动整张课表', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      var modelNotified = 0;
+      var weekNotified = 0;
+      model.addListener(() => modelNotified++);
+      model.weekNotifier.addListener(() => weekNotified++);
+
+      model.goToWeek(2);
+
+      // 周次是"看哪一页"，不是课表内容：换周不该让整张课表重建一次
+      // （实测一次整页重建 37ms，而换周只需要 13ms 重建顶栏）。
+      expect(weekNotified, 1, reason: '顶栏要跟着换周');
+      expect(modelNotified, 0, reason: '内容没变，整页重建是白花的钱');
+    });
+
+    testWidgets('内容变了仍然通知整个 model', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      var modelNotified = 0;
+      model.addListener(() => modelNotified++);
+
+      model.hydrateForTest(schedule: sparseSchedule(), week: 2);
+
+      expect(modelNotified, greaterThan(0), reason: '内容变了必须重建界面');
+    });
+  });
+
   group('两页外壳与设置', () {
+    testWidgets('冷启动首帧不建设置页，第一次切过去才建（之后就常挂）', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+
+      // 冷启动首帧只建课表页：设置页整棵建出来要占首帧构建的三分之一以上。
+      expect(find.byType(SettingsPage), findsNothing);
+      expect(pageOpacity(tester, 1), 0, reason: '占位层还在，只是子树没建');
+
+      Future<void> tapDock(String label) async {
+        await tester.tap(
+          find.descendant(
+            of: find.byType(FloatingDock),
+            matching: find.text(label),
+          ),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      await tapDock('设置');
+      expect(find.byType(SettingsPage), findsOneWidget);
+      expect(find.text('作息时间表'), findsOneWidget);
+
+      // 切回课表再切过去：进过一次就常挂，Element 不能换（换了一身状态就没了）。
+      await tapDock('课表');
+      final element = tester.element(find.byType(SettingsPage));
+      await tapDock('设置');
+      expect(
+        tester.element(find.byType(SettingsPage)),
+        same(element),
+        reason: '同一个 Element 才说明这张页一直挂着、状态没被重建',
+      );
+    });
+
     testWidgets('dock 在课表与设置之间切换', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);

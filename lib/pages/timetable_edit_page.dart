@@ -353,28 +353,9 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
   Future<void> _rename() async {
     final draft = _draft;
     if (draft == null) return;
-    final controller = TextEditingController(text: draft.name);
     final name = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('重命名作息表'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: '名称'),
-          onSubmitted: (value) => Navigator.of(context).pop(value),
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('确定'),
-          ),
-        ],
-      ),
+      builder: (context) => _RenameDialog(initial: draft.name),
     );
     final trimmed = name?.trim() ?? '';
     if (trimmed.isEmpty) return;
@@ -871,6 +852,54 @@ class _SettingRow extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 重命名对话框：输入框的 [TextEditingController] 由它自己持有并释放。
+///
+/// 控制器如果放在调用方 new 出来，就没人负责 dispose（泄漏）；而在对话框退场
+/// 动画还没走完时就 dispose，会报"disposed 后又被使用"。
+class _RenameDialog extends StatefulWidget {
+  const _RenameDialog({required this.initial});
+
+  final String initial;
+
+  @override
+  State<_RenameDialog> createState() => _RenameDialogState();
+}
+
+class _RenameDialogState extends State<_RenameDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initial,
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('重命名作息表'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        decoration: const InputDecoration(labelText: '名称'),
+        onSubmitted: (value) => Navigator.of(context).pop(value),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_controller.text),
+          child: const Text('确定'),
+        ),
+      ],
     );
   }
 }

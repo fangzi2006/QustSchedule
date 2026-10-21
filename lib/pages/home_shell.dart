@@ -46,6 +46,12 @@ class _HomeShellState extends State<HomeShell>
 
   int _index = 0;
 
+  /// 已经建过的页。0（课表）永远要建；设置页第一次被切到时才建。
+  ///
+  /// 只影响"什么时候建"，不影响后续语义：进过一次之后它和以前一样常挂，
+  /// 切走再切回来滚动位置与展开状态都不丢。
+  final Set<int> _built = <int>{0};
+
   /// 本次过渡开始时每页的透明度快照。
   ///
   /// 中断时用它当起点：如果直接用 `forward(from: 0)`，正在淡入的那页会从当前值
@@ -87,6 +93,7 @@ class _HomeShellState extends State<HomeShell>
     setState(() {
       _from = snapshot;
       _index = index;
+      _built.add(index);
     });
     _fade.forward(from: 0);
   }
@@ -109,7 +116,14 @@ class _HomeShellState extends State<HomeShell>
       body: Stack(
         children: <Widget>[
           for (var index = 0; index < pages.length; index++)
-            Positioned.fill(child: _page(index, pages[index])),
+            Positioned.fill(
+              child: _page(
+                index,
+                // 没建过的页给个占位：`Opacity` 那一层照旧在（测试与动画都靠
+                // 它），只是子树不建。
+                _built.contains(index) ? pages[index] : const SizedBox.shrink(),
+              ),
+            ),
           Positioned(
             left: 0,
             right: 0,

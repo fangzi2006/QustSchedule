@@ -22,6 +22,12 @@ final SpringDescription _kSnapSpring = SpringDescription.withDurationAndBounce(
   bounce: 0,
 );
 
+/// 慢速松手时"算一次翻页"的最小拖行距离（占一页的比例）。
+///
+/// 框架默认是二分之一：跨页要先拖过半页才认，手指会觉得"翻不动"。
+/// 调到三分之一，慢拖也能轻松翻页；仍然是"最多一页"，不会连翻。
+const double _kFlipFraction = 1 / 3;
+
 /// 课表页的翻页控制器。
 ///
 /// ## 为什么不能直接用 [PageController] 的落点
@@ -318,8 +324,15 @@ class _WeekPagerPosition extends ScrollPositionWithSingleContext
 
     double target;
     if (velocity == 0) {
-      // 慢慢松开：就近吸附。与框架一致，也让"拖一点再松手"能回到原页。
-      target = current.roundToDouble();
+      // 慢慢松开：拖过一页的 [_kFlipFraction] 就往那一页落，不到就回原页。
+      // 先数"整页"，再看零头 —— 长距离慢拖照样跟手，不会被这里按住。
+      final double travel = current - origin;
+      final int wholePages = travel.truncate();
+      final double remainder = (travel - wholePages).abs();
+      final int extraPage = remainder >= _kFlipFraction
+          ? travel.sign.toInt()
+          : 0;
+      target = origin + wholePages + extraPage;
     } else {
       // 快速滑动：只翻到相邻一页，方向跟手。
       final double oneStep = origin + (velocity > 0 ? 1 : -1);

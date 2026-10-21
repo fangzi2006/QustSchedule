@@ -144,6 +144,24 @@ class AppModel extends ChangeNotifier {
   int _week = 1;
   int get week => _week;
 
+  /// 周次单独的通知源。
+  ///
+  /// 周次是"看哪一页"，不是课表内容：改它不该把整张课表重建一次（实测一次
+  /// 整页重建 60ms+，而翻页落稳、点箭头、选周都会改周次）。所以它走自己的
+  /// notifier —— 只有顶栏、右下角按钮和翻页逻辑监听它，课表网格不监听。
+  final ValueNotifier<int> weekNotifier = ValueNotifier<int>(1);
+
+  /// 设置当前周次。
+  ///
+  /// **不**发 `notifyListeners()`：内容没变，整页重建是白花的钱。
+  /// 需要重建界面（例如校准改了开学日）的地方自己另外通知。
+  void _setWeek(int week) {
+    final int next = _clampWeek(week);
+    if (next == _week) return;
+    _week = next;
+    weekNotifier.value = next;
+  }
+
   /// 本学期实际有课的最大周次（课表里出现过的最晚周）。
   int _maxWeek = 20;
   int get maxWeek => _maxWeek;
@@ -414,13 +432,15 @@ class AppModel extends ChangeNotifier {
     var changed = false;
     for (final rule in _preferences.reschedules) {
       if (rule.id == id) {
-        updated.add(RescheduleRule(
-          id: id,
-          fromMonth: fromMonth,
-          fromDay: fromDay,
-          toMonth: toMonth,
-          toDay: toDay,
-        ));
+        updated.add(
+          RescheduleRule(
+            id: id,
+            fromMonth: fromMonth,
+            fromDay: fromDay,
+            toMonth: toMonth,
+            toDay: toDay,
+          ),
+        );
         changed = true;
       } else {
         updated.add(rule);
@@ -519,17 +539,18 @@ class AppModel extends ChangeNotifier {
   Future<void> boot() async {
     _setStatus(AppStatus.booting);
     try {
-      if (!_repositoryReady) {
-        _rebindRepository(await FileSessionRepository.open());
-      }
-      if (!_preferencesReady) {
-        _preferences = await Preferences.open();
-      }
+      // 三个本地存储互不依赖，但各自都要一次 path_provider 平台往返：
+      // 先把三个 Future 都发出去再逐个 await，冷启动省掉两次串行往返。
+      final sessionFuture = _repositoryReady
+          ? null
+          : FileSessionRepository.open();
+      final preferencesFuture = _preferencesReady ? null : Preferences.open();
+      final cacheFuture = _cacheReady ? null : FileScheduleCache.open();
+      if (sessionFuture != null) _rebindRepository(await sessionFuture);
+      if (preferencesFuture != null) _preferences = await preferencesFuture;
       // 冷启动也算"刚看见过今天"：回到前台时拿它比对，跨天才重建。
       _lastSeenDay = dayOnly(DateTime.now());
-      if (!_cacheReady) {
-        _scheduleCache = await FileScheduleCache.open();
-      }
+      if (cacheFuture != null) _scheduleCache = await cacheFuture;
       // 上次用的学校优先。以前不存这个，用户改了地址重启就退回默认学校。
       if (!_schoolFixed) {
         final savedSchool = _preferences.currentSchool;
@@ -540,8 +561,11 @@ class AppModel extends ChangeNotifier {
       // Cookie 失效后也就没法自动重登。
       _restoreAccount();
 
-      final snapshot = await service.bootstrap();
-      final cached = await _scheduleCache.load();
+      // Cookie 快照与课表缓存也是两份独立文件：一起读，别串行。
+      final snapshotFuture = service.bootstrap();
+      final cachedFuture = _scheduleCache.load();
+      final snapshot = await snapshotFuture;
+      final cached = await cachedFuture;
 
       if (cached != null && sameSchool(cached.baseUrl, _schoolBaseUrl)) {
         // 先拿缓存把课表立起来：打开就能看，不卡网络。
@@ -689,11 +713,11 @@ class AppModel extends ChangeNotifier {
     final saved = _preferences.termStartOf(schedule.termId);
     if (saved != null) {
       _termStart = saved;
-      _week = _clampWeek(weekOf(saved, DateTime.now()));
+      _setWeek(weekOf(saved, DateTime.now()));
     } else {
       final term = _termById(schedule.termId);
       _termStart = estimateTermStart(term ?? _fallbackTerm(schedule.termId));
-      _week = _clampWeek(weekOf(_termStart!, DateTime.now()));
+      _setWeek(weekOf(_termStart!, DateTime.now()));
     }
   }
 
@@ -721,10 +745,8 @@ class AppModel extends ChangeNotifier {
 
   /// 切到指定周（越界自动收敛）。
   void goToWeek(int week) {
-    final next = _clampWeek(week);
-    if (next == _week) return;
-    _week = next;
-    notifyListeners();
+    // 只发周次通知：整页重建对"换一页"是白干的（见 weekNotifier 的说明）。
+    _setWeek(week);
   }
 
   void nextWeek() => goToWeek(_week + 1);
@@ -742,7 +764,7 @@ class AppModel extends ChangeNotifier {
     final start = termStartFromWeek(DateTime.now(), safe);
     _termStart = start;
     _maxWeek = safe > _maxWeek ? safe : _maxWeek;
-    _week = safe;
+    _setWeek(safe);
     final termId = _termId;
     if (termId.isNotEmpty) {
       await _preferences.setTermStart(termId, start);
@@ -756,7 +778,7 @@ class AppModel extends ChangeNotifier {
     if (termId.isEmpty) return;
     final term = _termById(termId) ?? _fallbackTerm(termId);
     _termStart = estimateTermStart(term);
-    _week = _clampWeek(weekOf(_termStart!, DateTime.now()));
+    _setWeek(weekOf(_termStart!, DateTime.now()));
     await _preferences.setTermStart(termId, _termStart!);
     notifyListeners();
   }
@@ -792,7 +814,7 @@ class AppModel extends ChangeNotifier {
     final start = _termStart;
     if (start != null) {
       final weekWhenLeft = weekOf(start, _lastSeenDay);
-      if (_week == weekWhenLeft) _week = _clampWeek(weekOf(start, today));
+      if (_week == weekWhenLeft) _setWeek(weekOf(start, today));
     }
     _lastSeenDay = today;
     notifyListeners();
@@ -1086,7 +1108,7 @@ class AppModel extends ChangeNotifier {
     _studentId = studentId;
     _applyCalendar(schedule);
     if (termStart != null) _termStart = termStart;
-    if (week != null) _week = _clampWeek(week);
+    if (week != null) _setWeek(week);
     _status = AppStatus.ready;
     notifyListeners();
   }
@@ -1284,6 +1306,7 @@ class AppModel extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    weekNotifier.dispose();
     _hintTimer?.cancel();
     _appearanceTimer?.cancel();
     // 面板没点"完成"就被关掉（比如返回手势）时，别把刚拖好的值丢掉。

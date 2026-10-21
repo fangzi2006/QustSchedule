@@ -16,7 +16,10 @@
 /// 且换作息表时全表高度跳变。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/gestures.dart' show DragStartBehavior;
 import 'package:flutter/material.dart';
 import 'package:zf_academic/zf_academic.dart';
 
@@ -62,12 +65,13 @@ class _SchedulePageState extends State<SchedulePage> {
   void initState() {
     super.initState();
     _shownWeek.value = model.week;
-    model.addListener(_syncShownWeek);
+    // 只听周次通知：换周不该让整张课表重建（内容没变）。
+    model.weekNotifier.addListener(_syncShownWeek);
   }
 
   @override
   void dispose() {
-    model.removeListener(_syncShownWeek);
+    model.weekNotifier.removeListener(_syncShownWeek);
     _shownWeek.dispose();
     super.dispose();
   }
@@ -473,12 +477,15 @@ class _WeekPagerState extends State<_WeekPager> {
   @override
   void initState() {
     super.initState();
-    model.addListener(_onModelChanged);
+    // 外部改了周次（点箭头 / 选周 / 回到本周）→ 动画翻过去。
+    // 订阅的是**周次通知源**而不是整个 model：内容变化与翻页无关，
+    // 而周次变化也不该拖着整张课表重建。
+    model.weekNotifier.addListener(_onWeekChanged);
   }
 
   @override
   void dispose() {
-    model.removeListener(_onModelChanged);
+    model.weekNotifier.removeListener(_onWeekChanged);
     _controller.dispose();
     super.dispose();
   }
@@ -487,7 +494,7 @@ class _WeekPagerState extends State<_WeekPager> {
   ///
   /// 刻意不用"动画进行中"的布尔锁（连点两下会被吞掉），靠 [_animatingTo]
   /// 判断"是不是已经在去同一页的路上"：可打断、可续接，但不会重复启动。
-  void _onModelChanged() {
+  void _onWeekChanged() {
     // 这条通知是我们自己从页码回写的：没有新的翻页意图，别再反向驱动动画。
     if (_syncingFromPage) return;
     if (!mounted || !_controller.hasClients) return;
@@ -570,6 +577,9 @@ class _WeekPagerState extends State<_WeekPager> {
       onNotification: _onScrollNotification,
       child: PageView.builder(
         controller: _controller,
+        // 起拖位移从"手指按下那一点"算起。框架默认（start）会丢掉起拖阈值
+        // 那 ~18dp：慢慢拖时手已经走了一截页面才动，而且这段永远补不回来。
+        dragStartBehavior: DragStartBehavior.down,
         itemCount: model.maxWeek,
         onPageChanged: _onPageChanged,
         itemBuilder: (context, index) =>
@@ -633,13 +643,15 @@ class _WeekView extends StatelessWidget {
           // 课表已就绪、这一周确实没课 → 给解释；还在加载 / 出错 → 只铺空网格
           // （进度和错误都由状态弹窗说，这里不该再显示"第 N 周没有课"）。
           child: entries.isEmpty && model.status == AppStatus.ready
-              ? _EmptyWeek(model: model, bottomInset: bottomInset)
+              ? _EmptyWeek(model: model, week: week, bottomInset: bottomInset)
               : LayoutBuilder(
                   builder: (context, constraints) {
                     final rows = model.gridSectionCount;
                     final dayWidth =
                         (constraints.maxWidth - timeColumnWidth) / 7;
                     return SingleChildScrollView(
+                      // 同上：竖向滚动也从按下那一点开始算，慢拖才跟手。
+                      dragStartBehavior: DragStartBehavior.down,
                       padding: EdgeInsets.only(bottom: bottomInset),
                       child: Column(
                         children: <Widget>[
@@ -1101,9 +1113,18 @@ class _GridPainter extends CustomPainter {
 }
 
 class _EmptyWeek extends StatelessWidget {
-  const _EmptyWeek({required this.model, required this.bottomInset});
+  const _EmptyWeek({
+    required this.model,
+    required this.week,
+    required this.bottomInset,
+  });
 
   final AppModel model;
+
+  /// 这一页自己的周次。**不能读 `model.week`**：滑动中 model 的周次会落后
+  /// 半页（状态等停稳才落定），照着它写会显示出"第 1 周没有课"却停在第 2 周。
+  final int week;
+
   final double bottomInset;
 
   @override
@@ -1123,7 +1144,7 @@ class _EmptyWeek extends StatelessWidget {
                 color: theme.hintColor,
               ),
               const SizedBox(height: 12),
-              Text('第 ${model.week} 周没有课', style: theme.textTheme.titleMedium),
+              Text('第 $week 周没有课', style: theme.textTheme.titleMedium),
               const SizedBox(height: 8),
               Text(
                 '可能是假期、考试周，或者周次校准不准。\n'
@@ -1179,12 +1200,43 @@ Future<void> showWeekPicker(
 
 /// 校准："本周实际是第几周" → 反推开学日并持久化。
 void showCalibrateSheet(BuildContext context, AppModel model) {
-  final controller = TextEditingController(text: '${model.currentWeekOfToday}');
   showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
-    builder: (context) => Padding(
+    builder: (context) => _CalibrateSheet(model: model),
+  );
+}
+
+/// 校准弹窗的内容。
+///
+/// 单独一个 StatefulWidget：输入框的 [TextEditingController] 由它持有，
+/// 弹窗关掉时跟着 dispose —— 控制器放在函数里 new 出来就没人管了（泄漏），
+/// 而在弹窗退场动画还没走完时就 dispose 又会报"disposed 后又被使用"。
+class _CalibrateSheet extends StatefulWidget {
+  const _CalibrateSheet({required this.model});
+
+  final AppModel model;
+
+  @override
+  State<_CalibrateSheet> createState() => _CalibrateSheetState();
+}
+
+class _CalibrateSheetState extends State<_CalibrateSheet> {
+  late final TextEditingController _controller = TextEditingController(
+    text: '${widget.model.currentWeekOfToday}',
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final AppModel model = widget.model;
+    return Padding(
       padding: EdgeInsets.fromLTRB(
         20,
         0,
@@ -1205,7 +1257,7 @@ void showCalibrateSheet(BuildContext context, AppModel model) {
           ),
           const SizedBox(height: 16),
           TextField(
-            controller: controller,
+            controller: _controller,
             keyboardType: TextInputType.number,
             autofocus: true,
             decoration: const InputDecoration(labelText: '本周是第几周'),
@@ -1215,7 +1267,7 @@ void showCalibrateSheet(BuildContext context, AppModel model) {
             children: <Widget>[
               FilledButton(
                 onPressed: () {
-                  final week = int.tryParse(controller.text.trim());
+                  final week = int.tryParse(_controller.text.trim());
                   if (week != null && week > 0) {
                     model.calibrateCurrentWeek(week);
                     Navigator.of(context).pop();
@@ -1235,8 +1287,8 @@ void showCalibrateSheet(BuildContext context, AppModel model) {
           ),
         ],
       ),
-    ),
-  );
+    );
+  }
 }
 
 /// 课表页下方的"备注"区：实践课程 / 其他课程（来自课表响应的 `sjkList`）。
