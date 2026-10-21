@@ -7,6 +7,8 @@
 /// 未登录与验证码是独立全屏页，不显示 dock。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -58,14 +60,22 @@ class _AppShell extends StatefulWidget {
 class _AppShellState extends State<_AppShell> {
   final AppModel _model = AppModel();
 
+  /// 前后台切换监听。只订阅 onShow（`hidden → inactive` 时触发）：
+  /// 手机切回前台、桌面端最小化后还原都会走到这里。
+  late final AppLifecycleListener _lifecycle;
+
   @override
   void initState() {
     super.initState();
     _model.boot();
+    _lifecycle = AppLifecycleListener(
+      onShow: () => unawaited(_model.onAppShown()),
+    );
   }
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     _model.dispose();
     super.dispose();
   }

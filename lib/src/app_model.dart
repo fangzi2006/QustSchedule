@@ -97,6 +97,16 @@ class AppModel extends ChangeNotifier {
   String _errorCode = '';
   String get errorCode => _errorCode;
 
+  /// 上次"看见"的日期（只到天）。回到前台时拿它比对，发现跨天就重建一次界面。
+  ///
+  /// 课表页的表头日期与"今天"高亮都是 build 时按 `DateTime.now()` 现算的，
+  /// 所以一次 `notifyListeners` 就够——但没人通知的话，App 在后台过夜后
+  /// 回到前台会一直显示昨天的日期。
+  DateTime _lastSeenDay = dayOnly(DateTime.now());
+
+  /// 上次成功抓到课表的时刻。`null` = 本次进程还没成功抓过、也不知道缓存时间。
+  DateTime? _lastFetchedAt;
+
   Schedule? _schedule;
   Schedule? get schedule => _schedule;
 
@@ -515,6 +525,8 @@ class AppModel extends ChangeNotifier {
       if (!_preferencesReady) {
         _preferences = await Preferences.open();
       }
+      // 冷启动也算"刚看见过今天"：回到前台时拿它比对，跨天才重建。
+      _lastSeenDay = dayOnly(DateTime.now());
       if (!_cacheReady) {
         _scheduleCache = await FileScheduleCache.open();
       }
@@ -570,6 +582,8 @@ class AppModel extends ChangeNotifier {
   void _restoreCachedSchedule(CachedSchedule cached) {
     _schedule = cached.schedule;
     _termId = cached.schedule.termId;
+    // 记住缓存是什么时候抓的：回到前台时用它判断"够不够旧、要不要静默刷"。
+    _lastFetchedAt = cached.fetchedAt;
     _applyCalendar(cached.schedule);
     _setStatus(AppStatus.ready);
   }
@@ -614,6 +628,8 @@ class AppModel extends ChangeNotifier {
       _applyCalendar(schedule);
       // 抓到就落缓存：下次冷启动直接展示，不再干等网络。
       unawaited(_saveScheduleCache(schedule));
+      // 记下抓取时刻：回到前台的"够不够旧"判断用它，别再用缓存的旧时间。
+      _lastFetchedAt = DateTime.now();
       _refreshing = false;
       _setStatus(AppStatus.ready);
       if (silent) {
@@ -746,6 +762,84 @@ class AppModel extends ChangeNotifier {
   }
 
   Future<void> refresh() => _loadSchedule(termId: _termId, background: true);
+
+  // -------------------------------------------------------------------------
+  // 回到前台
+  // -------------------------------------------------------------------------
+
+  /// App 重新回到前台时调用（由 `AppLifecycleListener.onShow` 驱动）。
+  ///
+  /// 两件事，顺序固定：
+  ///  1. 校正"今天"——跨天后重建一次，表头日期与"今天"高亮立刻落到新的一天；
+  ///     用户原本停在当前周时，周次也跟着走。
+  ///  2. 按最小更新间隔决定要不要静默刷一次课表——与冷启动同一套语义，
+  ///     频繁切前后台最多每 N 分钟刷一次。
+  Future<void> onAppShown() async {
+    if (_disposed) return;
+    _syncCalendarDay();
+    await _refreshIfDue();
+  }
+
+  /// 日期变了就重建一次界面；返回是否真的跨天了。
+  ///
+  /// 只在 App 回到前台时调用，不做定时器：课表页本来就不需要在后台自己动。
+  bool _syncCalendarDay() {
+    final today = dayOnly(DateTime.now());
+    if (today == _lastSeenDay) return false;
+
+    // 周次跟随：只在用户原本就停在"上次看见那天所在的周"时才跟。
+    // 他手翻到第 2 周看课，过了几天再回来，不该被强行拽到当前周。
+    final start = _termStart;
+    if (start != null) {
+      final weekWhenLeft = weekOf(start, _lastSeenDay);
+      if (_week == weekWhenLeft) _week = _clampWeek(weekOf(start, today));
+    }
+    _lastSeenDay = today;
+    notifyListeners();
+    return true;
+  }
+
+  /// 距上次成功抓取是否已过最小间隔 → 静默刷一次。
+  Future<void> _refreshIfDue() async {
+    final allowed = shouldRefreshOnShow(
+      autoRefresh: _preferences.autoRefresh,
+      refreshing: _refreshing,
+      hasSchedule: _schedule != null,
+      lastFetchedAt: _lastFetchedAt,
+      intervalMinutes: _preferences.autoRefreshIntervalMinutes,
+    );
+    if (!allowed) return;
+    await refresh();
+  }
+
+  /// 「回到前台要不要静默刷新」的判定，抽成纯函数以便单测。
+  ///
+  /// 与冷启动的 `_shouldSilentRefresh` 语义一致：同一个最小间隔、同一组开关。
+  @visibleForTesting
+  static bool shouldRefreshOnShow({
+    required bool autoRefresh,
+    required bool refreshing,
+    required bool hasSchedule,
+    required DateTime? lastFetchedAt,
+    required int intervalMinutes,
+    DateTime? now,
+  }) {
+    // 用户关掉了静默更新 / 正在刷 / 还没有课表（交给 boot 与登录流程）
+    if (!autoRefresh || refreshing || !hasSchedule) return false;
+    final last = lastFetchedAt;
+    // 不知道上次是什么时候抓的（例如本次进程刚起、缓存里没有时间）：放行一次，
+    // 宁可多刷一次也不要让用户看到的是一份不知道多旧的课表。
+    if (last == null) return true;
+    return (now ?? DateTime.now()).difference(last) >=
+        Duration(minutes: intervalMinutes);
+  }
+
+  /// 仅测试用：注入"上次看见的日期"与"上次抓取时刻"，让生命周期逻辑可断言。
+  @visibleForTesting
+  void seedLifecycleForTest({DateTime? lastSeenDay, DateTime? lastFetchedAt}) {
+    if (lastSeenDay != null) _lastSeenDay = dayOnly(lastSeenDay);
+    _lastFetchedAt = lastFetchedAt;
+  }
 
   // -------------------------------------------------------------------------
   // 登录

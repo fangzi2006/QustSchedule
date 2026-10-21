@@ -953,4 +953,102 @@ void main() {
     expect(other.content, '线上自主学习');
     expect(other.teacher, isNull);
   });
+
+  group('回到前台（AppLifecycleListener.onShow）', () {
+    // 用"本周一"推出两个时间点，保证与跑测试的真实日期无关：
+    //   start       = 上周一 → 今天落在第 2 周
+    //   lastSeenDay = 上周日 → 上次看见的是第 1 周
+    final today = dayOnly(DateTime.now());
+    final start = mondayOf(today).subtract(const Duration(days: 7));
+    final lastWeekDay = mondayOf(today).subtract(const Duration(days: 1));
+
+    test('跨天且原本停在当前周：周次跟到新的当前周', () async {
+      final model = buildModel();
+      model.hydrateForTest(
+        schedule: scheduleWithWeeks(<int>[1, 2, 3]),
+        week: 1,
+        termStart: start,
+      );
+      // 刚刷新过：只验证跨天，不触发网络请求。
+      model.seedLifecycleForTest(
+        lastSeenDay: lastWeekDay,
+        lastFetchedAt: DateTime.now(),
+      );
+
+      await model.onAppShown();
+
+      expect(model.currentWeekOfToday, 2, reason: '前提：今天应在第 2 周');
+      expect(model.week, 2, reason: '原本停在当前周，跨天后应跟过去');
+      model.dispose();
+    });
+
+    test('跨天但用户手翻到了别的周：不被拽回当前周', () async {
+      final model = buildModel();
+      model.hydrateForTest(
+        schedule: scheduleWithWeeks(<int>[1, 2, 3]),
+        week: 3,
+        termStart: start,
+      );
+      model.seedLifecycleForTest(
+        lastSeenDay: lastWeekDay,
+        lastFetchedAt: DateTime.now(),
+      );
+
+      await model.onAppShown();
+
+      expect(model.week, 3, reason: '用户主动翻到的周不该被覆盖');
+      model.dispose();
+    });
+
+    test('没跨天：周次不动', () async {
+      final model = buildModel();
+      model.hydrateForTest(
+        schedule: scheduleWithWeeks(<int>[1, 2, 3]),
+        week: 1,
+        termStart: start,
+      );
+      model.seedLifecycleForTest(
+        lastSeenDay: today,
+        lastFetchedAt: DateTime.now(),
+      );
+
+      await model.onAppShown();
+
+      expect(model.week, 1);
+      model.dispose();
+    });
+
+    test('静默刷新的判定：开关 / 正在刷 / 无课表 / 间隔', () {
+      final now = DateTime(2026, 10, 21, 12);
+      bool due({
+        bool autoRefresh = true,
+        bool refreshing = false,
+        bool hasSchedule = true,
+        DateTime? lastFetchedAt,
+        int interval = 30,
+      }) => AppModel.shouldRefreshOnShow(
+        autoRefresh: autoRefresh,
+        refreshing: refreshing,
+        hasSchedule: hasSchedule,
+        lastFetchedAt: lastFetchedAt,
+        intervalMinutes: interval,
+        now: now,
+      );
+
+      final longAgo = now.subtract(const Duration(hours: 5));
+      expect(due(autoRefresh: false, lastFetchedAt: longAgo), isFalse);
+      expect(due(refreshing: true, lastFetchedAt: longAgo), isFalse);
+      expect(due(hasSchedule: false, lastFetchedAt: longAgo), isFalse);
+      expect(due(lastFetchedAt: null), isTrue, reason: '不知道上次抓取时间就放行一次');
+      expect(
+        due(lastFetchedAt: now.subtract(const Duration(minutes: 29))),
+        isFalse,
+        reason: '未到最小间隔',
+      );
+      expect(
+        due(lastFetchedAt: now.subtract(const Duration(minutes: 31))),
+        isTrue,
+      );
+    });
+  });
 }
