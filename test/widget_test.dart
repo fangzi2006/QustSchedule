@@ -445,6 +445,253 @@ void main() {
     });
   });
 
+  group('课表翻页（一次滑动一页）', () {
+    /// 翻页层当前页码（0 起）：整数 = 停稳，带小数 = 卡在两页之间。
+    double pagerPage(WidgetTester tester) {
+      final state = tester.state<ScrollableState>(
+        find.byType(Scrollable).first,
+      );
+      return (state.position as PageMetrics).page!;
+    }
+
+    /// 每周一门名字不同的课。
+    Schedule weeklySchedule() => const Schedule(
+      termId: '2026-2027-1',
+      maxWeeks: 5,
+      entries: <ScheduleEntry>[
+        ScheduleEntry(
+          id: 'w1',
+          name: '第一周课',
+          day: 1,
+          startPeriod: 1,
+          endPeriod: 2,
+          weeks: <int>[1],
+        ),
+        ScheduleEntry(
+          id: 'w2',
+          name: '第二周课',
+          day: 2,
+          startPeriod: 3,
+          endPeriod: 4,
+          weeks: <int>[2],
+        ),
+        ScheduleEntry(
+          id: 'w3',
+          name: '第三周课',
+          day: 4,
+          startPeriod: 5,
+          endPeriod: 6,
+          weeks: <int>[3],
+        ),
+      ],
+    );
+
+    /// 用 400 宽的手机视口：一页 400px，手指横扫半屏就能把页面拖过半页，
+    /// 正是"滑一下跳过一页"最容易发生的尺度（默认 800 宽测不出来）。
+    Future<void> pumpPhone(WidgetTester tester, AppModel model) async {
+      tester.view.physicalSize = const Size(400, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      model.hydrateForTest(schedule: weeklySchedule(), week: 1);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      await tester.pumpAndSettle();
+      expect(pagerPage(tester), 0);
+    }
+
+    testWidgets('快速横扫，只翻一页（不跳页）', (tester) async {
+      final model = buildModel();
+      await pumpPhone(tester, model);
+
+      // 450px 已超过一整页：这一下把页面拖到 1.1 页左右。
+      // 框架默认落点算"当前位置 + 半页"→ round(1.6) = 第 3 周，直接跳过第 2 周。
+      await tester.fling(find.byType(PageView), const Offset(-450, 0), 1200);
+      await tester.pumpAndSettle();
+
+      expect(pagerPage(tester), 1, reason: '一次滑动只走一页');
+      expect(model.week, 2, reason: '周次跟画面一致');
+      expect(find.text('第 2 周'), findsOneWidget);
+    });
+
+    testWidgets('反方向快速滑动也只翻一页', (tester) async {
+      final model = buildModel();
+      await pumpPhone(tester, model);
+      await tester.fling(find.byType(PageView), const Offset(-450, 0), 1200);
+      await tester.pumpAndSettle();
+      expect(pagerPage(tester), 1);
+
+      await tester.fling(find.byType(PageView), const Offset(450, 0), 1200);
+      await tester.pumpAndSettle();
+
+      expect(pagerPage(tester), 0);
+      expect(model.week, 1);
+    });
+
+    testWidgets('连着滑两下，每下各翻一页（不丢页）', (tester) async {
+      final model = buildModel();
+      await pumpPhone(tester, model);
+
+      await tester.fling(find.byType(PageView), const Offset(-260, 0), 1200);
+      // 第一下还在吸附途中就起第二下：这一下要从"第一下要落的页"继续算。
+      await tester.pump(const Duration(milliseconds: 40));
+      await tester.fling(find.byType(PageView), const Offset(-260, 0), 1200);
+      await tester.pumpAndSettle();
+
+      expect(pagerPage(tester), 2, reason: '两下 = 两页');
+      expect(model.week, 3);
+    });
+
+    testWidgets('慢慢拖过半页松手：翻一页', (tester) async {
+      final model = buildModel();
+      await pumpPhone(tester, model);
+
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byType(PageView)),
+        pointer: 5,
+      );
+      for (var i = 0; i < 5; i++) {
+        await gesture.moveBy(const Offset(-50, 0)); // 共 250px = 0.625 页
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      // 最后一次移动过去 100ms 才抬手 → 速度识别为 0，走"就近吸附"分支。
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(pagerPage(tester), 1);
+      expect(model.week, 2);
+    });
+
+    testWidgets('慢慢拖不到半页松手：回到原页', (tester) async {
+      final model = buildModel();
+      await pumpPhone(tester, model);
+
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byType(PageView)),
+        pointer: 6,
+      );
+      for (var i = 0; i < 3; i++) {
+        await gesture.moveBy(const Offset(-50, 0)); // 共 150px = 0.375 页
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(pagerPage(tester), 0);
+      expect(model.week, 1);
+    });
+
+    testWidgets('点箭头翻页在 180ms 内完成（比原来的 220ms 更快）', (tester) async {
+      final model = buildModel();
+      await pumpPhone(tester, model);
+
+      await tester.tap(
+        find.widgetWithIcon(IconButton, Icons.chevron_right_rounded),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      final midway = pagerPage(tester);
+      expect(midway, greaterThan(0.5));
+      expect(midway, lessThan(1), reason: '100ms 时还在路上');
+
+      await tester.pump(const Duration(milliseconds: 80)); // 累计 180ms
+      expect(pagerPage(tester), 1, reason: '150ms 的动画此时应该已经停稳');
+    });
+
+    testWidgets('松手后落页在 ~300ms 内停稳', (tester) async {
+      final model = buildModel();
+      await pumpPhone(tester, model);
+
+      final state = tester.state<ScrollableState>(
+        find.byType(Scrollable).first,
+      );
+      await tester.fling(find.byType(PageView), const Offset(-200, 0), 1200);
+
+      // 数到位置不再变化为止（虚拟时钟下的帧数，可复现）。
+      var frames = 0;
+      var last = -1.0;
+      while (frames < 80) {
+        await tester.pump(const Duration(milliseconds: 16));
+        frames++;
+        final pixels = state.position.pixels;
+        if ((pixels - last).abs() < 0.01) break;
+        last = pixels;
+      }
+
+      expect(state.position.pixels, 400, reason: '仍然准确落在第 2 周');
+      expect(frames, lessThan(24), reason: '落页弹簧调快过：默认弹簧要 40 帧以上（~640ms）');
+    });
+
+    testWidgets('滑动途中只更新顶栏，周次留到停稳再写', (tester) async {
+      final model = buildModel();
+      await pumpPhone(tester, model);
+
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byType(PageView)),
+        pointer: 8,
+      );
+      // 第一下只是把框架的起拖阈值走完（这段位移框架自己吃掉），第二下才是拖动。
+      await gesture.moveBy(const Offset(-40, 0));
+      await tester.pump();
+      await gesture.moveBy(const Offset(-220, 0)); // 累计 0.55 页
+      await tester.pump();
+
+      expect(pagerPage(tester), greaterThan(0.5));
+      expect(find.text('第 2 周'), findsOneWidget, reason: '顶栏跟着手势走');
+      // 跨页那一刻不写 model：写一次就是整页重建，正好砸在滑动最密的一帧上
+      // （实测同一帧从 3~5ms 变成 100ms 量级）。周次等停稳再落定。
+      expect(model.week, 1, reason: '手势期间不写周次状态');
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(model.week, 2, reason: '停稳后落定');
+      expect(find.text('第 2 周'), findsOneWidget);
+    });
+
+    testWidgets('翻页途中按一下，仍然翻到下一页', (tester) async {
+      final model = buildModel();
+      await pumpPhone(tester, model);
+
+      await tester.tap(
+        find.widgetWithIcon(IconButton, Icons.chevron_right_rounded),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 40));
+
+      // 按下不动再抬手：不是拖拽，不该把翻页按住不动或退回去。
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byType(PageView)),
+        pointer: 7,
+      );
+      await tester.pump(const Duration(milliseconds: 40));
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(pagerPage(tester), 1);
+      expect(model.week, 2);
+    });
+
+    testWidgets('竖向拖拽只滚格子，不翻周', (tester) async {
+      final model = buildModel();
+      await pumpPhone(tester, model);
+
+      final before = tester.getRect(find.text('第一周课'));
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.text('第一周课')),
+        pointer: 9,
+      );
+      await gesture.moveBy(const Offset(0, -60));
+      await tester.pump();
+      await gesture.moveBy(const Offset(0, -120));
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(tester.getRect(find.text('第一周课')).top, lessThan(before.top));
+      expect(pagerPage(tester), 0);
+      expect(model.week, 1);
+    });
+  });
+
   group('两页外壳与设置', () {
     testWidgets('dock 在课表与设置之间切换', (tester) async {
       final model = buildModel();
@@ -1869,10 +2116,7 @@ void main() {
       await tester.pumpWidget(wrap(HomeShell(model: model)));
       await tester.pumpAndSettle();
 
-      final next = find.widgetWithIcon(
-        IconButton,
-        Icons.chevron_right_rounded,
-      );
+      final next = find.widgetWithIcon(IconButton, Icons.chevron_right_rounded);
       await tester.tap(next);
       await tester.pump(); // 动画刚开始，远未结束
       await tester.tap(next);
@@ -1892,14 +2136,10 @@ void main() {
       expect(pageOpacity(tester, 0), 1);
 
       final dock = find.byType(FloatingDock);
-      await tester.tap(
-        find.descendant(of: dock, matching: find.text('设置')),
-      );
+      await tester.tap(find.descendant(of: dock, matching: find.text('设置')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 60)); // 停在动画中途
-      await tester.tap(
-        find.descendant(of: dock, matching: find.text('课表')),
-      );
+      await tester.tap(find.descendant(of: dock, matching: find.text('课表')));
       await tester.pump();
       await tester.pumpAndSettle();
 

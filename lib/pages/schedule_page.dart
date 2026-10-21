@@ -16,6 +16,7 @@
 /// 且换作息表时全表高度跳变。
 library;
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:zf_academic/zf_academic.dart';
 
@@ -26,15 +27,56 @@ import '../widgets/app_menu.dart';
 import '../widgets/course_detail_sheet.dart';
 import '../widgets/course_tile.dart';
 import '../widgets/floating_dock.dart';
+import '../widgets/week_pager.dart';
 import 'appearance_sheet.dart';
 import 'reschedule_page.dart';
 import 'school_address_page.dart';
 import 'timetable_list_page.dart';
 
-class SchedulePage extends StatelessWidget {
+class SchedulePage extends StatefulWidget {
   const SchedulePage({super.key, required this.model});
 
   final AppModel model;
+
+  @override
+  State<SchedulePage> createState() => _SchedulePageState();
+}
+
+class _SchedulePageState extends State<SchedulePage> {
+  AppModel get model => widget.model;
+
+  /// 顶栏"第 N 周"此刻该显示哪一周 —— **只负责显示**。
+  ///
+  /// 为什么不直接读 `model.week`：`week` 是"落定"的结果，而滑动时画面翻过
+  /// 半页就已经换了一周。翻到一半就 `goToWeek()`，整个课表页（已建页面的网格
+  /// 布局、AppBar、右下角按钮）都要在同一帧里重建一遍 —— 实测这正是快速连滑
+  /// 时最大的一次掉帧（同一帧正常 3~5ms，带上整页重建是 100ms 量级）。
+  ///
+  /// 所以拆成两件事：
+  ///  - 显示：跟着手势走的轻量值，只在**跨过一页**那一刻变一次，
+  ///    只重建顶栏与右下角按钮这两个小部件；
+  ///  - 状态：`model.week` 留到停稳后再写（见 `_WeekPagerState._settleToPage`）。
+  final ValueNotifier<int> _shownWeek = ValueNotifier<int>(1);
+
+  @override
+  void initState() {
+    super.initState();
+    _shownWeek.value = model.week;
+    model.addListener(_syncShownWeek);
+  }
+
+  @override
+  void dispose() {
+    model.removeListener(_syncShownWeek);
+    _shownWeek.dispose();
+    super.dispose();
+  }
+
+  /// 外部改了周次（刷新 / 校准 / 回到前台 / 点箭头 / 选周）→ 顶栏跟上。
+  /// 手势期间的跨页由 pager 直接写 `_shownWeek`，不走这里。
+  void _syncShownWeek() {
+    if (_shownWeek.value != model.week) _shownWeek.value = model.week;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -45,7 +87,9 @@ class SchedulePage extends StatelessWidget {
         // 之前是"标题一行 + 周次条一行"，两行占了近百像素，格子反而更挤。
         appBar: AppBar(
           titleSpacing: 4,
-          title: model.schedule == null ? null : _WeekBar(model: model),
+          title: model.schedule == null
+              ? null
+              : _WeekBar(model: model, week: _shownWeek),
           actions: <Widget>[
             IconButton(
               icon: const Icon(Icons.refresh_rounded),
@@ -62,7 +106,7 @@ class SchedulePage extends StatelessWidget {
           children: <Widget>[
             Positioned.fill(child: _body(context)),
             // "今"：只在看非本周时浮出来（替代原来占位置的"回到本周"按钮）。
-            _TodayFab(model: model),
+            _TodayFab(model: model, week: _shownWeek),
           ],
         ),
       ),
@@ -85,22 +129,33 @@ class SchedulePage extends StatelessWidget {
           // 只在创建时有效，重建比手动纠正页码可靠。
           key: ValueKey<String>('${model.termId}:${model.maxWeek}'),
           model: model,
+          shownWeek: _shownWeek,
         );
     }
   }
 }
 
 /// 右下角"今"按钮：看非本周时出现，点一下回到今天所在周。
+///
+/// 跟着 [week]（当前显示的那一周）走而不是 `model.week`：滑动跨过一页它就该
+/// 跟着浮出/收起，不必等停稳后整页重建。
 class _TodayFab extends StatelessWidget {
-  const _TodayFab({required this.model});
+  const _TodayFab({required this.model, required this.week});
 
   final AppModel model;
+  final ValueListenable<int> week;
 
   @override
   Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: week,
+      builder: (BuildContext context, int shown, _) => _build(context, shown),
+    );
+  }
+
+  Widget _build(BuildContext context, int shown) {
     final show =
-        model.status == AppStatus.ready &&
-        model.week != model.currentWeekOfToday;
+        model.status == AppStatus.ready && shown != model.currentWeekOfToday;
     final scheme = Theme.of(context).colorScheme;
     return Positioned(
       right: 16,
@@ -232,13 +287,27 @@ class _MoreMenu extends StatelessWidget {
 /// 现在是 AppBar 的 title，和右边的刷新/更多挤在同一行：
 /// 箭头贴着文字而不是撑到两边，手机上左右扫视距离短，两个换周操作落在同一视觉区域里。
 class _WeekBar extends StatelessWidget {
-  const _WeekBar({required this.model});
+  const _WeekBar({required this.model, required this.week});
 
   final AppModel model;
 
+  /// 正在显示的那一周：跟着手势走，滑动跨页时只重建这一条。
+  final ValueListenable<int> week;
+
   @override
   Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: week,
+      builder: (BuildContext context, int shown, _) =>
+          _buildBar(context, shown),
+    );
+  }
+
+  Widget _buildBar(BuildContext context, int shownWeek) {
     final theme = Theme.of(context);
+    // 日期范围按"显示的那一周"算，而不是 model.week：滑动跨页时它要跟着变。
+    final start = model.termStart;
+    final range = start == null ? '' : weekRangeLabel(start, shownWeek);
     // 三个东西整体当成一块：[←][第 N 周][→]，靠左排。
     // 外面套 FittedBox：小屏 + 大字号（或等宽字体）下这块可能比标题栏还宽，
     // 整体缩一点总比溢出成黄黑条纹好；放得下时它就是 1:1，完全不动。
@@ -253,11 +322,14 @@ class _WeekBar extends StatelessWidget {
             _SmallIconButton(
               icon: Icons.chevron_left_rounded,
               tooltip: '上一周',
-              onPressed: model.week > 1 ? model.previousWeek : null,
+              onPressed: shownWeek > 1
+                  ? () => model.goToWeek(shownWeek - 1)
+                  : null,
             ),
             Builder(
               builder: (buttonContext) => InkWell(
-                onTap: () => showWeekPicker(buttonContext, model),
+                onTap: () =>
+                    showWeekPicker(buttonContext, model, current: shownWeek),
                 borderRadius: BorderRadius.circular(8),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
@@ -271,7 +343,7 @@ class _WeekBar extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         children: <Widget>[
                           Text(
-                            '第 ${model.week} 周',
+                            '第 $shownWeek 周',
                             style: theme.textTheme.titleSmall?.copyWith(
                               fontWeight: FontWeight.w500,
                             ),
@@ -290,7 +362,7 @@ class _WeekBar extends StatelessWidget {
                           ),
                         ],
                       ),
-                      if (model.weekRange.isNotEmpty)
+                      if (range.isNotEmpty)
                         Text(
                           model.weekRange,
                           style: theme.textTheme.labelSmall?.copyWith(
@@ -305,7 +377,9 @@ class _WeekBar extends StatelessWidget {
             _SmallIconButton(
               icon: Icons.chevron_right_rounded,
               tooltip: '下一周',
-              onPressed: model.week < model.maxWeek ? model.nextWeek : null,
+              onPressed: shownWeek < model.maxWeek
+                  ? () => model.goToWeek(shownWeek + 1)
+                  : null,
             ),
           ],
         ),
@@ -351,19 +425,48 @@ class _SmallIconButton extends StatelessWidget {
 /// 每周一页。PageController 的生命周期交给这个 State：
 /// 外层用 key 触发重建，重建时旧 State 先 dispose，controller 不会带着
 /// 错误的 initialPage 继续用。
+///
+/// 翻页规则（实现在 [WeekPagerController]）：
+///  - **一次滑动 = 一页**：松手时以"起手页"为锚，快速滑动固定翻到相邻一页。
+///    框架默认按"当前位置 + 半页"取整，手把页面拖过一页就会跳过一页。
+///  - **慢慢松开就近吸附**：拖过半页才翻，没到半页回原页。
+///  - **按住不打断**：按下 / 抬起不改位置，只有真的拖起来才接管。
+///  - **手势期间不写 model**：跨过一页只更新 [shownWeek]（只重建顶栏），
+///    周次停稳后才写回 `model.week` —— 否则每翻一页都要整页重建一次。
 class _WeekPager extends StatefulWidget {
-  const _WeekPager({super.key, required this.model});
+  const _WeekPager({super.key, required this.model, required this.shownWeek});
 
   final AppModel model;
+
+  /// 顶栏正在显示的那一周：跟着翻页走，不等到停稳。
+  final ValueNotifier<int> shownWeek;
 
   @override
   State<_WeekPager> createState() => _WeekPagerState();
 }
 
+/// 翻页动画时长。比原来（220ms）更利落；落页弹簧在 [WeekPagerController]
+/// 里另有一处调快（见 `_kSnapSpring`），两边节奏要对得上。
+const Duration _flipDuration = Duration(milliseconds: 150);
+
 class _WeekPagerState extends State<_WeekPager> {
-  late final PageController _controller = PageController(
+  late final WeekPagerController _controller = WeekPagerController(
     initialPage: (widget.model.week - 1).clamp(0, widget.model.maxWeek - 1),
   );
+
+  /// 正在程序化滚向的页；null = 没有程序动画在跑。
+  ///
+  /// 用途有二：
+  ///  ① 连点箭头时，新目标会打断旧动画，但**同一目标**不再重复启动
+  ///     （重复 `animateToPage` 会让动画从头再演一次，看着一卡一卡）；
+  ///  ② 动画途中 `onPageChanged` 报的中间页不是用户意图，不能写进顶栏。
+  int? _animatingTo;
+
+  /// 正在把页码回写成周次：此时 model 的通知来自我们自己，不是"外部要换周"。
+  bool _syncingFromPage = false;
+
+  /// 手指正按着拖（含松手后的惯性直到完全停下）。
+  bool _dragging = false;
 
   AppModel get model => widget.model;
 
@@ -380,35 +483,98 @@ class _WeekPagerState extends State<_WeekPager> {
     super.dispose();
   }
 
-  /// 外部改了周次（点箭头 / 回到本周 / 校准）→ 动画滚到对应页。
+  /// 外部改了周次（点箭头 / 选周 / 回到本周 / 校准）→ 动画滚到对应页。
   ///
-  /// 刻意**不用**"动画进行中"的布尔锁：
-  ///  - 有锁时，动画期间再点一次箭头会被直接丢掉（连点两下只翻一周）；
-  ///  - 有锁时，用户在动画中滑到的页不会被写回 model，于是表头高亮和页面错位；
-  /// `animateToPage` 本身就能被拖拽立刻接管，新目标也会从当前位置续接，
-  /// 天然可打断，这里只判断"目标页是否已经是当前页"来避免重复启动。
+  /// 刻意不用"动画进行中"的布尔锁（连点两下会被吞掉），靠 [_animatingTo]
+  /// 判断"是不是已经在去同一页的路上"：可打断、可续接，但不会重复启动。
   void _onModelChanged() {
+    // 这条通知是我们自己从页码回写的：没有新的翻页意图，别再反向驱动动画。
+    if (_syncingFromPage) return;
     if (!mounted || !_controller.hasClients) return;
+
     final target = (model.week - 1).clamp(0, model.maxWeek - 1);
-    final current = (_controller.page ?? target.toDouble()).round();
-    if (current == target) return;
-    _controller.animateToPage(
-      target,
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeOut,
-    );
+    if (_animatingTo == target) return;
+
+    final page = _controller.page;
+    // 已经停在那页上（位置比 round() 可信），不为半个像素再动一次。
+    if (_animatingTo == null && page != null && (page - target).abs() < 0.02) {
+      return;
+    }
+
+    _animatingTo = target;
+    _controller
+        .animateToPage(target, duration: _flipDuration, curve: Curves.easeOut)
+        .whenComplete(() {
+          if (!mounted || _animatingTo != target) return;
+          _animatingTo = null;
+          // 动画被打断（拖拽接管）时，落点由手决定：以实际停下的页为准。
+          _settleToPage();
+        });
+  }
+
+  /// 只处理翻页这一层的通知；`depth != 0` 是每页里那个竖向滚动（网格），
+  /// 跟翻页无关，交给它自己。
+  bool _onScrollNotification(ScrollNotification notification) {
+    if (notification.depth != 0) return false;
+    if (notification is ScrollStartNotification) {
+      if (notification.dragDetails != null) {
+        _dragging = true;
+        // 真拖拽接管：程序动画的目标作废，否则拖到一半会被"拉回"原目标。
+        _animatingTo = null;
+      }
+    } else if (notification is ScrollEndNotification) {
+      // 拖拽 + 惯性彻底停下（按住不会走到这里，因为 hold 已被忽略）。
+      _dragging = false;
+      _settleToPage();
+    }
+    return false;
+  }
+
+  /// 页面翻过一半时触发（`PageView.onPageChanged` 的口径是 round(page)）。
+  ///
+  /// 这里**只更新顶栏**，不碰 model：跨页是滑动过程中最密集的时刻，
+  /// 此时整页重建最容易掉帧。真正写回 `model.week` 的时机在 [_settleToPage]。
+  void _onPageChanged(int index) {
+    // 程序动画途中的中间页不代表用户意图：目标周早已写进顶栏了。
+    if (_animatingTo != null) return;
+    final week = index + 1;
+    if (widget.shownWeek.value != week) widget.shownWeek.value = week;
+  }
+
+  /// 一切停下之后，以**实际页码**为准回写周次。
+  ///
+  /// 覆盖两种"手动手势压过程序意图"的结果：拖拽打断翻页动画、
+  /// 惯性落在相邻页。不回写的话周次会停在旧值，画面却在另一页。
+  void _settleToPage() {
+    if (!mounted || _dragging || _animatingTo != null) return;
+    final page = _controller.page;
+    if (page == null) return;
+    final week = page.round() + 1;
+    if (week != model.week) _writeWeek(week);
+  }
+
+  /// 把页码写成周次；期间 model 的通知要认成"自己发的"，
+  /// 否则 [_onModelChanged] 会为了跟上这次回写再启动一次动画，正好和手打架。
+  void _writeWeek(int week) {
+    _syncingFromPage = true;
+    try {
+      model.goToWeek(week);
+    } finally {
+      _syncingFromPage = false;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return PageView.builder(
-      controller: _controller,
-      itemCount: model.maxWeek,
-      onPageChanged: (index) {
-        // 用户滑到哪就记哪：动画期间滑动到的页面不再被丢弃。
-        if (model.week != index + 1) model.goToWeek(index + 1);
-      },
-      itemBuilder: (context, index) => _WeekView(model: model, week: index + 1),
+    return NotificationListener<ScrollNotification>(
+      onNotification: _onScrollNotification,
+      child: PageView.builder(
+        controller: _controller,
+        itemCount: model.maxWeek,
+        onPageChanged: _onPageChanged,
+        itemBuilder: (context, index) =>
+            _WeekView(model: model, week: index + 1),
+      ),
     );
   }
 }
@@ -984,7 +1150,12 @@ class _EmptyWeek extends StatelessWidget {
 ///
 /// 用锚定菜单而不是底部弹窗：周次条就在屏幕上方，菜单从那里展开时
 /// 眼睛不用来回跳；菜单自带滚动与"点外面关闭"。
-Future<void> showWeekPicker(BuildContext context, AppModel model) async {
+Future<void> showWeekPicker(
+  BuildContext context,
+  AppModel model, {
+  int? current,
+}) async {
+  final selected = current ?? model.week;
   await showAppMenu<int>(
     context: context,
     maxHeight: 340,
@@ -993,7 +1164,7 @@ Future<void> showWeekPicker(BuildContext context, AppModel model) async {
         AppMenuItem<int>(
           value: week,
           label: '第 $week 周',
-          trailing: week == model.week
+          trailing: week == selected
               ? Icon(
                   Icons.check_rounded,
                   size: 16,
