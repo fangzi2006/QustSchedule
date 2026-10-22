@@ -20,6 +20,9 @@ import 'dart:io';
 /// 需要跑格式与分析的目录。
 const List<String> _targets = <String>['lib', 'test', 'tool'];
 
+/// 独立组件包（有自己的 pubspec，格式/分析/测试都得在它自己的目录下跑）。
+const String _packageDir = 'packages/zf_academic';
+
 Future<void> main(List<String> args) async {
   final bool staticOnly = args.contains('--static');
   final _Runner runner = _Runner();
@@ -40,8 +43,31 @@ Future<void> main(List<String> args) async {
     ..._targets,
   ]);
 
+  await runner.step('L0-1p 格式校验（组件包 zf_academic）', <String>[
+    'dart',
+    'format',
+    '--output=none',
+    '--set-exit-if-changed',
+    'lib',
+    'test',
+  ], workingDirectory: _packageDir);
+
+  await runner.step('L0-2p 静态分析（组件包 zf_academic）', <String>[
+    'flutter',
+    'analyze',
+    '--no-fatal-infos',
+    'lib',
+    'test',
+  ], workingDirectory: _packageDir);
+
   if (!staticOnly) {
     await runner.step('L0-3 编译并执行全部测试（L1+L2+L3）', <String>['flutter', 'test']);
+
+    // 组件包有自己的测试套件：不跑就等于"改了它也没人验"。
+    await runner.step('L0-4 组件包测试（zf_academic）', <String>[
+      'flutter',
+      'test',
+    ], workingDirectory: _packageDir);
   }
 
   if (runner.failed.isNotEmpty) {
@@ -56,14 +82,22 @@ Future<void> main(List<String> args) async {
 class _Runner {
   final List<String> failed = <String>[];
 
-  Future<void> step(String label, List<String> command) async {
+  Future<void> step(
+    String label,
+    List<String> command, {
+    String? workingDirectory,
+  }) async {
     stdout.writeln('\n=== $label');
-    stdout.writeln('    ${command.join(' ')}');
+    stdout.writeln(
+      '    ${workingDirectory == null ? '' : '($workingDirectory) '}'
+      '${command.join(' ')}',
+    );
 
     final Stopwatch watch = Stopwatch()..start();
     final ProcessResult result = await Process.run(
       _executable(command.first),
       command.skip(1).toList(),
+      workingDirectory: workingDirectory,
       environment: _environment(),
       includeParentEnvironment: false,
       runInShell: false,

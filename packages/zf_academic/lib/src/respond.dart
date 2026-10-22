@@ -21,6 +21,40 @@ Object? _tryParseJson(String text) {
 Map<String, dynamic>? _asObject(Object? value) =>
     value is Map<String, dynamic> ? value : null;
 
+/// 这段响应像不像"后端挂了"的页面（而不是正常的教务页）。
+///
+/// 典型来源：网关/Nginx 的 502/504 页、Spring 的 Whitelabel 错误页、
+/// 学校运维挂的"系统维护中"页。它们通常**仍是 HTTP 200**，只在正文里写着
+/// 故障原因 —— 只按状态码判断会把它们当成正常页面，最后误报成
+/// "页面结构与预期不一致"（PAGE_CHANGED），把人引向"学校升级了系统"。
+///
+/// 只收**特征明确**的写法，宁缺勿滥：漏判只是回到原来的 PAGE_CHANGED，
+/// 误判却会把真正需要适配的结构变化说成"服务器故障"。
+bool looksLikeServerError(String body) {
+  if (body.isEmpty) return false;
+  final text = body.toLowerCase();
+  const markers = <String>[
+    'internal server error',
+    'bad gateway',
+    'gateway time-out',
+    'gateway timeout',
+    'service temporarily unavailable',
+    'whitelabel error page',
+    'application error',
+    '<center>nginx',
+    '系统维护',
+    '系统繁忙',
+    '服务器错误',
+    '服务暂时不可用',
+    '服务暂不可用',
+    '数据库连接异常',
+  ];
+  for (final marker in markers) {
+    if (text.contains(marker)) return true;
+  }
+  return false;
+}
+
 /// 从 JSON 字段、`alert()` 或可见文本里取一句人话错误信息（截断 180 字，与原实现一致）。
 String messageOf(String body) {
   // 新正方的错误页会把原因写在 .error_text / .error_text0 里，优先取它。
@@ -136,7 +170,16 @@ List<Map<String, dynamic>> listRows(String body, List<String> keys) {
     throw AcademicError(ErrorCode.sessionExpired, '登录已失效，请重新登录');
   }
   final root = _tryParseJson(text);
-  if (root == null) changed('教务返回了无法识别的列表，请重新进入页面');
+  if (root == null) {
+    // 先分清"服务器坏了"和"页面改版了"：两者的处置完全不同。
+    if (looksLikeServerError(text)) {
+      throw AcademicError(
+        ErrorCode.serverError,
+        '教务返回了错误/维护页面，不是课表数据',
+      );
+    }
+    changed('教务返回了无法识别的列表，请重新进入页面');
+  }
 
   final object = _asObject(root);
   if (object != null) {

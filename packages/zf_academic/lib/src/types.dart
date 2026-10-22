@@ -265,11 +265,20 @@ final class RequestLog {
   final int status;
   final RequestPurpose purpose;
 
+  /// 这条响应**看起来**哪里不对；null = 正常。
+  ///
+  /// 关键：HTTP 200 也可能是坏响应 —— 网关的错误页、运维挂的"系统维护"
+  /// 页面都能带着 200 回来。只看 [status] 会给它们打绿勾，于是调试页显示
+  /// "请求正常"，右上角却说"页面结构不一致"，两边互相打脸、没法定位。
+  /// 这里的值在**收到响应时**就算好，和状态码一起展示。
+  final String? issue;
+
   const RequestLog({
     required this.method,
     required this.url,
     required this.status,
     required this.purpose,
+    this.issue,
   });
 }
 

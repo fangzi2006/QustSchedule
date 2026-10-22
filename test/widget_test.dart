@@ -164,7 +164,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('教务系统地址'), findsOneWidget);
-      expect(find.text('青岛科技大学'), findsOneWidget);
+      // 6 条线路统一命名，第一条是默认线路。
+      expect(find.text('青岛科技大学（线路 1）'), findsOneWidget);
     });
   });
 
@@ -2291,6 +2292,25 @@ void main() {
       expect(find.widgetWithText(Tab, '原始课表'), findsOneWidget);
       expect(find.widgetWithText(Tab, '解析结果'), findsOneWidget);
       expect(find.text('https://jw.example.edu.cn/jwglxt'), findsOneWidget);
+    });
+
+    testWidgets('请求记录：200 的错误页不会被打成"正常"', (tester) async {
+      final model = buildModel();
+      model.requestLog.add(
+        const RequestLog(
+          method: 'GET',
+          url: 'https://jw.example.edu.cn/jwglxt/kbcx/xskbcx_cxXsKb.html',
+          status: 200,
+          purpose: RequestPurpose.query,
+          issue: '返回错误页',
+        ),
+      );
+      await tester.pumpWidget(wrap(DebugPage(model: model)));
+      await tester.tap(find.widgetWithText(Tab, '请求'));
+      await tester.pumpAndSettle();
+
+      // 状态码是 200，但正文是错误页：标题要带上判定，不能只显示 200 了事。
+      expect(find.textContaining('返回错误页'), findsOneWidget);
     });
 
     testWidgets('原始课表页在未获取时给出明确提示', (tester) async {

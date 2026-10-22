@@ -93,6 +93,7 @@ export 'src/respond.dart'
         hasSuccess,
         isPermissionDenied,
         listRows,
+        looksLikeServerError,
         messageOf,
         requireQueryPage,
         statusOf;

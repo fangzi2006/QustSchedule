@@ -214,7 +214,8 @@ class _RequestsTab extends StatelessWidget {
             children: <Widget>[
               Expanded(
                 child: Text(
-                  '最近 ${log.length} 条（不含 Cookie 值与请求体）',
+                  '最近 ${log.length} 条（不含 Cookie 值与请求体）\n'
+                  '绿勾 = 状态码正常且正文不像错误页；红/橙 = 这一跳有问题',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
@@ -226,7 +227,9 @@ class _RequestsTab extends StatelessWidget {
                   log
                       .map(
                         (item) =>
-                            '${item.method} ${item.url} [${item.status}] ${item.purpose.name}',
+                            '${item.method} ${item.url} '
+                            '[${item.status}${item.issue == null ? '' : ' ${item.issue}'}] '
+                            '${item.purpose.name}',
                       )
                       .join('\n'),
                   '请求记录已复制',
@@ -235,6 +238,26 @@ class _RequestsTab extends StatelessWidget {
             ],
           ),
         ),
+        // 把"本次失败被归成哪一类"直接写在请求列表上方。
+        // 逐条看请求很难看出结论，而错误码正是用户反馈时最需要的那一条信息。
+        if (model.status == AppStatus.failed)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Icon(Icons.error_outline, size: 16, color: Colors.red),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '本次失败：${model.errorCode.isEmpty ? '未分类' : model.errorCode}'
+                    '${model.message.isEmpty ? '' : ' · ${model.message}'}',
+                    style: const TextStyle(fontSize: 12, color: Colors.red),
+                  ),
+                ),
+              ],
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
           child: Text(
@@ -253,16 +276,27 @@ class _RequestsTab extends StatelessWidget {
             itemBuilder: (context, index) {
               // 最新的在上。
               final item = log[log.length - 1 - index];
-              final ok = item.status >= 200 && item.status < 400;
+              // **不能只看状态码**：网关的错误页、运维的"系统维护"页都能带着
+              // HTTP 200 回来。只按 2xx 打绿勾，就会出现"请求记录显示正常、
+              // 右上角却说页面结构不一致"的矛盾。issue 在收到响应时就算好了。
+              final String? issue = item.issue;
+              final bool statusOk = item.status >= 200 && item.status < 400;
+              final bool ok = statusOk && issue == null;
+              // 4xx 是"这一跳的请求/权限问题"；5xx 与错误页才是服务端坏了。
+              final bool serverSide =
+                  issue != null && !issue.startsWith('HTTP 4');
               return ListTile(
                 dense: true,
                 leading: Icon(
                   ok ? Icons.check_circle_outline : Icons.error_outline,
                   size: 18,
-                  color: ok ? Colors.green : Colors.orange,
+                  color: ok
+                      ? Colors.green
+                      : (serverSide ? Colors.red : Colors.orange),
                 ),
                 title: Text(
-                  '${item.method} ${item.status}',
+                  '${item.method} ${item.status}'
+                  '${issue == null ? '' : ' · $issue'}',
                   style: const TextStyle(fontSize: 13),
                 ),
                 subtitle: Text(item.url, style: const TextStyle(fontSize: 11)),

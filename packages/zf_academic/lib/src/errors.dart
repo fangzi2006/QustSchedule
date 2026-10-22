@@ -17,6 +17,12 @@ enum ErrorCode {
   creditLimit('CREDIT_LIMIT'),
   pageChanged('PAGE_CHANGED'),
   networkRetryable('NETWORK_RETRYABLE'),
+
+  /// 教务服务端故障：连上了、有响应，但返回的是 5xx 或错误/维护页。
+  ///
+  /// 与 [networkRetryable] 分开：那个是"没连上/断了"，这个是"服务器自己坏了"。
+  /// 混在一起会让人以为是手机网络问题，白白去查网络。
+  serverError('SERVER_ERROR'),
   resultUnknown('RESULT_UNKNOWN'),
   untrustedUrl('UNTRUSTED_URL'),
   validationFailed('VALIDATION_FAILED'),

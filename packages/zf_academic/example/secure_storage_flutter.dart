@@ -25,8 +25,7 @@ import 'package:zf_academic/zf_academic.dart';
 class FlutterSecureStorageCredentialStore implements CredentialStore {
   FlutterSecureStorageCredentialStore([
     FlutterSecureStorage? storage,
-  ]) : _storage =
-            storage ??
+  ]) : _storage = storage ??
             const FlutterSecureStorage(
               aOptions: AndroidOptions(encryptedSharedPreferences: true),
               iOptions: IOSOptions(
@@ -46,7 +45,8 @@ class FlutterSecureStorageCredentialStore implements CredentialStore {
 
   @override
   Future<void> save(String accountKey, Credentials credentials) async {
-    await _storage.write(key: _userKey(accountKey), value: credentials.username);
+    await _storage.write(
+        key: _userKey(accountKey), value: credentials.username);
     await _storage.write(
       key: credentialStoreKey(accountKey),
       value: credentials.password,

@@ -313,6 +313,63 @@ void main() {
     });
   });
 
+  group('后端崩溃的识别', () {
+    test('网关的 502 页面（HTTP 200）→ SERVER_ERROR，不是 PAGE_CHANGED', () {
+      const body = '<html><head><title>502 Bad Gateway</title></head>'
+          '<body><center>nginx</center></body></html>';
+      expect(looksLikeServerError(body), isTrue);
+      expect(
+        () => listRows(body, const <String>['kbList']),
+        throwsA(isA<AcademicError>()
+            .having((error) => error.code, 'code', ErrorCode.serverError)),
+      );
+    });
+
+    test('运维的"系统维护"页（HTTP 200）→ SERVER_ERROR', () {
+      const body = '<html><body><h1>系统维护中</h1><p>预计 20:00 恢复</p></body></html>';
+      expect(
+        () => listRows(body, const <String>['kbList']),
+        throwsA(isA<AcademicError>()
+            .having((error) => error.code, 'code', ErrorCode.serverError)),
+      );
+    });
+
+    test('真的改版（JSON 结构变了，但页面本身是正常的）→ 仍是 PAGE_CHANGED', () {
+      expect(looksLikeServerError('{"code":"0","data":{"unexpected":1}}'),
+          isFalse);
+      expect(
+        () => listRows(
+            '<html><body>没有权限看这个页面</body></html>', const <String>['kbList']),
+        throwsA(isA<AcademicError>()
+            .having((error) => error.code, 'code', ErrorCode.pageChanged)),
+      );
+    });
+
+    test('请求记录里，200 的错误页不会被打成"正常"', () async {
+      const body =
+          '<html><head><title>500 Internal Server Error</title></head></html>';
+      final logs = <RequestLog>[];
+      final fake = FakeTransport(<RawHttpResponse>[_response(200, body: body)]);
+      final client = _client(fake, onRequest: logs.add);
+      await client.get('$_root/kbcx/xskbcx_cxXsKb.html');
+
+      expect(logs.single.status, 200);
+      expect(logs.single.issue, '返回错误页', reason: '状态码正常也要标出正文是错误页');
+    });
+
+    test('请求记录里，正常页面不带 issue', () async {
+      final logs = <RequestLog>[];
+      final fake = FakeTransport(<RawHttpResponse>[
+        _response(200,
+            body: '{"code":"0","kbList":[]}',
+            contentType: 'application/json; charset=utf-8'),
+      ]);
+      final client = _client(fake, onRequest: logs.add);
+      await client.get('$_root/kbcx/xskbcx_cxXsKb.html');
+      expect(logs.single.issue, isNull);
+    });
+  });
+
   group('状态码映射与重试', () {
     test('401/403 → SESSION_EXPIRED', () async {
       final fake = FakeTransport(<RawHttpResponse>[_response(401)]);
@@ -324,13 +381,26 @@ void main() {
       );
     });
 
-    test('429/5xx → NETWORK_RETRYABLE', () async {
+    test('读请求 5xx → SERVER_ERROR（与"网络断了"分开）', () async {
       final fake = FakeTransport(<RawHttpResponse>[_response(503)]);
       final client = _client(fake);
       await expectLater(
         client.get('$_root/kbcx/xskbcx_cxXsKb.html'),
+        throwsA(
+          isA<AcademicError>()
+              .having((error) => error.code, 'code', ErrorCode.serverError)
+              .having((error) => error.httpStatus, 'httpStatus', 503),
+        ),
+      );
+    });
+
+    test('429 → SERVER_ERROR（限流也属于服务端拒绝服务）', () async {
+      final fake = FakeTransport(<RawHttpResponse>[_response(429)]);
+      final client = _client(fake);
+      await expectLater(
+        client.get('$_root/kbcx/xskbcx_cxXsKb.html'),
         throwsA(isA<AcademicError>()
-            .having((error) => error.code, 'code', ErrorCode.networkRetryable)),
+            .having((error) => error.code, 'code', ErrorCode.serverError)),
       );
     });
 

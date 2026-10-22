@@ -1391,9 +1391,17 @@ class AppModel extends ChangeNotifier {
       case ErrorCode.webLoginRequired:
         return '该学校要求先完成网页统一认证，暂不支持自动登录。';
       case ErrorCode.networkRetryable:
-        return '网络不稳定或教务系统暂时无响应，请稍后重试。';
+        return '网络不稳定或连不上教务系统，请检查网络后重试。';
+      case ErrorCode.serverError:
+        // 和"网络不行"分开说：这里网络是通的，是教务那边坏了。
+        final status = error.httpStatus == null
+            ? ''
+            : '（HTTP ${error.httpStatus}）';
+        return '教务系统服务端异常$status：它返回的是错误/维护页面，不是课表。'
+            '这不是你的账号问题，请稍后重试；一直不行可以换一条线路。';
       case ErrorCode.pageChanged:
-        return '教务页面结构与预期不一致（学校可能升级了系统），请反馈这个错误。';
+        return '课表数据结构与预期不一致。'
+            '如果反复出现，请到「调试 → 请求记录」确认该请求确实正常返回。';
       case ErrorCode.unsupported:
         return '该账号没有课表查询权限。';
       case ErrorCode.untrustedUrl:

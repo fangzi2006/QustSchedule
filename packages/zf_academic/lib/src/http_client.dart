@@ -4,7 +4,8 @@
 ///  - 手动跟随重定向（不用自动重定向），每一跳都重新做主机/协议白名单校验；
 ///  - 写请求遇到重定向一律报 RESULT_UNKNOWN，绝不跨重定向重放 POST；
 ///  - POST 收到 307/308 报 PAGE_CHANGED，因为那意味着需要重新登录；
-///  - 401/403 → SESSION_EXPIRED，429/5xx → NETWORK_RETRYABLE，写请求 5xx → RESULT_UNKNOWN；
+///  - 401/403 → SESSION_EXPIRED；读请求 429/5xx → SERVER_ERROR（服务器坏了，
+///    与"网络断了"分开）；写请求 5xx → RESULT_UNKNOWN；
 ///  - 响应体上限 5 MB，超限报 PAGE_CHANGED；
 ///  - 读请求网络中断自动重试一次，写请求不重试；
 ///  - 按主机限速，避免短时间高频请求触发学校侧风控。
@@ -22,6 +23,7 @@ import 'dart:typed_data';
 
 import 'cookies.dart';
 import 'errors.dart';
+import 'respond.dart' show looksLikeServerError;
 import 'types.dart';
 import 'urls.dart';
 import 'util.dart';
@@ -345,6 +347,9 @@ class AcademicHttpClient {
         purpose: options.purpose == RequestPurpose.auth
             ? RequestPurpose.auth
             : RequestPurpose.query,
+        // 状态码看不出"200 的错误页"，这里一并判掉：调试页据此显示
+        // "HTTP 200 · 返回错误页"，而不是给个绿勾。
+        issue: _issueFor(raw),
       ));
 
       if (raw.status >= 300 && raw.status <= 399) {
@@ -399,29 +404,62 @@ class AcademicHttpClient {
             httpStatus: raw.status);
       }
       if (raw.status == 429 || raw.status >= 500) {
-        final code = write && raw.status >= 500
-            ? ErrorCode.resultUnknown
-            : ErrorCode.networkRetryable;
-        throw AcademicError(code, '教务系统暂时不可用（HTTP ${raw.status}），请稍后重试',
-            httpStatus: raw.status);
+        // 写操作无法确认是否已被受理，仍然按 resultUnknown 处理。
+        if (write && raw.status >= 500) {
+          throw AcademicError(
+            ErrorCode.resultUnknown,
+            '教务系统返回 HTTP ${raw.status}，写操作结果未知，请刷新核对',
+            httpStatus: raw.status,
+          );
+        }
+        // 读操作：这是**服务器自己坏了**，不是手机网络问题 —— 分成独立错误码，
+        // 提示里带上状态码，用户和我们都一眼能分清该等还是该查网络。
+        throw AcademicError(
+          ErrorCode.serverError,
+          '教务系统服务端异常（HTTP ${raw.status}），请稍后重试',
+          httpStatus: raw.status,
+        );
       }
 
       return _finish(raw);
     }
   }
 
-  HttpResponse _finish(RawHttpResponse raw) {
+  /// 这条响应看起来哪里不对（null = 正常）。用于调试页的"请求记录"。
+  String? _issueFor(RawHttpResponse raw) {
+    if (raw.status >= 500) return 'HTTP ${raw.status} 服务端异常';
+    if (raw.status == 429) return 'HTTP 429 请求过多';
+    if (raw.status >= 400) return 'HTTP ${raw.status}';
+    final contentType =
+        (_firstHeader(raw.headers, 'content-type') ?? '').toLowerCase();
+    if (!contentType.contains('html') && !contentType.contains('text')) {
+      return null;
+    }
+    // 只看开头 4KB：错误页/维护页的原因都在前面，没必要整个解析一遍。
+    final snippet = _decodeWith(_charsetLabelOf(raw), _head(raw.bytes, 4096));
+    return looksLikeServerError(snippet) ? '返回错误页' : null;
+  }
+
+  Uint8List _head(Uint8List bytes, int max) =>
+      bytes.length <= max ? bytes : bytes.sublist(0, max);
+
+  /// 响应正文的字符集：Content-Type 声明 > 正文前 4KB 里的 meta > 页面默认。
+  String _charsetLabelOf(RawHttpResponse raw) {
     final contentType = _firstHeader(raw.headers, 'content-type');
     final declared = _charsetPattern.firstMatch(contentType ?? '')?.group(1);
     final sniffed = declared ??
         _charsetPattern
-            .firstMatch(String.fromCharCodes(raw.bytes
-                .sublist(0, raw.bytes.length < 4096 ? raw.bytes.length : 4096)))
+            .firstMatch(String.fromCharCodes(_head(raw.bytes, 4096)))
             ?.group(1);
-    final label = _normalizeCharset(declared) ??
+    return _normalizeCharset(declared) ??
         _normalizeCharset(sniffed) ??
         _normalizeCharset(_pageCharset) ??
         'utf-8';
+  }
+
+  HttpResponse _finish(RawHttpResponse raw) {
+    final contentType = _firstHeader(raw.headers, 'content-type');
+    final label = _charsetLabelOf(raw);
     if ((contentType ?? '').toLowerCase().contains('html')) {
       _pageCharset = label;
     }
