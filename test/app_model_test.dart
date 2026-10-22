@@ -494,10 +494,86 @@ void main() {
         reason: '末尾斜杠算同一个地址',
       );
 
-      model.changeSchool('https://jw2.example.edu.cn/jwglxt');
+      // 切换地址现在会沿用当前账号自动登录，所以先让它处于"登录过"的状态
+      // （真实用户切线路前必然是登录着的）。
+      await model.signIn('2407720102', 'pw');
+      await model.changeSchool('https://jw2.example.edu.cn/jwglxt');
       expect(model.schoolBaseUrl, 'https://jw2.example.edu.cn/jwglxt');
       await Future<void>.delayed(Duration.zero);
       expect(prefs.currentSchool, contains('jw2'));
+    });
+
+    test('切换地址沿用当前账号直接登录，不退回登录页', () async {
+      final prefs = Preferences.inMemory();
+      final model = buildModel(preferences: prefs);
+      await model.signIn('2407720102', 'pw');
+      expect(model.status, AppStatus.ready);
+
+      await model.changeSchool('https://jwglxt2.qust.edu.cn/jwglxt');
+
+      expect(model.schoolBaseUrl, 'https://jwglxt2.qust.edu.cn/jwglxt');
+      // 6 条线路是同一套系统、账号通用：换过去应当自动登录，而不是把用户
+      // 踢回登录页重填一遍。
+      expect(model.status, AppStatus.ready, reason: '不该退回 needLogin');
+      expect(model.username, '2407720102');
+      expect(model.schedule, isNotNull, reason: '课表要在新地址上取回来');
+      expect(
+        prefs.accountOf('https://jwglxt2.qust.edu.cn/jwglxt'),
+        '2407720102',
+        reason: '账号要落到新地址下，否则下次冷启动拼不出凭据 key',
+      );
+    });
+
+    test('切换线路全程不经过登录页状态（不会闪回登录页）', () async {
+      final model = buildModel();
+      await model.signIn('2407720102', 'pw');
+
+      // 监听要在登录之后才挂：只看"换线路"这一段的状态。
+      final seen = <AppStatus>[];
+      model.addListener(() => seen.add(model.status));
+
+      await model.changeSchool('https://jwglxt4.qust.edu.cn/jwglxt');
+
+      // 根路由把 needLogin / signingIn / (failed 且无课表) 都映射成登录页。
+      // 换线路时这两个状态一次都不许出现，用户才会停在课表页看它换。
+      expect(seen, isNot(contains(AppStatus.needLogin)));
+      expect(seen, isNot(contains(AppStatus.signingIn)));
+      expect(seen, contains(AppStatus.loading), reason: '换线路期间是原地加载');
+      expect(model.status, AppStatus.ready);
+    });
+
+    test('切换线路时登录失败：回滚原线路，只提示不跳页', () async {
+      final backend = FakeBackend();
+      final rig = buildRig(backend: backend);
+      await rig.model.signIn('2407720102', 'pw');
+      final String before = rig.model.schoolBaseUrl;
+
+      // 新线路登录被拒（密码改了 / 线路异常）。
+      backend.loginBehavior = (int call, Credentials credentials) async =>
+          throw const AcademicError(ErrorCode.invalidCredentials, '账号或密码不正确');
+
+      await rig.model.changeSchool('https://jwglxt6.qust.edu.cn/jwglxt');
+
+      expect(rig.model.schoolBaseUrl, before, reason: '切不过去就留在原线路');
+      expect(
+        rig.model.status,
+        isNot(AppStatus.needLogin),
+        reason: '失败也不能把用户丢到登录页',
+      );
+      expect(rig.model.message, contains('切换失败'));
+    });
+
+    test('读不到保存的密码时：不动当前地址，只提示，交给用户处理', () async {
+      final model = buildModel();
+      final String before = model.schoolBaseUrl;
+
+      await model.changeSchool('https://jwglxt3.qust.edu.cn/jwglxt');
+
+      // 切不了就保持原样，而不是把用户丢到登录页替他决定。
+      expect(model.schoolBaseUrl, before, reason: '切换失败不该改地址');
+      expect(model.status, isNot(AppStatus.needLogin));
+      expect(model.hintIsError, isTrue);
+      expect(model.hint, contains('没有找到已保存的密码'));
     });
 
     test('删除地址只删地址簿，不动当前会话', () async {

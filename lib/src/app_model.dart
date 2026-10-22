@@ -993,12 +993,31 @@ class AppModel extends ChangeNotifier {
     _setStatus(AppStatus.needLogin, message: '已取消登录');
   }
 
-  /// 换学校：丢弃旧会话，回到登录页。
-  void changeSchool(String baseUrl) {
-    if (!sameSchool(_schoolBaseUrl, baseUrl)) {
+  /// 换教务地址。
+  ///
+  /// [relogin] = true（设置页 → 教务地址里切换）：**沿用当前账号**在新线路直接
+  /// 登录，全程留在课表页 —— 不经过 `needLogin` / `signingIn` 这两个会被根路由
+  /// 判成"该显示登录页"的状态（那正是"闪一下登录页再自动登录"的来源）。
+  ///
+  /// [relogin] = false（登录页里改了地址）：只切地址，随后由调用方用表单里
+  /// 那套账号密码登录 —— 那种场景不该替用户决定用哪套凭据。
+  ///
+  /// 失败一律**只提示、不跳页**：切线路是用户主动发起的，出问题时把话说明白、
+  /// 留在原地让他决定（重试 / 换线路 / 去设置里重登），而不是把人丢到登录页。
+  Future<void> changeSchool(String baseUrl, {bool relogin = true}) async {
+    if (sameSchool(_schoolBaseUrl, baseUrl)) return;
+
+    final String account = username;
+
+    // ---- 登录页路径：只切地址 ----
+    if (!relogin) {
       _schoolBaseUrl = baseUrl;
       service.switchSchool(baseUrl);
-      // 每个学校各记各的账号：切过去先把账号换成目标学校的。
+      _schedule = null;
+      _terms = null;
+      _termId = '';
+      unawaited(_preferences.setCurrentSchool(baseUrl));
+      unawaited(_scheduleCache.clear());
       _username = '';
       _studentId = '';
       _studentName = '';
@@ -1006,15 +1025,67 @@ class AppModel extends ChangeNotifier {
       // 设置页会在"账号已清空、还没读回"的中间态上渲染一次。
       _restoreAccount();
       _notifyPrefs();
-      _schedule = null;
-      _terms = null;
-      _termId = '';
-      // 换的地址记住：下次启动直接用它（否则每次都退回默认学校）。
-      unawaited(_preferences.setCurrentSchool(baseUrl));
-      // 旧学校的课表缓存作废。
-      unawaited(_scheduleCache.clear());
+      _setStatus(AppStatus.needLogin);
+      return;
     }
-    _setStatus(AppStatus.needLogin, message: '已切换教务地址，请重新登录');
+
+    // ---- 设置页路径 ----
+    // 凭据的 key 是「地址|账号」，换完地址就取不到了：先读出来。
+    // 读不到就**什么都不动**（地址、会话、课表保持原样），只把问题说清楚。
+    final Credentials? saved = account.isEmpty
+        ? null
+        : await service.credentials.get(_accountKey());
+    if (saved == null || saved.password.isEmpty || saved.username.isEmpty) {
+      _showHint('切换失败：本机没有找到已保存的密码。请在「设置 → 账号」重新登录一次再切换', error: true);
+      return;
+    }
+
+    final String previousBase = _schoolBaseUrl;
+    // 先切状态再切地址：`loading` 仍然映射到课表页，用户看到的是原地加载。
+    _setStatus(AppStatus.loading, message: '正在切换到「${schoolLabel(baseUrl)}」…');
+    _schoolBaseUrl = baseUrl;
+    service.switchSchool(baseUrl);
+    _username = account;
+    _notifyPrefs();
+    // 换的地址记住：下次启动直接用它（否则每次都退回默认学校）。
+    unawaited(_preferences.setCurrentSchool(baseUrl));
+    // 旧线路的课表缓存作废（内容是旧主机抓的）。
+    unawaited(_scheduleCache.clear());
+    // **刻意不清 `_schedule`**：清空后根路由会判定"没课表"，直接回登录页。
+    // 旧课表先留在屏幕上，新数据到了整体替换；失败也只是它继续留着。
+
+    try {
+      final AuthState state = await service.signIn(
+        account,
+        saved.password,
+        remember: true,
+      );
+      if (_disposed) return;
+      await _afterAuth(state);
+    } on AcademicError catch (error) {
+      if (_disposed) return;
+      // 登录失败：**回滚到原线路**，别把用户留在一台连不上的教务上。
+      // 只提示、不跳页 —— 由他决定重试还是换一条。
+      _rollbackSchool(previousBase);
+      _setStatus(
+        AppStatus.failed,
+        message: '切换失败：${_humanize(error)}（仍停留在原线路）',
+        code: error.code.wire,
+      );
+    } catch (error) {
+      if (_disposed) return;
+      _rollbackSchool(previousBase);
+      _fail(error);
+    }
+  }
+
+  /// 换线路失败后回到原地址：地址、服务端配置、持久化的"当前学校"一起回退。
+  void _rollbackSchool(String baseUrl) {
+    if (sameSchool(_schoolBaseUrl, baseUrl)) return;
+    _schoolBaseUrl = baseUrl;
+    service.switchSchool(baseUrl);
+    unawaited(_preferences.setCurrentSchool(baseUrl));
+    _notifyPrefs();
   }
 
   // -------------------------------------------------------------------------

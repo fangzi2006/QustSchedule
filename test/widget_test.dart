@@ -2159,9 +2159,16 @@ void main() {
       await tester.pumpWidget(wrap(SchoolAddressPage(model: model)));
 
       expect(find.text('使用中'), findsOneWidget);
-      expect(find.widgetWithText(OutlinedButton, '新增教务地址'), findsOneWidget);
+      // 出厂就带 6 条线路：底部的"新增"按钮在小屏上要滚一下才可见。
+      final addButton = find.widgetWithText(OutlinedButton, '新增教务地址');
+      await tester.scrollUntilVisible(
+        addButton,
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(addButton, findsOneWidget);
 
-      await tester.tap(find.widgetWithText(OutlinedButton, '新增教务地址'));
+      await tester.tap(addButton);
       await tester.pumpAndSettle();
       expect(find.text('新增教务地址'), findsWidgets);
       expect(find.text('添加'), findsOneWidget);
@@ -2175,6 +2182,47 @@ void main() {
 
       expect(model.schools.any((item) => item.contains('jw2')), isTrue);
       expect(find.text('https://jw2.example.edu.cn/jwglxt'), findsOneWidget);
+    });
+
+    testWidgets('切换线路时不会闪回登录页：全程停在课表页', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      // 与生产一致地监听状态：根路由是 `pageForStatus(model)`。
+      await tester.pumpWidget(
+        wrap(
+          ListenableBuilder(
+            listenable: model,
+            builder: (context, _) => pageForStatus(model),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(HomeShell), findsOneWidget);
+
+      // 切线路会沿用当前账号自动登录，先让模型处于"登录过"的状态。
+      await model.signIn('2407720102', 'pw');
+      await tester.pumpAndSettle();
+      expect(find.byType(HomeShell), findsOneWidget);
+
+      final future = model.changeSchool('https://jwglxt5.qust.edu.cn/jwglxt');
+      // 逐帧看：换线路的整个过程里，登录页一帧都不许出现。
+      for (var i = 0; i < 24; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(
+          find.byType(LoginPage),
+          findsNothing,
+          reason: '第 $i 帧闪了登录页（状态应保持 loading，而不是 needLogin/signingIn）',
+        );
+      }
+      await future;
+      await tester.pumpAndSettle();
+
+      expect(find.byType(LoginPage), findsNothing);
+      expect(find.byType(HomeShell), findsOneWidget);
+      expect(model.schoolBaseUrl, 'https://jwglxt5.qust.edu.cn/jwglxt');
+
+      // 让提示/弹窗里的一次性定时器走完，避免残留 Timer 触发测试框架断言。
+      await tester.pump(const Duration(seconds: 2));
     });
   });
 

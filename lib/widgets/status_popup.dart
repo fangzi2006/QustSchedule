@@ -86,7 +86,11 @@ class StatusPopup extends StatelessWidget {
       );
     }
     if (model.status == AppStatus.loading) {
-      return const _PopupData(text: '获取中…', busy: true);
+      // 有具体文案就用它（例如"正在切换到「线路 2」…"），没写才退回通用文案。
+      return _PopupData(
+        text: model.message.isEmpty ? '获取中…' : model.message,
+        busy: true,
+      );
     }
     if (model.status == AppStatus.booting) {
       return const _PopupData(text: '连接中…', busy: true);

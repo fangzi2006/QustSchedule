@@ -52,9 +52,10 @@ class _LoginPageState extends State<LoginPage> {
     if (!_formKey.currentState!.validate()) return;
     final address = _addressController.text.trim();
     if (!sameSchool(address, model.schoolBaseUrl)) {
-      // 换校：丢弃旧会话，切回 needLogin；再点一次登录即用新地址。
-      model.changeSchool(address);
-      return;
+      // 换了地址：只切服务端地址，**不**替用户用旧凭据登录 ——
+      // 这里用户已经填了账号密码，就用填的这套（见下一行 signIn）。
+      await model.changeSchool(address, relogin: false);
+      if (!mounted) return;
     }
     FocusScope.of(context).unfocus();
     await model.signIn(
@@ -247,7 +248,7 @@ class _LoginPageState extends State<LoginPage> {
                                     ),
                                     const SizedBox(height: 8),
                                     Text(
-                                      '改完地址后再点一次「登录」生效。需要网页统一认证（CAS）的学校暂不支持。',
+                                      '改完地址后点「登录」即可用上面填的账号登录这台教务。需要网页统一认证（CAS）的学校暂不支持。',
                                       style: theme.textTheme.bodySmall
                                           ?.copyWith(color: theme.hintColor),
                                     ),

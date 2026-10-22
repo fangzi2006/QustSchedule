@@ -4,6 +4,8 @@
 /// 地址只在"登录成功"时才被收进这里，手滑打错的地址不会留在列表里。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../src/app_model.dart';
@@ -39,7 +41,7 @@ class SchoolAddressPage extends StatelessWidget {
             children: <Widget>[
               Text(
                 '只支持新正方教务系统；地址写到 /jwglxt 为止，不要带登录页文件名。\n'
-                '切换地址后需要重新登录（会话与主机绑定）。',
+                '6 条线路账号通用；切换后会用当前账号重新登录（会话与主机绑定）。',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.hintColor,
                 ),
@@ -105,7 +107,10 @@ class SchoolAddressPage extends StatelessWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('切换到这台教务？'),
-        content: Text('切换后会退出当前会话并要求重新登录：\n\n$address'),
+        content: Text(
+          '切换后会直接用当前账号在这台教务登录，不需要重新输入密码：\n\n'
+          '$address',
+        ),
         actions: <Widget>[
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -123,7 +128,8 @@ class SchoolAddressPage extends StatelessWidget {
     // 先把压在 HomeShell 上的页面全部收掉，否则主界面切成登录页时
     // 这些路由还盖在上面，用户会看到"点了切换没反应"。
     Navigator.of(context).popUntil((route) => route.isFirst);
-    model.changeSchool(address);
+    // 不等它：换地址 + 自动登录要联网，界面由外壳的加载态负责。
+    unawaited(model.changeSchool(address));
   }
 
   Future<void> _add(BuildContext context) async {

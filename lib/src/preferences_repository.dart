@@ -27,7 +27,7 @@ import 'reschedule.dart';
 import 'school.dart';
 import 'timetable.dart';
 
-const int preferencesSchema = 7;
+const int preferencesSchema = 8;
 
 /// 课表格子（一节那一行）的高度，逻辑像素。
 ///
@@ -83,7 +83,7 @@ class Preferences {
        _timetables = timetables,
        _quickSetup = quickSetup,
        _sectionCounts = clampCounts(sectionCounts ?? defaultSectionCounts),
-       _schools = schools ?? <String>[defaultSchool.baseUrl],
+       _schools = schools ?? <String>[...presetSchoolUrls],
        _lastAccounts = lastAccounts ?? <String, String>{},
        _currentSchool = currentSchool.isEmpty
            ? (schools == null || schools.isEmpty
@@ -192,12 +192,25 @@ class Preferences {
   /// 单独抽出来是为了能测迁移：schema 1 只有 `termStarts`，
   /// 读到没有 `timetables` 的旧文件时必须自动补一张默认表，
   /// 否则用户升级后课表没有作息可读。
+  /// 把出厂预设线路补进地址簿：已有的跳过，缺的按顺序追加在后面。
+  ///
+  /// 只用于**从旧 schema 升级**这一次；之后用户删掉的线路不会被反复补回来。
+  static List<String> withPresetSchools(List<String> current) {
+    final merged = <String>[...current];
+    for (final String url in presetSchoolUrls) {
+      if (!merged.any((String item) => sameSchool(item, url))) {
+        merged.add(url);
+      }
+    }
+    return merged;
+  }
+
   static Preferences decode(String text, {File? file}) {
     var termStarts = <String, String>{};
     var timetables = <Timetable>[];
     QuickSetup? quickSetup;
     var sectionCounts = <PeriodGroup, int>{...defaultSectionCounts};
-    var schools = <String>[defaultSchool.baseUrl];
+    var schools = <String>[...presetSchoolUrls];
     var currentSchool = defaultSchool.baseUrl;
     var lastAccounts = <String, String>{};
     var showTeacher = true;
@@ -255,6 +268,12 @@ class Preferences {
                 .toList();
             if (parsed.isNotEmpty) schools = parsed;
           }
+          // schema 8：地址簿出厂带 6 条青科大线路。老文件里只有当初那一条
+          // （或用户自己加的几条），这里把缺的补上；用户删过的线路在 schema 8
+          // 之后不会再被补回来（迁移只跑一次）。
+          final int rawSchema = (decoded['schema'] as num?)?.toInt() ?? 1;
+          if (rawSchema < 8) schools = withPresetSchools(schools);
+
           final rawCurrent = (decoded['currentSchool'] as String?)?.trim();
           if (rawCurrent != null && rawCurrent.isNotEmpty) {
             currentSchool = rawCurrent;

@@ -291,6 +291,33 @@ void main() {
       expect(renamed.timetables.single.name, '我的作息');
     });
 
+    test('出厂地址簿带 6 条青科大线路，默认线路 1', () {
+      final prefs = Preferences.inMemory();
+      expect(prefs.schools.length, 6);
+      expect(prefs.schools.first, 'https://jwglxt1.qust.edu.cn/jwglxt');
+      expect(prefs.schools.last, 'https://jwglxt6.qust.edu.cn/jwglxt');
+      expect(
+        prefs.currentSchool,
+        'https://jwglxt1.qust.edu.cn/jwglxt',
+        reason: '默认地址必须是线路 1',
+      );
+    });
+
+    test('schema 7 的地址簿只有一条：升级时补齐 6 条线路', () {
+      final prefs = Preferences.decode(
+        '{"schema":7,"schools":["https://jwglxt1.qust.edu.cn/jwglxt"]}',
+      );
+      expect(prefs.schools.length, 6, reason: '老用户升级后也要有 6 条可选');
+      expect(prefs.schools.first, 'https://jwglxt1.qust.edu.cn/jwglxt');
+    });
+
+    test('已是 schema 8：用户删掉的线路不会被补回来', () {
+      final prefs = Preferences.decode(
+        '{"schema":8,"schools":["https://jwglxt1.qust.edu.cn/jwglxt"]}',
+      );
+      expect(prefs.schools.length, 1, reason: '迁移只跑一次，删除要留得住');
+    });
+
     test('schema 5：静默更新开关/间隔/调课规则能正确读回', () {
       final prefs = Preferences.decode(
         jsonEncode(<String, Object?>{
