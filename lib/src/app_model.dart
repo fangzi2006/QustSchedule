@@ -162,6 +162,21 @@ class AppModel extends ChangeNotifier {
     weekNotifier.value = next;
   }
 
+  /// 偏好设置（显示教师/地点、静默更新、外观…）单独的通知源。
+  ///
+  /// 设置页只关心这些。原先它听的是整个 model，于是**任何**通知都会让它整页
+  /// 重建一次（实测 21~26ms）：后台刷新一次课表，用户在设置页里就白重建一遍。
+  ///
+  /// 走自己的 notifier 后，设置页只在偏好真的变了时重建。
+  final ValueNotifier<int> prefsNotifier = ValueNotifier<int>(0);
+
+  /// 偏好变了：通知设置页（以及任何只关心偏好的界面）。
+  ///
+  /// 计数递增即可——监听方只需要知道"变了"，不需要知道变成了什么。
+  void _notifyPrefs() {
+    prefsNotifier.value++;
+  }
+
   /// 本学期实际有课的最大周次（课表里出现过的最晚周）。
   int _maxWeek = 20;
   int get maxWeek => _maxWeek;
@@ -232,6 +247,7 @@ class AppModel extends ChangeNotifier {
   Future<void> setSectionCounts(Map<PeriodGroup, int> value) async {
     await _preferences.setSectionCounts(value);
     notifyListeners();
+    _notifyPrefs();
   }
 
   /// 当前生效表对齐到全局节数后的节次（时间轴读它，保证行数一致）。
@@ -294,6 +310,7 @@ class AppModel extends ChangeNotifier {
   Future<void> saveTimetables(List<Timetable> tables) async {
     await _preferences.saveTimetables(tables);
     notifyListeners();
+    _notifyPrefs();
   }
 
   /// 新增或按 id 覆盖一张表。
@@ -338,11 +355,13 @@ class AppModel extends ChangeNotifier {
   Future<void> setShowTeacher(bool value) async {
     await _preferences.setShowTeacher(value);
     notifyListeners();
+    _notifyPrefs();
   }
 
   Future<void> setShowLocation(bool value) async {
     await _preferences.setShowLocation(value);
     notifyListeners();
+    _notifyPrefs();
   }
 
   /// 当前课表的"备注"（实践课程 / 其他课程，来自 `sjkList`）。没有则为空。
@@ -359,6 +378,7 @@ class AppModel extends ChangeNotifier {
   Future<void> setShowScheduleRemarks(bool value) async {
     await _preferences.setShowScheduleRemarks(value);
     notifyListeners();
+    _notifyPrefs();
   }
 
   // ---------------------------------------------------------------------------
@@ -374,11 +394,13 @@ class AppModel extends ChangeNotifier {
   Future<void> setAutoRefresh(bool value) async {
     await _preferences.setAutoRefresh(value);
     notifyListeners();
+    _notifyPrefs();
   }
 
   Future<void> setAutoRefreshIntervalMinutes(int value) async {
     await _preferences.setAutoRefreshIntervalMinutes(value);
     notifyListeners();
+    _notifyPrefs();
   }
 
   // ---------------------------------------------------------------------------
@@ -474,6 +496,7 @@ class AppModel extends ChangeNotifier {
     if (safe == cellHeight) return;
     _cellHeightDraft = safe;
     notifyListeners();
+    _notifyPrefs();
     _flushAppearanceSoon();
   }
 
@@ -482,6 +505,7 @@ class AppModel extends ChangeNotifier {
     if (safe == courseTextScale) return;
     _courseTextScaleDraft = safe;
     notifyListeners();
+    _notifyPrefs();
     _flushAppearanceSoon();
   }
 
@@ -702,6 +726,7 @@ class AppModel extends ChangeNotifier {
   /// 课表就绪后定位"第几周"：
   /// 用户校准过就用校准值；否则按学期估算（秋季 9 月初 / 春季 2 月底）。
   void _applyCalendar(Schedule schedule) {
+    final DateTime? previousStart = _termStart;
     var maxWeek = 0;
     for (final entry in schedule.entries) {
       for (final week in entry.weeks) {
@@ -719,6 +744,11 @@ class AppModel extends ChangeNotifier {
       _termStart = estimateTermStart(term ?? _fallbackTerm(schedule.termId));
       _setWeek(weekOf(_termStart!, DateTime.now()));
     }
+    // 只有起始日**真的变了**才通知。
+    //
+    // 这里每次加载课表都会走到（含后台刷新），无条件通知等于"刷新一次课表，
+    // 设置页就白重建一次"—— 那正是这次要消掉的开销之一。
+    if (_termStart != previousStart) _notifyPrefs();
   }
 
   Term? _termById(String termId) {
@@ -770,6 +800,7 @@ class AppModel extends ChangeNotifier {
       await _preferences.setTermStart(termId, start);
     }
     notifyListeners();
+    _notifyPrefs();
   }
 
   /// 清理当前学期的周次校准（回到估算值）。
@@ -781,6 +812,7 @@ class AppModel extends ChangeNotifier {
     _setWeek(weekOf(_termStart!, DateTime.now()));
     await _preferences.setTermStart(termId, _termStart!);
     notifyListeners();
+    _notifyPrefs();
   }
 
   Future<void> refresh() => _loadSchedule(termId: _termId, background: true);
@@ -970,7 +1002,10 @@ class AppModel extends ChangeNotifier {
       _username = '';
       _studentId = '';
       _studentName = '';
+      // 先恢复目标学校的账号，再通知：通知在 `_restoreAccount` 之前发的话，
+      // 设置页会在"账号已清空、还没读回"的中间态上渲染一次。
       _restoreAccount();
+      _notifyPrefs();
       _schedule = null;
       _terms = null;
       _termId = '';
@@ -999,11 +1034,13 @@ class AppModel extends ChangeNotifier {
   Future<void> addSchool(String url) async {
     await _preferences.addSchool(url);
     notifyListeners();
+    _notifyPrefs();
   }
 
   Future<void> removeSchool(String url) async {
     await _preferences.removeSchool(url);
     notifyListeners();
+    _notifyPrefs();
   }
 
   /// 冷启动恢复"上次在这个学校登录的账号"（不联网）。
@@ -1031,6 +1068,7 @@ class AppModel extends ChangeNotifier {
     await _preferences.setAccountOf(_schoolBaseUrl, text);
     if (_disposed) return;
     notifyListeners();
+    _notifyPrefs();
   }
 
   /// 读一次身份（姓名 / 学号）。
@@ -1082,6 +1120,7 @@ class AppModel extends ChangeNotifier {
     if (state.studentName.isNotEmpty) _studentName = state.studentName;
     if (state.studentId.isNotEmpty) _studentId = state.studentId;
     notifyListeners();
+    _notifyPrefs();
     await _loadSchedule(background: true);
   }
 
@@ -1101,11 +1140,16 @@ class AppModel extends ChangeNotifier {
     int? week,
     DateTime? termStart,
   }) {
+    final bool identityChanged =
+        _termId != schedule.termId ||
+        _studentName != studentName ||
+        _studentId != studentId;
     _schedule = schedule;
     _terms = terms;
     _termId = schedule.termId;
     _studentName = studentName;
     _studentId = studentId;
+    if (identityChanged) _notifyPrefs();
     _applyCalendar(schedule);
     if (termStart != null) _termStart = termStart;
     if (week != null) _setWeek(week);
@@ -1146,6 +1190,7 @@ class AppModel extends ChangeNotifier {
     _terms = null;
     _termId = '';
     _captcha = null;
+    _notifyPrefs();
     // 退出登录连缓存课表一起清：那是"这个账号"的数据，不该留下给下一个人看。
     unawaited(_scheduleCache.clear());
     _setStatus(AppStatus.needLogin, message: '已退出登录');
@@ -1307,6 +1352,7 @@ class AppModel extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     weekNotifier.dispose();
+    prefsNotifier.dispose();
     _hintTimer?.cancel();
     _appearanceTimer?.cancel();
     // 面板没点"完成"就被关掉（比如返回手势）时，别把刚拖好的值丢掉。

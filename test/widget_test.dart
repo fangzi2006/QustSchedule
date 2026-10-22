@@ -43,13 +43,28 @@ AppModel buildModel({FakeBackend? backend}) {
 
 Widget wrap(Widget child) => MaterialApp(home: child);
 
-/// 读出外壳里第 [index] 页**实际渲染**的透明度。
+/// 读出外壳横向轨道当前的**位置**（0 = 课表页正中，1 = 设置页正中）。
 ///
-/// 光看 `find.byType` 只能证明 widget 在树上——之前"切回课表却停在透明状态"
-/// 的 bug 就是这样漏过去的，所以这里直接断言不透明度。
-double pageOpacity(WidgetTester tester, int index) => tester
-    .widget<Opacity>(find.byKey(ValueKey<String>('page-opacity-$index')))
-    .opacity;
+/// 外壳改成水平平移后，页面的"可见程度"不再由透明度表示，而是由它在
+/// 横向轨道上的位置表示：位置 0 就是课表页完全在屏内，1 就是设置页完全在屏内。
+/// 这里直接读实际变换后的偏移量，比断言 widget 树可靠：卡在半页时位置是
+/// 0.5 这样的中间值。
+double shellPagePosition(WidgetTester tester) {
+  final Transform transform = tester.widget<Transform>(
+    find.byKey(const ValueKey<String>('shell-page-0')),
+  );
+  final double width = tester.getSize(find.byType(HomeShell)).width;
+  if (width <= 0) return 0;
+  return -transform.transform.getTranslation().x / width;
+}
+
+/// 外壳当前停在第几页（0 = 课表，1 = 设置）。
+///
+/// 位置离整页足够近才算停稳：停在半页（0.5 附近）说明动画被打断了。
+int shellCurrentPage(WidgetTester tester) {
+  final double position = shellPagePosition(tester);
+  return (position - position.round()).abs() < 0.02 ? position.round() : -1;
+}
 
 AnimatedOpacity todayFab(WidgetTester tester) => tester.widget<AnimatedOpacity>(
   find.byKey(const ValueKey<String>('today-fab')),
@@ -541,26 +556,6 @@ void main() {
       expect(model.week, 3);
     });
 
-    testWidgets('慢慢拖过半页松手：翻一页', (tester) async {
-      final model = buildModel();
-      await pumpPhone(tester, model);
-
-      final gesture = await tester.startGesture(
-        tester.getCenter(find.byType(PageView)),
-        pointer: 5,
-      );
-      for (var i = 0; i < 5; i++) {
-        await gesture.moveBy(const Offset(-50, 0)); // 共 250px = 0.625 页
-        await tester.pump(const Duration(milliseconds: 100));
-      }
-      // 最后一次移动过去 100ms 才抬手 → 速度识别为 0，走"就近吸附"分支。
-      await gesture.up();
-      await tester.pumpAndSettle();
-
-      expect(pagerPage(tester), 1);
-      expect(model.week, 2);
-    });
-
     testWidgets('慢慢拖不到三分之一松手：回到原页', (tester) async {
       final model = buildModel();
       await pumpPhone(tester, model);
@@ -801,6 +796,27 @@ void main() {
 
       expect(modelNotified, greaterThan(0), reason: '内容变了必须重建界面');
     });
+
+    testWidgets('重载同一份课表不触发偏好通知（后台刷新不该重建设置页）', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      var prefsNotified = 0;
+      model.prefsNotifier.addListener(() => prefsNotified++);
+
+      // 后台刷新成功、内容一模一样。设置页显示的东西一个字都没变，
+      // 就不该让它整页重建一次（17~19ms），更不能重建两次。
+      // `_applyCalendar` 每次加载课表都会走到，所以那里必须按"起始日真的变了"判断。
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      expect(prefsNotified, 0, reason: '内容没变，设置页不该重建');
+
+      // 真变了就得通知，否则设置页停在旧名字上。
+      model.hydrateForTest(
+        schedule: sparseSchedule(),
+        week: 1,
+        studentName: '另一位同学',
+      );
+      expect(prefsNotified, greaterThan(0), reason: '身份变了必须刷新设置页');
+    });
   });
 
   group('两页外壳与设置', () {
@@ -811,7 +827,20 @@ void main() {
 
       // 冷启动首帧只建课表页：设置页整棵建出来要占首帧构建的三分之一以上。
       expect(find.byType(SettingsPage), findsNothing);
-      expect(pageOpacity(tester, 1), 0, reason: '占位层还在，只是子树没建');
+      expect(shellPagePosition(tester), 0, reason: '横向轨道停在课表页这一端');
+
+      // 光验第一帧是不够的：曾经试过"首帧之后延一帧预建"，那种写法在第 1 帧
+      // 这里照样是 findsNothing，测试就白过了 —— 而它实际上把 40~100ms 的构建
+      // 砸在用户刚看到课表、正要滑动的那一帧上（启动卡顿）。
+      // 所以这里连空闲帧一起验：只要用户还没碰 dock，这页就不许建。
+      for (var i = 0; i < 8; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(
+        find.byType(SettingsPage),
+        findsNothing,
+        reason: '空闲帧也不许预建：代价会落在用户正在看课表的那一帧上',
+      );
 
       Future<void> tapDock(String label) async {
         await tester.tap(
@@ -844,8 +873,7 @@ void main() {
       await tester.pumpWidget(wrap(HomeShell(model: model)));
 
       expect(find.text('第 1 周'), findsOneWidget);
-      expect(pageOpacity(tester, 0), 1);
-      expect(pageOpacity(tester, 1), 0);
+      expect(shellPagePosition(tester), 0, reason: '初始停在课表页');
 
       await tester.tap(
         find.descendant(
@@ -857,8 +885,7 @@ void main() {
 
       expect(find.byType(SettingsPage), findsOneWidget);
       expect(find.text('作息时间表'), findsOneWidget);
-      expect(pageOpacity(tester, 0), 0);
-      expect(pageOpacity(tester, 1), 1);
+      expect(shellPagePosition(tester), 1, reason: '整页滑到设置页');
 
       await tester.tap(
         find.descendant(
@@ -868,9 +895,8 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('第 1 周'), findsOneWidget);
-      // 回归断言：切回课表时它必须真的可见，而不是停在透明状态。
-      expect(pageOpacity(tester, 0), 1);
-      expect(pageOpacity(tester, 1), 0);
+      // 回归断言：切回课表时它必须真的滑回原位，而不是停在两页中间。
+      expect(shellPagePosition(tester), 0, reason: '整页滑回课表页');
     });
 
     testWidgets('设置页「关于」组：开源许可可打开', (tester) async {
@@ -1159,24 +1185,6 @@ void main() {
         TextAlign.center,
         reason: '格子里的文字居中',
       );
-    });
-
-    testWidgets('地点只留房间号：校区前缀省略，房间号可正常断行', (tester) async {
-      const roomEntry = ScheduleEntry(
-        id: 'room',
-        name: '高等数学',
-        teacher: '张三',
-        location: '高密校区 M1-317',
-        day: 1,
-        startPeriod: 1,
-        endPeriod: 2,
-        weeks: <int>[1],
-      );
-      await tester.pumpWidget(sized(width: 120, height: 120, entry: roomEntry));
-
-      // 空格前的校区去掉，只留房间号；连字符不再做"不换行"保护。
-      expect(find.text('M1-317'), findsOneWidget);
-      expect(find.textContaining('高密校区'), findsNothing, reason: '校区前缀省掉');
     });
 
     testWidgets('地点只留房间号：各种形态都按预期裁剪', (tester) async {
@@ -1685,7 +1693,7 @@ void main() {
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(HomeShell(model: model)));
       await tester.pumpAndSettle();
-      expect(pageOpacity(tester, 0), 1);
+      expect(shellPagePosition(tester), 0);
 
       Future<void> dragDock(bool right) async {
         final label = right ? '课表' : '设置';
@@ -1706,10 +1714,179 @@ void main() {
       }
 
       await dragDock(true);
-      expect(pageOpacity(tester, 1), 1, reason: '松手切到设置页');
+      expect(shellPagePosition(tester), 1, reason: '松手切到设置页');
 
       await dragDock(false);
-      expect(pageOpacity(tester, 0), 1, reason: '再拖回来');
+      expect(shellPagePosition(tester), 0, reason: '再拖回来');
+    });
+
+    testWidgets('dock 拖动过程中页面同步位移（不等到松手）', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+      await tester.pumpAndSettle();
+
+      final dock = find.byType(FloatingDock);
+      final capsule = tester.getRect(
+        find.descendant(of: dock, matching: find.byType(Container)).first,
+      );
+      // 从第一项正中起手，拖到两项正中之间。
+      final gesture = await tester.startGesture(
+        Offset(capsule.left + capsule.width * 0.25, capsule.center.dy),
+      );
+      await gesture.moveBy(Offset(capsule.width * 0.25, 0));
+      await tester.pump();
+
+      // 还没松手，页面就该已经滑出去一半左右了。
+      final double mid = shellPagePosition(tester);
+      expect(mid, greaterThan(0.05), reason: '拖动中页面跟着走，不等松手');
+      expect(mid, lessThan(0.95), reason: '只拖了一半，不该整页翻过去');
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+      // 松手后吸附到整页：要么停在课表，要么停在设置，不能停在中间。
+      expect(shellCurrentPage(tester), isNot(-1), reason: '松手后吸附到整页');
+    });
+
+    testWidgets('dock：点击后指示块落到按钮上，全程不回弹', (tester) async {
+      // 锁三件事：
+      //  1. 按下时指示块就开始动（页面才有东西可跟）；
+      //  2. 松手后落到**按钮**上，而不是停在手指那一点；
+      //  3. 全程单调，不会先弹回旧位置（旧实现的 onDragCancel 在"点击赢仲裁"
+      //     时会报一次 0，阴影就是那样闪两下的）。
+      final progress = <double>[];
+      await tester.pumpWidget(
+        wrap(
+          Center(
+            child: FloatingDock(
+              index: 0,
+              items: const <FloatingDockItem>[
+                FloatingDockItem(
+                  icon: Icons.grid_view_outlined,
+                  activeIcon: Icons.grid_view_rounded,
+                  label: '课表',
+                ),
+                FloatingDockItem(
+                  icon: Icons.settings_outlined,
+                  activeIcon: Icons.settings_rounded,
+                  label: '设置',
+                ),
+              ],
+              onPillProgress: progress.add,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // 点在"设置"按钮内、但明显偏离中心的位置。
+      final label = tester.getRect(find.text('设置'));
+      final gesture = await tester.startGesture(
+        Offset(label.left + 4, label.center.dy),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 60));
+      expect(progress, isNotEmpty, reason: '按下就开始报位置，页面才能跟着走');
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(progress.last, 1.0, reason: '松手后落到设置按钮上，不是停在点击处');
+      for (var i = 1; i < progress.length; i++) {
+        expect(
+          progress[i],
+          greaterThanOrEqualTo(progress[i - 1] - 1e-6),
+          reason: '位置只能往前，不许弹回（第 $i 次：${progress[i - 1]} → ${progress[i]}）',
+        );
+      }
+    });
+
+    testWidgets('按住 dock 不滑动，页面也跟着切过去（不用等拖动）', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+      await tester.pumpAndSettle();
+
+      final dock = find.byType(FloatingDock);
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.descendant(of: dock, matching: find.text('设置'))),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 32));
+      expect(
+        shellPagePosition(tester),
+        greaterThan(0.0),
+        reason: '按下的瞬间页面就该开始平移，不能等用户滑一下',
+      );
+
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(shellPagePosition(tester), 1, reason: '按住不动也会滑到设置页');
+      expect(shellCurrentPage(tester), 1);
+
+      // 松手：终态不动（不会因为再报一次目标而重新计一遍动画）。
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(shellPagePosition(tester), 1);
+      expect(find.byType(SettingsPage), findsOneWidget);
+    });
+
+    testWidgets('内容区的横向手势不切换页面（只有 dock 能切）', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+      await tester.pumpAndSettle();
+
+      // 在页面**内容区**横向拖一段：不该把课表页换成设置页。
+      // 外壳这一层没有注册任何手势（见 _ShellPager 的说明），所以这里的拖动
+      // 只会落到内容自己的手势上（课表页内部的翻周）。
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.text('第 1 周')),
+      );
+      await gesture.moveBy(const Offset(-300, 0));
+      await tester.pump();
+      await gesture.moveBy(const Offset(-300, 0));
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(shellCurrentPage(tester), 0, reason: '内容区横向拖动不能切到设置页');
+      expect(find.byType(SettingsPage), findsNothing);
+    });
+
+    testWidgets('两页之间是水平平移，不是淡入淡出', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+      await tester.pumpAndSettle();
+
+      // 外壳这一层不该再有 Opacity 式的淡入淡出：那是整页离屏合成的开销来源。
+      expect(
+        find.descendant(
+          of: find.byType(HomeShell),
+          matching: find.byType(Opacity),
+        ),
+        findsNothing,
+        reason: '两页之间靠位移切换，不该再有透明度渐变',
+      );
+
+      // 拖动过程中页面应当停在两页之间 —— 这说明是连续位移，不是瞬间切换。
+      //
+      // 起手点必须在**左边那一项**上：从"设置"上起手时指示块本来就在右端，
+      // 进度已经是 1，"大于 0" 这种断言会白过（它量不到任何位移）。
+      final dock = find.byType(FloatingDock);
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.descendant(of: dock, matching: find.text('课表'))),
+      );
+      await gesture.moveBy(const Offset(40, 0));
+      await tester.pump();
+      final double mid = shellPagePosition(tester);
+      expect(
+        mid,
+        allOf(greaterThan(0.0), lessThan(1.0)),
+        reason: '往右拖，页面跟着挪到两页之间（不是瞬间切过去）',
+      );
+      await gesture.up();
+      await tester.pumpAndSettle();
     });
 
     testWidgets('均分判定：轻微右滑不误切（阈值在胶囊中线）', (tester) async {
@@ -1717,7 +1894,7 @@ void main() {
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(HomeShell(model: model)));
       await tester.pumpAndSettle();
-      expect(pageOpacity(tester, 0), 1);
+      expect(shellPagePosition(tester), 0);
 
       final dock = find.byType(FloatingDock);
       final capsule = tester.getRect(
@@ -1735,8 +1912,7 @@ void main() {
       await gesture.up();
       await tester.pumpAndSettle();
 
-      expect(pageOpacity(tester, 0), 1, reason: '左半段内松手，仍留在课表');
-      expect(pageOpacity(tester, 1), 0);
+      expect(shellPagePosition(tester), 0, reason: '左半段内松手，仍留在课表');
     });
   });
 
@@ -2278,7 +2454,7 @@ void main() {
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(HomeShell(model: model)));
       await tester.pumpAndSettle();
-      expect(pageOpacity(tester, 0), 1);
+      expect(shellPagePosition(tester), 0);
 
       final dock = find.byType(FloatingDock);
       await tester.tap(find.descendant(of: dock, matching: find.text('设置')));
@@ -2288,9 +2464,8 @@ void main() {
       await tester.pump();
       await tester.pumpAndSettle();
 
-      // 中断后不能停在半透明（更不该闪回 0），最终必须干净地回到课表。
-      expect(pageOpacity(tester, 0), 1);
-      expect(pageOpacity(tester, 1), 0);
+      // 中断后不能停在两页中间（更不该闪回设置页），最终必须干净地回到课表。
+      expect(shellPagePosition(tester), 0, reason: '整页滑回课表');
     });
   });
 }

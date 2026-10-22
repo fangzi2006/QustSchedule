@@ -37,13 +37,32 @@ class FloatingDock extends StatefulWidget {
   const FloatingDock({
     super.key,
     required this.index,
-    required this.onChanged,
     required this.items,
+    this.onPillProgress,
+    this.onPressStart,
   });
 
   final int index;
-  final ValueChanged<int> onChanged;
   final List<FloatingDockItem> items;
+
+  /// 指示块**每一帧**的位置（0 = 第一项正中，1 = 最后一项正中）。
+  ///
+  /// 外壳拿它直接写页面位置 —— 页面不是"自己再跑一套动画"，而是**跟着指示块走**：
+  /// 指示块在哪，两页之间的分界就在哪。
+  ///
+  /// 三种时机都会报：
+  ///  - 按下时指示块滑向手指；
+  ///  - 拖动时跟手指；
+  ///  - 松手后落向目标按钮。
+  ///
+  /// 之所以不给"拖动进度"和"落点"两套回调：两套就意味着两个动画、两条时序，
+  /// 阴影到位了页面还在路上（或者反过来）。只有一处动，才不会错位。
+  final ValueChanged<double>? onPillProgress;
+
+  /// 指针按下 dock（还没开始拖动）。
+  ///
+  /// 外壳用它提前把另一页建好：滑到一半才建，那一帧会卡住。
+  final VoidCallback? onPressStart;
 
   static const double height = 60;
 
@@ -112,6 +131,8 @@ class _FloatingDockState extends State<FloatingDock>
     super.initState();
     _preview = widget.index;
     _syncKeys();
+    // 指示块自己的滑动（按下 / 松手 / 取消）也要逐帧报给外壳。
+    _slide.addListener(_reportPillProgress);
   }
 
   @override
@@ -121,7 +142,9 @@ class _FloatingDockState extends State<FloatingDock>
       _syncKeys();
       _rects = const <Rect>[];
     }
-    if (!_dragging && oldWidget.index != widget.index) {
+    // `_pressed` 也要排除：手指还按着时页面先到位了（按下就报目标），
+    // 这时把指示块拽到按钮中心，会从手指底下滑走。
+    if (!_dragging && !_pressed && oldWidget.index != widget.index) {
       _preview = widget.index;
       if (_rects.length == widget.items.length) _snapTo(_rects[widget.index]);
     }
@@ -129,6 +152,7 @@ class _FloatingDockState extends State<FloatingDock>
 
   @override
   void dispose() {
+    _slide.removeListener(_reportPillProgress);
     _slide.dispose();
     _lift.dispose();
     super.dispose();
@@ -145,11 +169,13 @@ class _FloatingDockState extends State<FloatingDock>
 
   /// 指示块当前应该在哪。
   Rect get _pillRect {
-    if (_slide.isAnimating) {
-      final t = Curves.easeOutCubic.transform(_slide.value.clamp(0.0, 1.0));
-      return Rect.lerp(_from, _to, t) ?? _to;
-    }
-    return _to;
+    // 按**进度值**判断，而不是 `_slide.isAnimating`：
+    // `forward(from: 0)` 内部会先 stop() 再通知监听者，那一瞬间 isAnimating
+    // 是 false，会把 `_to`（终点）当成当前位置报出去 —— 页面就会先跳到底、
+    // 再退回起点重滑一遍。
+    final double t = _slide.value.clamp(0.0, 1.0);
+    if (t >= 1.0) return _to;
+    return Rect.lerp(_from, _to, Curves.easeOutCubic.transform(t)) ?? _to;
   }
 
   /// 直接到位（首次布局、手指拖动时用）。
@@ -160,9 +186,14 @@ class _FloatingDockState extends State<FloatingDock>
   }
 
   /// 滑过去（点按钮、翻页时用）。
-  void _snapTo(Rect rect) {
-    if (_to == rect) return;
-    _from = _pillRect;
+  /// 滑到 [rect]。
+  ///
+  /// [from] 用于"调用者即将改掉 `_dragging`"的场合：那时 [_pillRect] 已经
+  /// 不再指向手指位置了，必须在改状态**之前**把起点取出来传进来，
+  /// 否则松手瞬间指示块会先跳回按下时的旧位置、再滑过去。
+  void _snapTo(Rect rect, {Rect? from}) {
+    if (_to == rect && from == null) return;
+    _from = from ?? _pillRect;
     _to = rect;
     _slide.forward(from: 0);
   }
@@ -188,13 +219,10 @@ class _FloatingDockState extends State<FloatingDock>
     if (_sameRects(measured, _rects)) return;
     setState(() {
       _rects = measured;
-      _placePill(
-        measured[(_dragging ? _preview : widget.index).clamp(
-          0,
-          measured.length - 1,
-        )],
-      );
+      _placePill(measured[_preview.clamp(0, measured.length - 1)]);
     });
+    // 布局变了（窗口缩放 / 字体变化）：指示块的绝对位置变了，页面得跟上。
+    _reportPillProgress();
   }
 
   static bool _sameRects(List<Rect> a, List<Rect> b) {
@@ -270,6 +298,7 @@ class _FloatingDockState extends State<FloatingDock>
       _preview = _indexAt(x);
     });
     _syncLift();
+    _reportPillProgress();
   }
 
   void _onDragUpdate(DragUpdateDetails details) {
@@ -278,54 +307,128 @@ class _FloatingDockState extends State<FloatingDock>
       _dragX = _localX(details.globalPosition);
       _preview = _indexAt(_dragX);
     });
+    _reportPillProgress();
+  }
+
+  /// 指示块此刻**真的**画在哪。
+  ///
+  /// 拖动时中心跟指针，其余时候由 [_pillRect]（带着滑动中的插值）决定。
+  /// 画和"上报给页面的位置"必须用同一个值，否则页面会比阴影快/慢半拍。
+  Rect get _livePillRect => _dragging ? _centeredAt(_dragX) : _pillRect;
+
+  /// 把指示块中心换算成 0..1，报给外壳（页面跟着这个值平移）。
+  ///
+  /// 用的是**指示块中心**在首末两项中心之间的比例，而不是手指落在哪一段：
+  /// 页面跟着指示块走，才叫"同步位移"。
+  void _reportPillProgress() {
+    final ValueChanged<double>? callback = widget.onPillProgress;
+    if (callback == null || _rects.length < 2) return;
+    final double first = _rects.first.center.dx;
+    final double last = _rects.last.center.dx;
+    final double span = last - first;
+    if (span.abs() < 0.001) return;
+    final double center = _livePillRect.center.dx;
+    callback(((center - first) / span).clamp(0.0, 1.0));
   }
 
   void _onDragEnd(DragEndDetails details) {
     if (!_dragging) return;
     final target = _preview.clamp(0, widget.items.length - 1);
+    // 必须在清 `_dragging` **之前**取起点：那之后 `_livePillRect` 就不再
+    // 指向手指了。
+    final Rect from = _livePillRect;
     setState(() {
       _dragging = false;
       _pressed = false;
       _preview = target;
-      _snapTo(_rects.isEmpty ? Rect.zero : _rects[target]);
+      _snapTo(_rects.isEmpty ? Rect.zero : _rects[target], from: from);
     });
     _syncLift();
-    if (target != widget.index) widget.onChanged(target);
+    // 落点由指示块自己滑过去，页面跟着它走 —— 不再单独报"目标页"。
+    // 这里补报一次，覆盖"指示块本来就在目标上、动画不启动"的情况
+    // （否则页面会停在拖动到一半的位置）。
+    _reportPillProgress();
   }
 
   void _onDragCancel() {
+    // 没真的拖起来过 → 这是"点击赢了手势仲裁"：拖动识别器被拒也会走到这里。
+    // 那时松手该由 `_onTapUp` 决定落点，这里一旦回弹 + 上报旧页，就会和它打架：
+    // 指示块先弹回旧位置、再弹到新位置，看起来像闪了一下。
+    if (!_dragging) return;
+    final Rect from = _livePillRect;
     setState(() {
       _dragging = false;
       _pressed = false;
-      if (_rects.isNotEmpty) _snapTo(_rects[widget.index]);
+      if (_rects.isNotEmpty) _snapTo(_rects[_preview], from: from);
     });
     _syncLift();
+    _reportPillProgress();
   }
 
   /// 指针按下（还没拖）：指示块立刻滑到指针所在的位置——
   /// 不用等到拖动才开始跟手，点哪就滑到哪。预选状态**不改尺寸**。
+  ///
+  /// 同时把目标页报给外壳：指示块都挪过去了，页面留在原地会显得"没反应"
+  /// （用户会以为没点上，于是补一次滑动）。按下就报，页面从这一刻开始滑。
   void _onPressDown(DragDownDetails details) {
     if (_rects.length != widget.items.length) return;
+    // 按下的瞬间就告诉外壳：另一页该提前建好了。
+    widget.onPressStart?.call();
     final x = _localX(details.globalPosition);
+    final int target = _indexAt(x);
     setState(() {
       _pressed = true;
+      _preview = target;
       _snapTo(_centeredAt(x));
     });
     _syncLift();
+    // 指示块从这一刻开始滑向手指，页面跟着它走；
+    // 不用再单独报一个"目标页"让页面自己跑另一套动画。
+    _reportPillProgress();
   }
 
   void _onTapUp(TapUpDetails details) {
-    setState(() => _pressed = false);
+    if (_rects.length != widget.items.length) {
+      setState(() => _pressed = false);
+      _syncLift();
+      return;
+    }
+    final int target = _indexAt(_localX(details.globalPosition));
+    setState(() {
+      _pressed = false;
+      _preview = target;
+      // 手指可能落在按钮边缘：松手后指示块归位到按钮本身，
+      // 否则会停在指针那一点、等页面停稳时再补一段小滑动。
+      _snapTo(_rects[target]);
+    });
     _syncLift();
-    if (_rects.length != widget.items.length) return;
-    final target = _indexAt(_localX(details.globalPosition));
-    if (target != widget.index) widget.onChanged(target);
+    _reportPillProgress();
   }
 
   void _onTapCancel() {
-    setState(() => _pressed = false);
+    // 点击没成立：可能是被横向拖动接管（拖动会自己管位置），也可能是系统
+    // 把手势取消了。按下时已经报过目标（页面可能正在过去），所以这里**不**
+    // 往回撤 —— 撤了就会出现"指示块回到旧项、页面却停在新页"的错位。
+    // 只清按下态，把指示块收到它当前该在的那一项上。
+    setState(() {
+      _pressed = false;
+      if (!_dragging && _rects.length == widget.items.length) {
+        _snapTo(_rects[_preview]);
+      }
+    });
     _syncLift();
-    if (_rects.isNotEmpty) _snapTo(_rects[widget.index]);
+    _reportPillProgress();
+  }
+
+  /// 该高亮（并放大）哪一项。
+  ///
+  /// 不能简单用 `widget.index`：它要等页面真的落定才更新，而指示块在松手瞬间
+  /// 就已经在目标上了。若此时退回 `widget.index`，高亮会先弹回旧项、等页面
+  /// 到位再弹回来 —— 也就是"阴影闪两下"。
+  /// 所以：手指按着 → 跟手指；松手后 → 保持落点，直到 `widget.index` 追上来。
+  int get _visualIndex {
+    if (_dragging || _pressed) return _preview;
+    return _preview == widget.index ? widget.index : _preview;
   }
 
   @override
@@ -334,7 +437,7 @@ class _FloatingDockState extends State<FloatingDock>
     // 布局完成才知道按钮在哪：每帧补一次测量，量到就不再来。
     WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
 
-    final visualIndex = _dragging ? _preview : widget.index;
+    final int visualIndex = _visualIndex;
 
     return Padding(
       padding: EdgeInsets.only(
@@ -408,10 +511,9 @@ class _FloatingDockState extends State<FloatingDock>
                                 _lift,
                               ]),
                               builder: (context, _) {
-                                // 拖动中：中心跟指针；其余（预选 / 静止）：回弹目标矩形。
-                                final base = _dragging
-                                    ? _centeredAt(_dragX)
-                                    : _pillRect;
+                                // 与上报给页面的位置共用同一个矩形：
+                                // 拖动中中心跟指针，其余（预选 / 滑动 / 静止）用 _pillRect。
+                                final base = _livePillRect;
                                 if (base.isEmpty || base.width <= 0) {
                                   return const SizedBox.shrink();
                                 }
@@ -448,11 +550,6 @@ class _FloatingDockState extends State<FloatingDock>
                                 key: _itemKeys[position],
                                 item: widget.items[position],
                                 selected: position == visualIndex,
-                                onTap: () {
-                                  if (position != widget.index) {
-                                    widget.onChanged(position);
-                                  }
-                                },
                               ),
                           ],
                         ),
@@ -492,17 +589,17 @@ class _PillPainter extends CustomPainter {
       oldDelegate.rect != rect || oldDelegate.color != color;
 }
 
+/// 单个按钮。
+///
+/// **刻意不带自己的 `onTap`**：如果这里放一个 `InkWell(onTap:)`，点击时内层
+/// 识别器会赢下手势仲裁，外层的 `onTapUp` 就不再触发 —— 于是"点哪"和"指示块
+/// 归位"变成两条不同的路径，落点会不一致。
+/// 点击统一由外层 [GestureDetector] 处理（它本来就要覆盖整条胶囊）。
 class _DockButton extends StatelessWidget {
-  const _DockButton({
-    super.key,
-    required this.item,
-    required this.selected,
-    required this.onTap,
-  });
+  const _DockButton({super.key, required this.item, required this.selected});
 
   final FloatingDockItem item;
   final bool selected;
-  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -510,43 +607,31 @@ class _DockButton extends StatelessWidget {
     final color = selected ? scheme.primary : scheme.onSurfaceVariant;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 2),
-      child: Material(
-        // 透明 Material：选中底色由底层的指示块负责，这样拖动时能连续滑动。
-        type: MaterialType.transparency,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(24),
-          onTap: onTap,
-          // 去掉点击水波纹阴影：切页反馈交给指示块与整体缩放，
-          // 涟漪跟拖动时的外扩阴影叠在一起反而显脏。
-          splashFactory: NoSplash.splashFactory,
-          highlightColor: Colors.transparent,
-          // 固定 44 高（不是靠 padding 撑）：指示块的高度就取这个矩形，
-          // 高度不随字体度量忽大忽小，滑动时才不会"胖瘦不匀"。
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 44),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: <Widget>[
-                  Icon(
-                    selected ? item.activeIcon : item.icon,
-                    size: 20,
-                    color: color,
-                  ),
-                  const SizedBox(width: 7),
-                  Text(
-                    item.label,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: selected ? FontWeight.w500 : FontWeight.w400,
-                      color: color,
-                    ),
-                  ),
-                ],
+      // 固定 44 高（不是靠 padding 撑）：指示块的高度就取这个矩形，
+      // 高度不随字体度量忽大忽小，滑动时才不会"胖瘦不匀"。
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 44),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              Icon(
+                selected ? item.activeIcon : item.icon,
+                size: 20,
+                color: color,
               ),
-            ),
+              const SizedBox(width: 7),
+              Text(
+                item.label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: selected ? FontWeight.w500 : FontWeight.w400,
+                  color: color,
+                ),
+              ),
+            ],
           ),
         ),
       ),

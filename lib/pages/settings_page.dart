@@ -34,8 +34,16 @@ class SettingsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 只听**偏好**的通知源，不听整个 model。
+    //
+    // 之前听的是 model：任何通知（后台刷新一次课表、切一次周次……）都会让
+    // 整页重建一次（实测 21~26ms）。而这些通知多半与设置页显示的内容无关——
+    // 用户在设置页里翻两页，却因为后台刷新了一次课表而白白重建一遍；
+    // 点进子页面时那一帧尤其明显。
+    //
+    // [model.prefsNotifier] 只在设置页关心的东西真变了时才发通知。
     return ListenableBuilder(
-      listenable: model,
+      listenable: model.prefsNotifier,
       builder: (context, _) {
         final theme = Theme.of(context);
         final active = model.activeTimetable;

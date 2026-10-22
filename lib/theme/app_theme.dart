@@ -45,14 +45,15 @@ ThemeData buildLightTheme() {
       clipBehavior: Clip.antiAlias,
       margin: EdgeInsets.zero,
     ),
-    // 页面进出用一个短促的淡入，替代默认 300ms 的缩放转场（见 [_QuickFadeTransitionsBuilder]）。
+    // 页面进出用一个短促的**水平位移**（见 [_SlideTransitionsBuilder]）：
+    // 淡入淡出要给整页做离屏合成，桌面端每帧都做一次太贵。
     // 只列本项目实际发布的平台；其余平台走框架默认。
     pageTransitionsTheme: const PageTransitionsTheme(
       builders: <TargetPlatform, PageTransitionsBuilder>{
-        TargetPlatform.android: _QuickFadeTransitionsBuilder(),
-        TargetPlatform.windows: _QuickFadeTransitionsBuilder(),
-        TargetPlatform.linux: _QuickFadeTransitionsBuilder(),
-        TargetPlatform.fuchsia: _QuickFadeTransitionsBuilder(),
+        TargetPlatform.android: _SlideTransitionsBuilder(),
+        TargetPlatform.windows: _SlideTransitionsBuilder(),
+        TargetPlatform.linux: _SlideTransitionsBuilder(),
+        TargetPlatform.fuchsia: _SlideTransitionsBuilder(),
       },
     ),
     dividerTheme: DividerThemeData(
@@ -114,27 +115,41 @@ class AppScrollBehavior extends MaterialScrollBehavior {
   };
 }
 
-/// 页面进出转场：200ms 淡入 + 很小的上移。
+/// 页面进出转场：短促的**水平位移**（不用淡入淡出）。
 ///
-/// 为什么不用默认的 zoom 转场：它要 300ms、带缩放与快照，画面在动的时间更长，
-/// 期间点下一条会像"没反应"；退出也一样拖沓。这里换成短促的淡入：
-///  - 进入 200ms、退出 160ms（退出更快，回到上一页更跟手）；
-///  - 只有 `FadeTransition` + 1.2% 位移，不做快照缩放，掉帧更少；
-///  - 不额外包 `IgnorePointer`：框架只在 pop 阶段忽略"正在退出的那一页"
-///    （routes.dart `_shouldIgnoreFocusRequest`），进入阶段页面一直可点。
-class _QuickFadeTransitionsBuilder extends PageTransitionsBuilder {
-  const _QuickFadeTransitionsBuilder();
+/// 为什么不用默认的 zoom 转场：它要 300ms、带缩放与整页快照，画面在动的
+/// 时间更长，期间点下一条会像"没反应"。这里换成短促的位移：进入 220ms、
+/// 退出 180ms（退出更快，回到上一页更跟手）。
+///
+/// ## 为什么不用淡入淡出
+///
+/// [FadeTransition] 内部是 [Opacity]，而 [Opacity] 在 0 < alpha < 1 时
+/// 必须把整页画进一个**离屏缓冲**再合成——框架源码里对这个分支的注释
+/// 直接写着 "expensive"。设置页里的子页面（作息表列表、教务地址、调试信息…）
+/// 本身内容不少，动画期间每帧都来一次全页离屏合成，就是"点进子页面时卡一下"
+/// 的来源。
+///
+/// 纯位移只改变换矩阵，不产生离屏缓冲：帧内只重绘"多出来的那一条"，
+/// 两页各自的像素被缓存复用。
+///
+/// ## 位移的方向
+///
+/// 进入时新页从**右侧**推入、旧页往左让一点（iOS 的 push 观感）；
+/// 退出时反过来。这样"往里点 = 往左推"，与外壳的横向翻页是同一套语言。
+class _SlideTransitionsBuilder extends PageTransitionsBuilder {
+  const _SlideTransitionsBuilder();
 
-  static final Animatable<Offset> _slide = Tween<Offset>(
-    begin: const Offset(0, 0.012),
-    end: Offset.zero,
-  ).chain(CurveTween(curve: Curves.easeOutCubic));
+  /// 新页从右侧推入的距离（占页宽的比例）。
+  static const double _enterDistance = 0.28;
+
+  /// 旧页被推走时的位移（占页宽的比例）。
+  static const double _exitDistance = 0.12;
 
   @override
-  Duration get transitionDuration => const Duration(milliseconds: 200);
+  Duration get transitionDuration => const Duration(milliseconds: 220);
 
   @override
-  Duration get reverseTransitionDuration => const Duration(milliseconds: 160);
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 180);
 
   @override
   Widget buildTransitions<T>(
@@ -146,13 +161,24 @@ class _QuickFadeTransitionsBuilder extends PageTransitionsBuilder {
   ) {
     // 首个页面（启动直达）不需要转场。
     if (route.isFirst) return child;
-    return FadeTransition(
-      opacity: CurvedAnimation(
-        parent: animation,
-        curve: Curves.easeOut,
-        reverseCurve: Curves.easeIn,
-      ),
-      child: SlideTransition(position: animation.drive(_slide), child: child),
+
+    // 新页：随 primary 动画从右侧推进来。
+    final Animation<Offset> enter = animation.drive(
+      Tween<Offset>(
+        begin: const Offset(_enterDistance, 0),
+        end: Offset.zero,
+      ).chain(CurveTween(curve: Curves.easeOutCubic)),
+    );
+    // 旧页：随 secondary 动画（上一层路由的动画）往左让一点。
+    final Animation<Offset> exit = secondaryAnimation.drive(
+      Tween<Offset>(
+        begin: Offset.zero,
+        end: const Offset(-_exitDistance, 0),
+      ).chain(CurveTween(curve: Curves.easeOutCubic)),
+    );
+    return SlideTransition(
+      position: enter,
+      child: SlideTransition(position: exit, child: child),
     );
   }
 }

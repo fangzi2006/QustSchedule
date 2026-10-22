@@ -16,8 +16,10 @@ class TimetableListPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 只听**偏好**的通知源（见 [AppModel.prefsNotifier]）：课表刷新那些
+    // 与本页无关的 model 通知，不该让整页重建一次。
     return ListenableBuilder(
-      listenable: model,
+      listenable: model.prefsNotifier,
       builder: (context, _) {
         final tables = model.timetables;
         final active = model.activeTimetable;

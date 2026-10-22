@@ -63,7 +63,8 @@ class ReschedulePage extends StatelessWidget {
                                 onPressed: () =>
                                     model.removeReschedule(rule.id),
                               ),
-                              onTap: () => _showAddSheet(context, initial: rule),
+                              onTap: () =>
+                                  _showAddSheet(context, initial: rule),
                             ),
                           );
                         },
