@@ -1,48 +1,111 @@
-name: Build and Release
+name: CI / Build and Release
 
 on:
-  # 推送以 v 开头的标签（如 v1.1.2）时自动编译并发布
   push:
+    branches:
+      - main
+      - master
     tags:
       - 'v*'
-  # 也可以在 GitHub Actions 页面手动点击运行
+  pull_request:
+    branches:
+      - main
+      - master
   workflow_dispatch:
 
-# 并发控制：同一分支/标签重复触发时，若非正式发版标签则自动取消旧任务
+# 并发控制：
+# 1. 若为推送标签（v* 开头），cancel-in-progress 为 false，绝不被打断，保证发版任务完整跑完；
+# 2. 若为普通分支提交，cancel-in-progress 为 true，若出现新提交则直接中断旧任务，立即运行最新提交。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 permissions:
-  contents: write # 允许自动创建 Release 并上传文件
+  contents: write # 允许创建 Release 并上传产物
 
 env:
   FLUTTER_VERSION: '3.47.7'
-  # 判断是否为正式版（标签名不含 -beta / -rc 等连字符）
   IS_STABLE: ${{ !contains(github.ref, '-') }}
 
 jobs:
-  # ================= 1. 编译 Android APK =================
-  build-android:
+  # ================= 1. 测试门禁（语法检查、固定基本测试、自定义测试） =================
+  test:
+    name: "Tests (Lint, Core & Custom)"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # JDK 21：本地用 JDK 25（对 CI 偏新），改用 21 尽量贴近本地编译结果；
-      # 21 满足 AGP 9.x 官方最低要求 17，本项目 AGP 9.1.0 + Gradle 9.3.1、编译目标 Java 17。
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      - name: Get dependencies (Main & zf_academic)
+        run: |
+          flutter pub get
+          (cd packages/zf_academic && dart pub get)
+
+      # --- 快速语法检查 (Fast Lint / Static Analysis) ---
+      - name: "Lint: Format check (Main project)"
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: "Lint: Format check (zf_academic package)"
+        run: (cd packages/zf_academic && dart format --output=none --set-exit-if-changed lib test)
+
+      - name: "Lint: Static analysis (Main project)"
+        run: flutter analyze --no-fatal-infos lib test
+
+      - name: "Lint: Static analysis (zf_academic package)"
+        run: (cd packages/zf_academic && flutter analyze --no-fatal-infos lib test)
+
+      # --- 固定基本测试项 (Core Tests) ---
+      - name: "Core Test: Protocol tests (zf_academic)"
+        run: (cd packages/zf_academic && dart test)
+
+      - name: "Core Test: Unit & State machine tests"
+        run: |
+          flutter test test/app_version_test.dart \
+                       test/term_calendar_test.dart \
+                       test/timetable_test.dart \
+                       test/schedule_service_test.dart \
+                       test/app_model_test.dart
+
+      - name: "Core Test: Widget & Invariant sweep tests"
+        run: flutter test test/widget_test.dart
+
+      # --- 预留自定义测试项 (Custom Tests) ---
+      - name: "Custom Test: Run test/custom if present"
+        run: |
+          if [ -d "test/custom" ] && [ -n "$(find test/custom -type f -name '*_test.dart' -print -quit 2>/dev/null)" ]; then
+            echo "::notice::在 test/custom/ 目录下检测到自定义测试项，开始运行..."
+            flutter test test/custom
+          else
+            echo "未在 test/custom/ 目录下检测到测试项，跳过自定义测试。"
+          fi
+
+  # ================= 2. 编译 Android APK =================
+  build-android:
+    name: "Build Android APK"
+    needs: [test]
+    # 只要不是 Pull Request（普通分支提交或 Tag 推送），测试通过后均执行打包
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '21'
 
-      # 使用 Gradle 官方缓存加速构建
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # 只接受 Android SDK 许可证；所需的 platform（如 compileSdk 对应的 android-37）
-      # 交由 AGP 在构建期按需自动下载（AGP 7.0+ 标准行为，免在 CI 里写死版本号）。
       - name: Accept Android SDK licenses
         run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
@@ -53,9 +116,6 @@ jobs:
           channel: 'stable'
           cache: true
 
-      # 始终执行；若有 KEYSTORE_BASE64 secret 则用正式签名，否则退回 debug 签名。
-      # 注意：step 级 if 不允许引用 secrets 上下文，故改为在脚本里判空，
-      # 这样无论配没配 secret 都不会因 if 表达式非法而整条 workflow 启动失败。
       - name: Restore Android Keystore (optional)
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -64,7 +124,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "Restoring release keystore from secrets..."
+            echo "正在从 secrets 还原发布证书..."
             echo "$KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks
             {
               echo "storeFile=upload-keystore.jks"
@@ -73,7 +133,7 @@ jobs:
               echo "keyPassword=$KEY_PASSWORD"
             } > android/key.properties
           else
-            echo "KEYSTORE_BASE64 secret 未配置，将使用 debug 签名（仍可产出 apk，但不能覆盖升级已装的 release 包）。"
+            echo "未配置 KEYSTORE_BASE64 secret，将使用 debug 签名。"
           fi
 
       - name: Get dependencies
@@ -82,8 +142,6 @@ jobs:
       - name: "Build APK (release, split by ABI: arm64-v8a + armeabi-v7a)"
         run: flutter build apk --release --split-per-abi --target-platform android-arm,android-arm64
 
-      # gradle 的 afterEvaluate 已把每个 ABI 产物复制成「青科课表通_v<version>-<abi>.apk」；
-      # 这里把所有带版本号前缀的 APK 一并收集进 dist/（拆分后会有 v7 / v8 两个）。
       - name: Collect Android artifacts
         id: vars
         run: |
@@ -96,20 +154,22 @@ jobs:
             cp "${SRC_APKS[@]}" dist/
             echo "Collected APKs: ${SRC_APKS[*]##*/}"
           else
-            # 兜底：直接找 AGP 原始拆分产物
             cp build/app/outputs/flutter-apk/app-*-release.apk dist/ 2>/dev/null || true
-            echo "未找到带版本号前缀的副本，已兜底复制 AGP 拆分产物"
+            echo "未找到版本前缀 APK，已复制 AGP 拆分产物"
           fi
 
-      - name: Upload Android Artifact
+      - name: Upload Android Artifact (供在 Actions 页面下载)
         uses: actions/upload-artifact@v4
         with:
           name: artifact-android
           path: dist/*.apk
           if-no-files-found: error
 
-  # ================= 2. 编译 Windows 客户端 =================
+  # ================= 3. 编译 Windows 客户端 =================
   build-windows:
+    name: "Build Windows Client"
+    needs: [test]
+    if: github.event_name != 'pull_request'
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -131,8 +191,6 @@ jobs:
       - name: Build Windows Release
         run: flutter build windows --release
 
-      # windows-latest 当前镜像已预装 Inno Setup 6（iscc 在 PATH）；
-      # 仅当未发现时才 choco 安装，兼容旧镜像与未来变动。
       - name: Ensure Inno Setup is installed
         shell: pwsh
         run: |
@@ -146,13 +204,13 @@ jobs:
           $Version = ((Select-String -Path pubspec.yaml -Pattern '^version:').Line -replace '^version:\s*','' -replace '\+.*','').Trim()
           New-Item -ItemType Directory -Force -Path dist | Out-Null
 
-          # 1. 编译 Inno Setup 安装包并直接输出到 dist 目录（/O"dist" 覆盖脚本里的 OutputDir）
+          # 1. 编译 Inno Setup 安装包直接输出到 dist
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$Version /O"dist" "windows\packaging\setup.iss"
 
-          # 2. 打包免安装便携版 Zip 到 dist 目录
+          # 2. 打包便携版 Zip 到 dist
           Compress-Archive -Path "build/windows/x64/runner/Release/*" -DestinationPath "dist/QustSchedule_v${Version}-windows-x64.zip" -Force
 
-      - name: Upload Windows Artifacts
+      - name: Upload Windows Artifacts (供在 Actions 页面下载)
         uses: actions/upload-artifact@v4
         with:
           name: artifact-windows
@@ -161,15 +219,18 @@ jobs:
             dist/*.zip
           if-no-files-found: error
 
-  # ================= 3. 汇总并自动发布到 GitHub Releases =================
+  # ================= 4. 汇总并自动发布到 GitHub Releases (仅推送标签触发) =================
   create-release:
+    name: "Create GitHub Release"
     needs: [build-android, build-windows]
+    # 严格限定：只有推送 v* 标签时才创建 Release
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # 取全部标签，用于生成「所有变更列表」的对比链接
+          fetch-depth: 0
 
       - name: Compute version from pubspec
         id: ver
@@ -184,15 +245,12 @@ jobs:
           pattern: artifact-*
           merge-multiple: true
 
-      # 生成所有安装包的 SHA256 校验值文件
       - name: Generate SHA256SUMS
         run: |
           cd dist
           sha256sum ./* > SHA256SUMS
           cat SHA256SUMS
 
-      # 组装 Release 正文：简介 → 下载表格 → 变更列表链接。
-      # 简介来源：仓库 .github/release_notes.md（发版前编辑即可自定义），没有则用默认一句。
       - name: Build release body
         env:
           REPO: ${{ github.repository }}
@@ -205,9 +263,7 @@ jobs:
           VERSION="${{ steps.ver.outputs.version }}"
           TAG="${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.ver.outputs.version) }}"
           BASE="https://github.com/${REPO}/releases/download/${TAG}"
-          enc() { python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$1"; }
 
-          # 上一个标签，用于「所有变更列表」的对比链接（首次发布退回提交历史）
           PREV_TAG=$(git tag --sort=-creatordate | grep -vx "$TAG" | head -1)
           if [ -n "$PREV_TAG" ]; then
             CHANGELOG_URL="https://github.com/${REPO}/compare/${PREV_TAG}...${TAG}"
@@ -231,13 +287,10 @@ jobs:
             echo
             echo "所有变更列表：[ChangeLog](${CHANGELOG_URL})"
           } > body.md
-          echo "---- body.md ----"
-          cat body.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # 标签触发时用推送的标签名；手动触发时按 pubspec 版本号自动建标签
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.ver.outputs.version) }}
           name: 青科课表通 v${{ steps.ver.outputs.version }}
           body_path: body.md

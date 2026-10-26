@@ -51,7 +51,7 @@ qustschedule/
 │   │   ├── reschedule.dart            调课规则与显示叠加
 │   │   ├── term_calendar.dart         周次 ↔ 日期换算、同日课程冲突布局
 │   │   ├── timetable.dart             作息表模型、节数、快捷设置
-│   │   ├── preferences_repository.dart 用户设置（schema 6，含旧版迁移）
+│   │   ├── preferences_repository.dart 用户设置（schema 8，含旧版迁移）
 │   │   ├── credentials_repository.dart 学号密码 → 系统安全存储
 │   │   ├── session_repository.dart    Cookie 快照 → app 私有目录
 │   │   └── school.dart                默认学校配置
@@ -70,9 +70,9 @@ qustschedule/
 
 - **Flutter 3.x / Dart 3.13**，Material 3，只做浅色主题。
 - **平台**：Windows（CMake + MSVC）、Android（minSdk 24 / compileSdk 37）。
-- **运行时依赖只有三个**：`flutter_secure_storage`（存密码）、`path_provider`（Cookie 与缓存目录）、`cupertino_icons`。
+- **运行时依赖精简可控**：`flutter_secure_storage`（存密码）、`path_provider`（Cookie 与缓存目录）、`url_launcher`（外部链接跳转）、`flutter_localizations`（本地化日期支持）。
 - **教务协议层零 Flutter 依赖**：HTTP 客户端（手动重定向 + 白名单 + 限速）、Cookie 存储、HTML 取值、RSA 密码加密、课表解析均为自行实现，只依赖 `pointycastle` 与 `crypto`，因此可以脱离 UI 单独测试。
-- **测试**：`flutter test`，界面与状态机 194 个用例 + 协议层 72 个用例，全部离线（协议层用合成教务服务端对拍）。
+- **测试**：`flutter test`，界面与状态机 231+ 项用例 + 协议层 80 项用例，全部离线（协议层用合成教务服务端对拍）。
 
 ## 已知限制
 
@@ -80,3 +80,7 @@ qustschedule/
 - 周次需要手动校准一次（教务不提供开学日期）。
 - 只有浅色主题。
 - 同一门课若教务按不同周次拆成多行（如 `1-8周` 与 `9-16周` 各一行），周视图显示正常，但课程详情只展示其中一行。
+
+## 开源协议
+
+本项目采用 [GNU General Public License v3.0](LICENSE) 开源。
