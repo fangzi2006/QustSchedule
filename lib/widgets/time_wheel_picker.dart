@@ -776,9 +776,7 @@ class _WeekCalibrationSheetState extends State<_WeekCalibrationSheet> {
         child: const Text('恢复默认估算'),
       ),
       wheels: _Wheel(
-        labels: <String>[
-          for (var w = 1; w <= widget.maxWeek; w++) '第 $w 周',
-        ],
+        labels: <String>[for (var w = 1; w <= widget.maxWeek; w++) '第 $w 周'],
         initialIndex: _week - 1,
         textStyle: theme.textTheme.titleMedium,
         onChanged: (index) => setState(() => _week = index + 1),
