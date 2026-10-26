@@ -209,6 +209,7 @@ class _AppMenu<T> extends StatelessWidget {
             clipBehavior: Clip.antiAlias,
             child: Align(
               alignment: align,
+              widthFactor: 1.0,
               heightFactor: heightFactor,
               child: ConstrainedBox(
                 constraints: BoxConstraints(maxHeight: maxHeight),

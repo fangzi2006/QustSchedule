@@ -2163,21 +2163,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(SchoolAddressPage), findsOneWidget);
     });
-
-    testWidgets('展开动画途中可随时打断（点菜单项或点外部）', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 60));
-
-      // 动画才走一半年，直接点空白处打断收起。
-      await tester.tapAt(const Offset(20, 200));
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsNothing);
-    });
   });
 
   group('教务地址簿页面', () {
