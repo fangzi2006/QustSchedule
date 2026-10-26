@@ -5,12 +5,32 @@ on:
     branches:
       - main
       - master
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'packages/**'
+      - 'android/**'
+      - 'windows/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'analysis_options.yaml'
+      - '.github/**'
     tags:
       - 'v*'
   pull_request:
     branches:
       - main
       - master
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'packages/**'
+      - 'android/**'
+      - 'windows/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'analysis_options.yaml'
+      - '.github/**'
   workflow_dispatch:
 
 # 并发控制：
@@ -28,7 +48,7 @@ env:
   IS_STABLE: ${{ !contains(github.ref, '-') }}
 
 jobs:
-  # ================= 1. 测试门禁（语法检查、固定基本测试、自定义测试） =================
+  # ================= 1. 前置测试门禁（约 30 秒快速验证） =================
   test:
     name: "Tests (Lint, Core & Custom)"
     runs-on: ubuntu-latest
@@ -36,12 +56,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # --- Flutter SDK 强缓存 (秒级还原) ---
+      - name: Cache Flutter SDK
+        id: cache-flutter-test
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.tool_cache }}/flutter
+          key: flutter-sdk-Linux-${{ env.FLUTTER_VERSION }}
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
           cache: true
+          cache-key: "flutter-:os:-:channel:-:version:-:arch:"
+          cache-path: "${{ runner.tool_cache }}/flutter/:channel:-:version:-:arch:"
 
       - name: Get dependencies (Main & zf_academic)
         run: |
@@ -86,11 +116,11 @@ jobs:
             echo "未在 test/custom/ 目录下检测到测试项，跳过自定义测试。"
           fi
 
-  # ================= 2. 编译 Android APK =================
+  # ================= 2. 编译 Android APK（与 Windows 并行打包） =================
   build-android:
     name: "Build Android APK"
     needs: [test]
-    # 只要不是 Pull Request（普通分支提交或 Tag 推送），测试通过后均执行打包
+    # 只要测试通过且不是 PR，立即开始打包
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -103,11 +133,19 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Set up Gradle
+      - name: Set up Gradle Cache
         uses: gradle/actions/setup-gradle@v4
 
       - name: Accept Android SDK licenses
         run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
+      # --- Flutter SDK 强缓存 (秒级还原) ---
+      - name: Cache Flutter SDK
+        id: cache-flutter-android
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.tool_cache }}/flutter
+          key: flutter-sdk-Linux-${{ env.FLUTTER_VERSION }}
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -115,6 +153,8 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
           cache: true
+          cache-key: "flutter-:os:-:channel:-:version:-:arch:"
+          cache-path: "${{ runner.tool_cache }}/flutter/:channel:-:version:-:arch:"
 
       - name: Restore Android Keystore (optional)
         env:
@@ -165,10 +205,11 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
 
-  # ================= 3. 编译 Windows 客户端 =================
+  # ================= 3. 编译 Windows 客户端（与 Android 并行打包） =================
   build-windows:
     name: "Build Windows Client"
     needs: [test]
+    # 只要测试通过且不是 PR，立即开始打包
     if: github.event_name != 'pull_request'
     runs-on: windows-latest
     steps:
@@ -178,12 +219,22 @@ jobs:
       - name: Enable git long paths (Windows)
         run: git config --global core.longpaths true
 
+      # --- Windows 端 Flutter SDK 强缓存 (跳过慢速解压) ---
+      - name: Cache Flutter SDK
+        id: cache-flutter-windows
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.tool_cache }}/flutter
+          key: flutter-sdk-Windows-${{ env.FLUTTER_VERSION }}
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
           cache: true
+          cache-key: "flutter-:os:-:channel:-:version:-:arch:"
+          cache-path: "${{ runner.tool_cache }}/flutter/:channel:-:version:-:arch:"
 
       - name: Get dependencies
         run: flutter pub get
