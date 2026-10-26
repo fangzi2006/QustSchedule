@@ -207,8 +207,7 @@ class _SliderRow extends StatelessWidget {
               pressedElevation: 4,
             ),
             overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
-            // 禁用内置 tickMark：Flutter 内置刻度向内缩进 trackHeight / 2，
-            // 会与 thumbCenter 的坐标系错位。刻度与默认点统一在轨道里按同一坐标系绘制。
+            // 统一在轨道里绘制刻度与默认靶点，使默认位置可直接替换为圆环而非叠在圆点上。
             tickMarkShape: SliderTickMarkShape.noTickMark,
             trackShape: _TickedTrackShape(
               divisions: divisions,
@@ -238,11 +237,10 @@ class _SliderRow extends StatelessWidget {
 ///
 /// 为什么自己画轨道和刻度：
 ///  1. `GappedSliderTrackShape` 会在滑柄两侧留缺口，填充条右端到不了滑柄中心；
-///  2. Flutter 内置 `RoundSliderTickMarkShape` 按 `trackWidth - trackHeight`
-///     向内缩进算刻度，而 `RenderSlider` 的 `thumbCenter.dx` 按全宽 `trackWidth`
-///     线性插值，两者在非中点处必然错位。
-/// 这里统一用 `rect.left + rect.width * t` 算填充条、刻度点与默认位置标记，
-/// 保证圆形滑柄中心、填充条右端、当前刻度点、默认位置标记四者完全对齐。
+///  2. `RenderSlider` 在离散/圆角轨道下会按 `padding = rect.height` 向内缩进：
+///     `dx = rect.left + rect.height / 2 + (rect.width - rect.height) * t`，
+///     之前默认值白线直接按 `rect.left + rect.width * t` 算才会偏离真实刻度位置。
+/// 这里统一按同一缩进坐标系绘制填充条、刻度点与默认值圆环，保证四者完全对齐。
 class _TickedTrackShape extends RoundedRectSliderTrackShape {
   const _TickedTrackShape({
     required this.divisions,
@@ -290,13 +288,13 @@ class _TickedTrackShape extends RoundedRectSliderTrackShape {
     final canvas = context.canvas;
     final r = rect.height / 2;
     final radius = Radius.circular(r);
-    final left = rect.left - r;
-    final right = rect.right + r;
+    final left = rect.left;
+    final right = rect.right;
     final top = rect.top;
     final bottom = rect.bottom;
     final thumbX = thumbCenter.dx;
 
-    // 1. 完整底轨：两端向外延展半个轨道高度，让半圆端帽自然包住首尾刻度点。
+    // 1. 完整底轨：两端半圆圆心恰好落在 rect.left + r 与 rect.right - r（首尾刻度点）。
     final idleTrackPaint = Paint()..color = idleTrackColor;
     final fullRect = Rect.fromLTRB(left, top, right, bottom);
     final fullRRect = RRect.fromRectAndRadius(fullRect, radius);
@@ -312,16 +310,19 @@ class _TickedTrackShape extends RoundedRectSliderTrackShape {
     );
     canvas.drawRRect(activeRRect, activeTrackPaint);
 
+    // RenderSlider 在离散/圆角轨道下按 padding = rect.height 向内缩进算 thumbCenter。
     final cy = rect.center.dy;
+    final trackLeft = rect.left + r;
+    final trackWidth = rect.width - rect.height;
     final hasDefault = tickFraction >= 0 && tickFraction <= 1;
-    final defaultX = rect.left + rect.width * tickFraction;
+    final defaultX = trackLeft + trackWidth * tickFraction;
 
-    // 3. 分段刻度点：与 RenderSlider 计算 thumbCenter.dx 用同一线性坐标。
-    if (divisions > 0) {
+    // 3. 分段刻度点：与 RenderSlider 计算真实刻度及 thumbCenter.dx 用同一坐标。
+    if (divisions > 0 && trackWidth > 0) {
       final activePaint = Paint()..color = activeTickColor;
       final idlePaint = Paint()..color = idleTickColor;
       for (var i = 0; i <= divisions; i++) {
-        final x = rect.left + rect.width * (i / divisions);
+        final x = trackLeft + trackWidth * (i / divisions);
         if (hasDefault && (x - defaultX).abs() < 0.5) continue;
         final paint = x <= thumbX ? activePaint : idlePaint;
         canvas.drawCircle(Offset(x, cy), 1.5, paint);
