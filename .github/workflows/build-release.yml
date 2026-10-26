@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - master
+    # 只有改了源码 / 测试 / 平台工程 / 依赖 / 工作流才触发；改文档不触发。
     paths:
       - 'lib/**'
       - 'test/**'
@@ -34,21 +35,34 @@ on:
   workflow_dispatch:
 
 # 并发控制：
-# 1. 若为推送标签（v* 开头），cancel-in-progress 为 false，绝不被打断，保证发版任务完整跑完；
-# 2. 若为普通分支提交，cancel-in-progress 为 true，若出现新提交则直接中断旧任务，立即运行最新提交。
+# 1. 推送标签（v*）：cancel-in-progress = false，发版任务绝不被新提交打断；
+# 2. 普通提交：cancel-in-progress = true，有新提交时直接中断旧任务，转去跑最新提交。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 permissions:
-  contents: write # 允许创建 Release 并上传产物
+  contents: write # 创建 Release 并上传产物
+  actions: write  # 测试失败时取消本次运行（fail-fast）
 
 env:
   FLUTTER_VERSION: '3.47.7'
   IS_STABLE: ${{ !contains(github.ref, '-') }}
 
+# 流水线结构（三个 job 同时起跑，测试失败即整体取消）：
+#
+#   test ──────────(~70s)──┐ 失败 → gh run cancel，正在打的包全部中止、不产出 Artifact
+#   build-android ─(~3min)─┼─→ create-release（仅 v* 标签；needs 三者全部成功）
+#   build-windows ─(~3min)─┘
+#
+# 为什么不让打包 needs: test：测试 ~70s 会整段串在打包前面（实测总时长 3m40s → 5m38s）。
+# 并行 + 失败即取消，效果等价——测试不过就没有安装包、也不会发版——但测试时间被打包时间完全覆盖。
+#
+# Flutter SDK 缓存：只用 subosito/flutter-action 自带的 cache: true（默认 key，已有缓存直接命中）。
+# 不要再额外套 actions/cache 缓存同一目录：那会让每个 job 多一次 ~1GB 的还原和上传（实测 +30~60s）。
+
 jobs:
-  # ================= 1. 前置测试门禁（约 30 秒快速验证） =================
+  # ================= 1. 测试门禁：语法检查 → 固定基本测试 → 自定义测试 =================
   test:
     name: "Tests (Lint, Core & Custom)"
     runs-on: ubuntu-latest
@@ -56,34 +70,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --- Flutter SDK 强缓存 (秒级还原) ---
-      - name: Cache Flutter SDK
-        id: cache-flutter-test
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.tool_cache }}/flutter
-          key: flutter-sdk-Linux-${{ env.FLUTTER_VERSION }}
-
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
           cache: true
-          cache-key: "flutter-:os:-:channel:-:version:-:arch:"
-          cache-path: "${{ runner.tool_cache }}/flutter/:channel:-:version:-:arch:"
 
       - name: Get dependencies (Main & zf_academic)
         run: |
           flutter pub get
           (cd packages/zf_academic && dart pub get)
 
-      # --- 快速语法检查 (Fast Lint / Static Analysis) ---
-      - name: "Lint: Format check (Main project)"
-        run: dart format --output=none --set-exit-if-changed lib test
-
-      - name: "Lint: Format check (zf_academic package)"
-        run: (cd packages/zf_academic && dart format --output=none --set-exit-if-changed lib test)
+      # --- 快速语法检查 ---
+      - name: "Lint: Format check"
+        run: |
+          dart format --output=none --set-exit-if-changed lib test
+          (cd packages/zf_academic && dart format --output=none --set-exit-if-changed lib test)
 
       - name: "Lint: Static analysis (Main project)"
         run: flutter analyze --no-fatal-infos lib test
@@ -91,36 +94,35 @@ jobs:
       - name: "Lint: Static analysis (zf_academic package)"
         run: (cd packages/zf_academic && flutter analyze --no-fatal-infos lib test)
 
-      # --- 固定基本测试项 (Core Tests) ---
+      # --- 固定基本测试项 ---
       - name: "Core Test: Protocol tests (zf_academic)"
         run: (cd packages/zf_academic && dart test)
 
-      - name: "Core Test: Unit & State machine tests"
-        run: |
-          flutter test test/app_version_test.dart \
-                       test/term_calendar_test.dart \
-                       test/timetable_test.dart \
-                       test/schedule_service_test.dart \
-                       test/app_model_test.dart
+      # 单元 / 状态机 / 界面合并为一次 flutter test：只编译、启动一次测试进程，文件间并发执行。
+      # 排除 test/custom/，它由下一步单独跑。
+      - name: "Core Test: Unit, State machine & Widget tests"
+        run: flutter test $(find test -maxdepth 1 -name '*_test.dart' | sort)
 
-      - name: "Core Test: Widget & Invariant sweep tests"
-        run: flutter test test/widget_test.dart
-
-      # --- 预留自定义测试项 (Custom Tests) ---
+      # --- 自定义测试项：test/custom/ 下有 *_test.dart 才跑 ---
       - name: "Custom Test: Run test/custom if present"
         run: |
-          if [ -d "test/custom" ] && [ -n "$(find test/custom -type f -name '*_test.dart' -print -quit 2>/dev/null)" ]; then
-            echo "::notice::在 test/custom/ 目录下检测到自定义测试项，开始运行..."
+          if [ -n "$(find test/custom -type f -name '*_test.dart' -print -quit 2>/dev/null)" ]; then
+            echo "::notice::检测到 test/custom/ 下的自定义测试，开始运行"
             flutter test test/custom
           else
-            echo "未在 test/custom/ 目录下检测到测试项，跳过自定义测试。"
+            echo "test/custom/ 下没有测试项，跳过"
           fi
 
-  # ================= 2. 编译 Android APK（与 Windows 并行打包） =================
+      # --- fail-fast：测试失败时取消整个运行，并行中的打包随之中止 ---
+      - name: Cancel workflow on test failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}
+
+  # ================= 2. 编译 Android APK（与测试、Windows 同时起跑） =================
   build-android:
     name: "Build Android APK"
-    needs: [test]
-    # 只要测试通过且不是 PR，立即开始打包
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -133,19 +135,14 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Set up Gradle Cache
+      # cache-cleanup: never —— 默认在 Post 阶段跑一次 Gradle 清理缓存，实测白耗 36~55s。
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-cleanup: never
 
       - name: Accept Android SDK licenses
-        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
-
-      # --- Flutter SDK 强缓存 (秒级还原) ---
-      - name: Cache Flutter SDK
-        id: cache-flutter-android
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.tool_cache }}/flutter
-          key: flutter-sdk-Linux-${{ env.FLUTTER_VERSION }}
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -153,8 +150,6 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
           cache: true
-          cache-key: "flutter-:os:-:channel:-:version:-:arch:"
-          cache-path: "${{ runner.tool_cache }}/flutter/:channel:-:version:-:arch:"
 
       - name: Restore Android Keystore (optional)
         env:
@@ -176,17 +171,13 @@ jobs:
             echo "未配置 KEYSTORE_BASE64 secret，将使用 debug 签名。"
           fi
 
-      - name: Get dependencies
-        run: flutter pub get
-
+      # flutter build 会自动执行 pub get，不再单独跑一步。
       - name: "Build APK (release, split by ABI: arm64-v8a + armeabi-v7a)"
         run: flutter build apk --release --split-per-abi --target-platform android-arm,android-arm64
 
       - name: Collect Android artifacts
-        id: vars
         run: |
           VERSION=$(grep '^version:' pubspec.yaml | sed -E 's/version:[[:space:]]*//; s/\+.*//' | tr -d '\r ')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           mkdir -p dist
           shopt -s nullglob
           SRC_APKS=(build/app/outputs/flutter-apk/QustSchedule_v${VERSION}*.apk)
@@ -205,27 +196,22 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
 
-  # ================= 3. 编译 Windows 客户端（与 Android 并行打包） =================
+  # ================= 3. 编译 Windows 客户端（与测试、Android 同时起跑） =================
   build-windows:
     name: "Build Windows Client"
-    needs: [test]
-    # 只要测试通过且不是 PR，立即开始打包
     if: github.event_name != 'pull_request'
     runs-on: windows-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      # Windows 上解压 Flutter SDK（几十万个小文件）的大头是 Defender 实时扫描，先关掉。
+      - name: Disable Windows Defender real-time scanning
+        shell: pwsh
+        run: Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
 
       - name: Enable git long paths (Windows)
         run: git config --global core.longpaths true
 
-      # --- Windows 端 Flutter SDK 强缓存 (跳过慢速解压) ---
-      - name: Cache Flutter SDK
-        id: cache-flutter-windows
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.tool_cache }}/flutter
-          key: flutter-sdk-Windows-${{ env.FLUTTER_VERSION }}
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -233,12 +219,8 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
           cache: true
-          cache-key: "flutter-:os:-:channel:-:version:-:arch:"
-          cache-path: "${{ runner.tool_cache }}/flutter/:channel:-:version:-:arch:"
 
-      - name: Get dependencies
-        run: flutter pub get
-
+      # flutter build 会自动执行 pub get，不再单独跑一步。
       - name: Build Windows Release
         run: flutter build windows --release
 
@@ -255,10 +237,10 @@ jobs:
           $Version = ((Select-String -Path pubspec.yaml -Pattern '^version:').Line -replace '^version:\s*','' -replace '\+.*','').Trim()
           New-Item -ItemType Directory -Force -Path dist | Out-Null
 
-          # 1. 编译 Inno Setup 安装包直接输出到 dist
+          # 1. Inno Setup 安装包直接输出到 dist
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$Version /O"dist" "windows\packaging\setup.iss"
 
-          # 2. 打包便携版 Zip 到 dist
+          # 2. 便携版 Zip
           Compress-Archive -Path "build/windows/x64/runner/Release/*" -DestinationPath "dist/QustSchedule_v${Version}-windows-x64.zip" -Force
 
       - name: Upload Windows Artifacts (供在 Actions 页面下载)
@@ -270,11 +252,10 @@ jobs:
             dist/*.zip
           if-no-files-found: error
 
-  # ================= 4. 汇总并自动发布到 GitHub Releases (仅推送标签触发) =================
+  # ================= 4. 发布 GitHub Release（仅 v* 标签，且测试与双端打包全部成功） =================
   create-release:
     name: "Create GitHub Release"
-    needs: [build-android, build-windows]
-    # 严格限定：只有推送 v* 标签时才创建 Release
+    needs: [test, build-android, build-windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
@@ -312,7 +293,7 @@ jobs:
             CUSTOM_NOTES=""
           fi
           VERSION="${{ steps.ver.outputs.version }}"
-          TAG="${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.ver.outputs.version) }}"
+          TAG="${{ github.ref_name }}"
           BASE="https://github.com/${REPO}/releases/download/${TAG}"
 
           PREV_TAG=$(git tag --sort=-creatordate | grep -vx "$TAG" | head -1)
@@ -342,7 +323,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.ver.outputs.version) }}
+          tag_name: ${{ github.ref_name }}
           name: 青科课表通 v${{ steps.ver.outputs.version }}
           body_path: body.md
           files: dist/*
