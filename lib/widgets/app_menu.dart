@@ -1,15 +1,17 @@
-/// 轻量锚定菜单：贴着按钮弹出，**没有外边距**，展开只有 120ms。
+/// 轻量锚定菜单：贴着按钮弹出，**没有外边距**，带纵向帷幕展开与菜单项错峰浮现动效。
 ///
 /// 为什么不用 `PopupMenuButton`：
-///  1. 它固定 300ms 展开，而且是"逐个 item 依次长出"的尺寸动画，四项的菜单
-///     点完要等半秒才落定，观感很拖；
+///  1. 它固定 300ms 展开，四项的菜单点完要等半秒才落定，观感很拖；
 ///  2. 它四周有 `menuPadding`（默认 8px），在圆角卡片里看起来就是"一圈白边"，
 ///     和 app 里其它卡片（圆角 14、无内边距）明显不是一套；
 ///  3. 这两点都没有主题开关可调。
 ///
 /// 这里用一条 `PopupRoute` + `CustomSingleChildLayout` 自己摆位置：
-/// 横向居中于按钮、纵向贴在按钮下方，放不下就翻到上方，并夹在屏幕安全边距内。
+/// 横向居中于按钮、纵向贴在按钮下方，放不下就翻到上方，并夹在屏幕安全边距内；
+/// 展开/收起全程由单一路由 `animation` 驱动，中途点击菜单项或空白处可随时无跳变打断。
 library;
+
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -58,19 +60,21 @@ Future<void> showAppMenu<T>({
 
   final anchor = box.localToGlobal(Offset.zero, ancestor: overlay) & box.size;
   final picked = await Navigator.of(context, rootNavigator: true).push<T>(
-    _AppMenuRoute<T>(
-      anchor: anchor,
-      menu: _AppMenu<T>(items: items, maxHeight: maxHeight),
-    ),
+    _AppMenuRoute<T>(anchor: anchor, items: items, maxHeight: maxHeight),
   );
   if (picked != null) onSelected(picked);
 }
 
 class _AppMenuRoute<T> extends PopupRoute<T> {
-  _AppMenuRoute({required this.anchor, required this.menu});
+  _AppMenuRoute({
+    required this.anchor,
+    required this.items,
+    required this.maxHeight,
+  });
 
   final Rect anchor;
-  final Widget menu;
+  final List<AppMenuItem<T>> items;
+  final double maxHeight;
 
   // 不压暗背景：菜单很小，压暗反而像弹了个对话框。
   @override
@@ -83,7 +87,10 @@ class _AppMenuRoute<T> extends PopupRoute<T> {
   String get barrierLabel => '关闭菜单';
 
   @override
-  Duration get transitionDuration => const Duration(milliseconds: 120);
+  Duration get transitionDuration => const Duration(milliseconds: 140);
+
+  @override
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 100);
 
   @override
   Widget buildPage(
@@ -92,7 +99,12 @@ class _AppMenuRoute<T> extends PopupRoute<T> {
     Animation<double> secondaryAnimation,
   ) => CustomSingleChildLayout(
     delegate: _MenuLayout(anchor: anchor),
-    child: menu,
+    child: _AppMenu<T>(
+      items: items,
+      maxHeight: maxHeight,
+      anchor: anchor,
+      animation: animation,
+    ),
   );
 
   @override
@@ -101,10 +113,13 @@ class _AppMenuRoute<T> extends PopupRoute<T> {
     Animation<double> animation,
     Animation<double> secondaryAnimation,
     Widget child,
-  ) => FadeTransition(
-    opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
-    child: child,
-  );
+  ) {
+    final fade = CurvedAnimation(
+      parent: animation,
+      curve: const Interval(0.0, 0.65, curve: Curves.easeOut),
+    );
+    return FadeTransition(opacity: fade, child: child);
+  }
 }
 
 /// 把菜单摆在锚点下方居中；下方放不下就翻到上方。
@@ -145,44 +160,99 @@ class _MenuLayout extends SingleChildLayoutDelegate {
 }
 
 class _AppMenu<T> extends StatelessWidget {
-  const _AppMenu({required this.items, required this.maxHeight});
+  const _AppMenu({
+    required this.items,
+    required this.maxHeight,
+    required this.anchor,
+    required this.animation,
+  });
 
   final List<AppMenuItem<T>> items;
   final double maxHeight;
+  final Rect anchor;
+  final Animation<double> animation;
 
   @override
   Widget build(BuildContext context) {
     final divider = Theme.of(context).dividerTheme;
-    return Material(
-      color: Colors.white,
-      surfaceTintColor: Colors.transparent,
-      elevation: 4,
-      shadowColor: Colors.black.withValues(alpha: 0.20),
-      borderRadius: BorderRadius.circular(14),
-      // 必须裁剪：没有内边距，水波纹会跑到圆角外面去。
-      clipBehavior: Clip.antiAlias,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: maxHeight),
-        child: SingleChildScrollView(
-          child: IntrinsicWidth(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                for (final item in items)
-                  if (item.isDivider)
-                    Divider(
-                      height: 1,
-                      thickness: divider.thickness,
-                      color: divider.color,
-                    )
-                  else
-                    _MenuTile<T>(item: item),
-              ],
+    final screen = MediaQuery.sizeOf(context);
+    final estHeight = (items.length * 40.0).clamp(40.0, maxHeight);
+    final noRoomBelow = anchor.bottom + 6 + estHeight > screen.height - 8;
+    final openUp = noRoomBelow && anchor.top >= estHeight + 14;
+
+    const half = 70.0;
+    final maxLeft = math.max(8.0, screen.width - 140.0 - 8.0);
+    final left = (anchor.center.dx - half).clamp(8.0, maxLeft);
+    final alignX = ((anchor.center.dx - left) / half - 1.0).clamp(-0.85, 0.85);
+    final alignY = openUp ? 1.0 : -1.0;
+    final curtainAlign = openUp ? Alignment.bottomCenter : Alignment.topCenter;
+
+    return AnimatedBuilder(
+      animation: animation,
+      builder: (context, _) {
+        final t = animation.value.clamp(0.0, 1.0);
+        final curveT = Curves.easeOutCubic.transform(t);
+        final scale = 0.92 + 0.08 * curveT;
+        final heightFactor = 0.55 + 0.45 * curveT;
+
+        return Transform.scale(
+          alignment: Alignment(alignX, alignY),
+          scale: scale,
+          child: Material(
+            color: Colors.white,
+            surfaceTintColor: Colors.transparent,
+            elevation: 4,
+            shadowColor: Colors.black.withValues(alpha: 0.20),
+            borderRadius: BorderRadius.circular(14),
+            // 必须裁剪：既防止水波纹越出圆角，又在帷幕展开时裁出平滑圆角底边。
+            clipBehavior: Clip.antiAlias,
+            child: Align(
+              alignment: curtainAlign,
+              heightFactor: heightFactor,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maxHeight),
+                child: SingleChildScrollView(
+                  child: IntrinsicWidth(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        for (var i = 0; i < items.length; i++)
+                          _buildStaggeredItem(divider, i, t, openUp),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
+    );
+  }
+
+  /// 单项错峰浮现：全部由当前帧 `t` 纯函数算出，任意时刻反转都能无跳变回退。
+  Widget _buildStaggeredItem(
+    DividerThemeData divider,
+    int index,
+    double t,
+    bool openUp,
+  ) {
+    final item = items[index];
+    final step = index < 6 ? index : 6;
+    final start = step * 0.05;
+    final end = start + 0.65;
+    final raw = ((t - start) / (end - start)).clamp(0.0, 1.0);
+    final itemT = Curves.easeOutCubic.transform(raw);
+    final dy = (1.0 - itemT) * (openUp ? 6.0 : -6.0);
+
+    final child = item.isDivider
+        ? Divider(height: 1, thickness: divider.thickness, color: divider.color)
+        : _MenuTile<T>(item: item);
+
+    return Opacity(
+      opacity: itemT,
+      child: Transform.translate(offset: Offset(0, dy), child: child),
     );
   }
 }

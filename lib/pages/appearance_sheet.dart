@@ -3,7 +3,7 @@
 /// 两个滑块——课表格子高度、课程卡片文字缩放。做在弹窗里（而不是单独一页）
 /// 是因为**预览**：面板只占下半屏，上面的课表实时跟着变，不用来回切换页面。
 ///
-/// 两个滑块在**默认值**处画了一根刻度：用户调乱了以后知道该拖回哪里。
+/// 两个滑块在**默认值**处画了圆环靶点标记：用户调乱了以后知道该拖回哪里。
 /// 拖到刻度附近会触发一次短震动（只在手机上有感觉，桌面端是空操作）。
 library;
 
@@ -149,7 +149,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
   }
 }
 
-/// 一行滑块：左边标签、右边当前值、下面轨道（默认值处有一根刻度）。
+/// 一行滑块：左边标签、右边当前值、下面圆形滑柄轨道（默认值处有圆环靶点）。
 class _SliderRow extends StatelessWidget {
   const _SliderRow({
     required this.label,
@@ -174,6 +174,11 @@ class _SliderRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final activeTick = scheme.onPrimary.withValues(alpha: 0.55);
+    final idleTick = scheme.onSecondaryContainer.withValues(alpha: 0.35);
+    final activeDef = scheme.onPrimary.withValues(alpha: 0.95);
+    final idleDef = scheme.primary.withValues(alpha: 0.85);
     final fraction = max > min
         ? ((defaultValue - min) / (max - min)).clamp(0.0, 1.0)
         : 0.0;
@@ -195,20 +200,25 @@ class _SliderRow extends StatelessWidget {
         ),
         SliderTheme(
           data: SliderTheme.of(context).copyWith(
-            // `year2023: false` = Flutter 的 2024 版 M3 滑块：16px 粗轨道 +
-            // 一根竖条手柄，按下时手柄变细。默认的 2023 版只有 4px 细线，
-            // 在弹窗里看着太轻。
-            //
-            // 这个开关刚被标记为 deprecated（"以后会默认 false"），但现在默认仍是
-            // true，不写它就还是细轨道；等默认翻转后这一行变成无害的空操作。
-            // ignore: deprecated_member_use
-            year2023: false,
-            trackHeight: 16,
-            trackGap: 6,
+            trackHeight: 10,
+            thumbShape: const RoundSliderThumbShape(
+              enabledThumbRadius: 10,
+              elevation: 2,
+              pressedElevation: 4,
+            ),
+            overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
+            // 禁用内置 tickMark：Flutter 内置刻度向内缩进 trackHeight / 2，
+            // 会与 thumbCenter 的坐标系错位。刻度与默认点统一在轨道里按同一坐标系绘制。
+            tickMarkShape: SliderTickMarkShape.noTickMark,
             trackShape: _TickedTrackShape(
+              divisions: divisions,
               tickFraction: fraction,
-              activeTickColor: theme.colorScheme.onPrimary,
-              idleTickColor: theme.colorScheme.onSecondaryContainer,
+              activeTrackColor: scheme.primary,
+              idleTrackColor: scheme.secondaryContainer,
+              activeTickColor: activeTick,
+              idleTickColor: idleTick,
+              activeDefaultColor: activeDef,
+              idleDefaultColor: idleDef,
             ),
           ),
           child: Slider(
@@ -224,25 +234,35 @@ class _SliderRow extends StatelessWidget {
   }
 }
 
-/// 在轨道上多画一根"默认值"刻度。
+/// 胶囊轨道 + 与圆形滑柄中心严格对齐的刻度点与默认值圆环标记。
 ///
-/// 继承 `GappedSliderTrackShape`（2024 版 M3 的轨道，手柄两侧留缺口）而不是
-/// 在 Slider 外面套一层 Stack：只有 `getPreferredRect` 给的矩形才是轨道真正的两端，
-/// 而且缺口要按 `thumbCenter` 让位，自己算位置一定会偏。
-class _TickedTrackShape extends GappedSliderTrackShape {
+/// 为什么自己画轨道和刻度：
+///  1. `GappedSliderTrackShape` 会在滑柄两侧留缺口，填充条右端到不了滑柄中心；
+///  2. Flutter 内置 `RoundSliderTickMarkShape` 按 `trackWidth - trackHeight`
+///     向内缩进算刻度，而 `RenderSlider` 的 `thumbCenter.dx` 按全宽 `trackWidth`
+///     线性插值，两者在非中点处必然错位。
+/// 这里统一用 `rect.left + rect.width * t` 算填充条、刻度点与默认位置标记，
+/// 保证圆形滑柄中心、填充条右端、当前刻度点、默认位置标记四者完全对齐。
+class _TickedTrackShape extends SliderTrackShape with BaseSliderTrackShape {
   const _TickedTrackShape({
+    required this.divisions,
     required this.tickFraction,
+    required this.activeTrackColor,
+    required this.idleTrackColor,
     required this.activeTickColor,
     required this.idleTickColor,
+    required this.activeDefaultColor,
+    required this.idleDefaultColor,
   });
 
+  final int divisions;
   final double tickFraction;
-
-  /// 落在已走过的一段（主色轨道）上的刻度颜色。
+  final Color activeTrackColor;
+  final Color idleTrackColor;
   final Color activeTickColor;
-
-  /// 落在未走过的一段（浅色轨道）上的刻度颜色。
   final Color idleTickColor;
+  final Color activeDefaultColor;
+  final Color idleDefaultColor;
 
   @override
   void paint(
@@ -256,22 +276,8 @@ class _TickedTrackShape extends GappedSliderTrackShape {
     Offset? secondaryOffset,
     bool isDiscrete = false,
     bool isEnabled = false,
-    double additionalActiveTrackHeight = 2,
+    double additionalActiveTrackHeight = 0,
   }) {
-    super.paint(
-      context,
-      offset,
-      parentBox: parentBox,
-      sliderTheme: sliderTheme,
-      enableAnimation: enableAnimation,
-      textDirection: textDirection,
-      thumbCenter: thumbCenter,
-      secondaryOffset: secondaryOffset,
-      isDiscrete: isDiscrete,
-      isEnabled: isEnabled,
-      additionalActiveTrackHeight: additionalActiveTrackHeight,
-    );
-    if (tickFraction < 0 || tickFraction > 1) return;
     final rect = getPreferredRect(
       parentBox: parentBox,
       offset: offset,
@@ -279,17 +285,57 @@ class _TickedTrackShape extends GappedSliderTrackShape {
       isEnabled: isEnabled,
       isDiscrete: isDiscrete,
     );
-    final x = rect.left + rect.width * tickFraction;
-    // 刻度比轨道高出一点，压在两种底色上都看得见。
-    final half = rect.height / 2 + 2;
-    final paint = Paint()
-      ..color = x <= thumbCenter.dx ? activeTickColor : idleTickColor
-      ..strokeWidth = 2
-      ..strokeCap = StrokeCap.round;
-    context.canvas.drawLine(
-      Offset(x, rect.center.dy - half),
-      Offset(x, rect.center.dy + half),
-      paint,
+    if (rect.isEmpty) return;
+
+    final canvas = context.canvas;
+    final r = rect.height / 2;
+    final radius = Radius.circular(r);
+    final left = rect.left - r;
+    final right = rect.right + r;
+    final top = rect.top;
+    final bottom = rect.bottom;
+    final thumbX = thumbCenter.dx;
+
+    // 1. 完整底轨：两端向外延展半个轨道高度，让半圆端帽自然包住首尾刻度点。
+    final fullRect = Rect.fromLTRB(left, top, right, bottom);
+    final fullRRect = RRect.fromRectAndRadius(fullRect, radius);
+    canvas.drawRRect(fullRRect, Paint()..color = idleTrackColor);
+
+    // 2. 已填充轨道：左端带圆角，右端严格停在圆形滑柄中心 thumbCenter.dx。
+    final activeRect = Rect.fromLTRB(left, top, thumbX, bottom);
+    final activeRRect = RRect.fromRectAndCorners(
+      activeRect,
+      topLeft: radius,
+      bottomLeft: radius,
     );
+    canvas.drawRRect(activeRRect, Paint()..color = activeTrackColor);
+
+    final cy = rect.center.dy;
+    final hasDefault = tickFraction >= 0 && tickFraction <= 1;
+    final defaultX = rect.left + rect.width * tickFraction;
+
+    // 3. 分段刻度点：与 RenderSlider 计算 thumbCenter.dx 用同一线性坐标。
+    if (divisions > 0) {
+      final activePaint = Paint()..color = activeTickColor;
+      final idlePaint = Paint()..color = idleTickColor;
+      for (var i = 0; i <= divisions; i++) {
+        final x = rect.left + rect.width * (i / divisions);
+        if (hasDefault && (x - defaultX).abs() < 0.5) continue;
+        final paint = x <= thumbX ? activePaint : idlePaint;
+        canvas.drawCircle(Offset(x, cy), 1.5, paint);
+      }
+    }
+
+    // 4. 默认值标记：同心圆环靶点，严格落在默认刻度坐标上；
+    //    滑柄停在默认值时正中覆盖它，滑开后露出圆环提示归位点。
+    if (hasDefault) {
+      final onActive = defaultX <= thumbX;
+      final ringColor = onActive ? activeDefaultColor : idleDefaultColor;
+      final ringPaint = Paint()
+        ..color = ringColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.6;
+      canvas.drawCircle(Offset(defaultX, cy), 3.0, ringPaint);
+    }
   }
 }

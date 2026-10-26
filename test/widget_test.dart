@@ -1581,6 +1581,21 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(SchoolAddressPage), findsOneWidget);
     });
+
+    testWidgets('展开动画途中可随时打断（点菜单项或点外部）', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 60));
+
+      // 动画才走一半年，直接点空白处打断收起。
+      await tester.tapAt(const Offset(20, 200));
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+    });
   });
 
   group('外观面板', () {
@@ -1629,7 +1644,7 @@ void main() {
       expect(after.height, greaterThan(before.height), reason: '行高变了，格子跟着变高');
     });
 
-    testWidgets('滑块是粗轨道（2024 版 M3 样式）', (tester) async {
+    testWidgets('滑块使用圆形滑柄与对齐轨道', (tester) async {
       final model = buildModel();
       await openSheet(tester, model);
 
@@ -1643,13 +1658,9 @@ void main() {
                 .first,
           )
           .data;
-      expect(
-        theme.trackHeight,
-        greaterThanOrEqualTo(12),
-        reason: '要粗轨道，不是 4px 细线',
-      );
-      // 刻度叠加在 gapped 轨道上：继承错了（圆角轨道）就没有手柄两侧的缺口。
-      expect(theme.trackShape, isA<GappedSliderTrackShape>());
+      expect(theme.thumbShape, isA<RoundSliderThumbShape>());
+      expect(theme.tickMarkShape, SliderTickMarkShape.noTickMark);
+      expect(theme.trackShape, isNot(isA<GappedSliderTrackShape>()));
     });
 
     testWidgets('恢复默认把两个值都退回默认', (tester) async {
@@ -2151,6 +2162,21 @@ void main() {
       await tester.tap(find.text('教务地址'));
       await tester.pumpAndSettle();
       expect(find.byType(SchoolAddressPage), findsOneWidget);
+    });
+
+    testWidgets('展开动画途中可随时打断（点菜单项或点外部）', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 60));
+
+      // 动画才走一半年，直接点空白处打断收起。
+      await tester.tapAt(const Offset(20, 200));
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
     });
   });
 
