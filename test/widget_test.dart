@@ -2407,6 +2407,36 @@ void main() {
       expect(model.week, 1);
       expect(todayFab(tester).opacity, 0, reason: '回到本周后自动收起');
     });
+
+    testWidgets('翻页动画途中点击"今"能打断动画并回到本周', (tester) async {
+      tester.view.physicalSize = const Size(400, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      final model = buildModel();
+      final today = DateTime.now();
+      model.hydrateForTest(
+        schedule: sparseSchedule(),
+        week: 1,
+        termStart: mondayOf(today),
+      );
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      await tester.pumpAndSettle();
+
+      // 从第 1 周滑向第 2 周，动画过半但尚未停稳（model.week 仍为 1）。
+      await tester.fling(find.byType(PageView), const Offset(-260, 0), 1200);
+      await tester.pump(const Duration(milliseconds: 40));
+      expect(find.text('第 2 周'), findsOneWidget);
+      expect(model.week, 1);
+
+      await tester.tap(find.text('今'));
+      await tester.pumpAndSettle();
+
+      expect(pagerPage(tester), 0);
+      expect(model.week, 1);
+      expect(find.text('第 1 周'), findsOneWidget);
+      expect(todayFab(tester).opacity, 0);
+    });
   });
 
   group('折叠动效', () {

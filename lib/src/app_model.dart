@@ -48,6 +48,18 @@ enum AppStatus {
   failed,
 }
 
+/// 周次通知源：在 [ValueNotifier] 基础上支持同值强制重发。
+///
+/// 手势翻页途中只改顶栏 `shownWeek`，停稳才回写 `model.week`。
+/// 若动画还没停稳（`model.week` 仍等于原周）用户就点「今」或选周切回原周，
+/// 目标值与 `_week` 相同；普通 [ValueNotifier] 会忽略同值赋值，这里显式广播。
+class WeekNotifier extends ValueNotifier<int> {
+  WeekNotifier(super._value);
+
+  /// 强制广播当前周次。
+  void notify() => notifyListeners();
+}
+
 class AppModel extends ChangeNotifier {
   AppModel({
     ScheduleService? service,
@@ -149,7 +161,7 @@ class AppModel extends ChangeNotifier {
   /// 周次是"看哪一页"，不是课表内容：改它不该把整张课表重建一次（实测一次
   /// 整页重建 60ms+，而翻页落稳、点箭头、选周都会改周次）。所以它走自己的
   /// notifier —— 只有顶栏、右下角按钮和翻页逻辑监听它，课表网格不监听。
-  final ValueNotifier<int> weekNotifier = ValueNotifier<int>(1);
+  final WeekNotifier weekNotifier = WeekNotifier(1);
 
   /// 设置当前周次。
   ///
@@ -776,7 +788,13 @@ class AppModel extends ChangeNotifier {
   /// 切到指定周（越界自动收敛）。
   void goToWeek(int week) {
     // 只发周次通知：整页重建对"换一页"是白干的（见 weekNotifier 的说明）。
-    _setWeek(week);
+    final int next = _clampWeek(week);
+    if (next == _week) {
+      weekNotifier.notify();
+      return;
+    }
+    _week = next;
+    weekNotifier.value = next;
   }
 
   void nextWeek() => goToWeek(_week + 1);

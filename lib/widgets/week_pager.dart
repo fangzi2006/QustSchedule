@@ -117,6 +117,7 @@ class WeekPagerController extends PageController {
       return Future<void>.value();
     }
     // 记下"正在去哪一页"：动画途中手指接管时，这一页就是新的起手页。
+    pager.gestureOrigin = null;
     pager.headingTo = page.toDouble();
     return pager.animateTo(
       pager.pixelsForPage(page.toDouble()),
@@ -134,6 +135,7 @@ class WeekPagerController extends PageController {
       return;
     }
     // 瞬移没有"在途目标"，清掉免得下一次手势拿它当起手页。
+    pager.gestureOrigin = null;
     pager.headingTo = null;
     pager.jumpTo(pager.pixelsForPage(page.toDouble()));
   }
@@ -159,6 +161,8 @@ class _WeekPagerPosition extends ScrollPositionWithSingleContext
 
   /// 这次手势从哪一页起手（松手算落点时用）。
   double? _gestureOrigin;
+
+  set gestureOrigin(double? value) => _gestureOrigin = value;
 
   /// 正在吸附 / 动画去往的页；不在途中时为 null。
   double? _headingTo;
@@ -248,19 +252,6 @@ class _WeekPagerPosition extends ScrollPositionWithSingleContext
 
   @override
   Drag drag(DragStartDetails details, VoidCallback dragCancelCallback) {
-    // 起手页：如果上一次翻页还在吸附途中，就用它要落的那一页 ——
-    // 连滑两下时，第二下应该从"第一下要落的页"继续，而不是从半页继续，
-    // 否则第二下会被算成"原地不动"，看起来就像丢了一页。
-    // 但落差超过一页半就不认它（比如点了箭头连跳好几周、途中又被手接管），
-    // 那种情况下按当前页算，免得手一拨就飞出好几页。
-    final double? current = page;
-    final double? heading = _headingTo;
-    _gestureOrigin =
-        heading != null && current != null && (heading - current).abs() <= 1.5
-        ? heading
-        : current?.roundToDouble();
-    _headingTo = null;
-
     // 静止时没有任何东西需要保护：手指一动就接管（零死区，最跟手）。
     // 动画 / 惯性还在跑时要先攒够 kTouchSlop，否则一次纯按住就会把活动停掉。
     final bool inFlight =
@@ -274,8 +265,21 @@ class _WeekPagerPosition extends ScrollPositionWithSingleContext
 
   /// 真正接管位置：走框架原本那套（`ScrollDragController` + `DragScrollActivity`）。
   /// 抽成方法是为了能在闭包里对 `super` 发调用。
-  Drag _beginDrag(DragStartDetails details, VoidCallback onCanceled) =>
-      super.drag(details, onCanceled);
+  Drag _beginDrag(DragStartDetails details, VoidCallback onCanceled) {
+    // 起手页：如果上一次翻页还在吸附途中，就用它要落的那一页 ——
+    // 连滑两下时，第二下应该从"第一下要落的页"继续，而不是从半页继续，
+    // 否则第二下会被算成"原地不动"，看起来就像丢了一页。
+    // 但落差超过一页半就不认它（比如点了箭头连跳好几周、途中又被手接管），
+    // 那种情况下按当前页算，免得手一拨就飞出好几页。
+    final double? current = page;
+    final double? heading = _headingTo;
+    _gestureOrigin =
+        heading != null && current != null && (heading - current).abs() <= 1.5
+        ? heading
+        : current?.roundToDouble();
+    _headingTo = null;
+    return super.drag(details, onCanceled);
+  }
 
   /// 松手后的落点：**以起手页为锚，一次手势只走一页**。
   @override

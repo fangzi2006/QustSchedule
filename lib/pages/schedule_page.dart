@@ -504,11 +504,13 @@ class _WeekPagerState extends State<_WeekPager> {
     if (_animatingTo == target) return;
 
     final page = _controller.page;
+    final settled = !_dragging && _animatingTo == null;
     // 已经停在那页上（位置比 round() 可信），不为半个像素再动一次。
-    if (_animatingTo == null && page != null && (page - target).abs() < 0.02) {
+    if (settled && page != null && (page - target).abs() < 0.02) {
       return;
     }
 
+    _dragging = false;
     _animatingTo = target;
     _controller
         .animateToPage(target, duration: _flipDuration, curve: Curves.easeOut)
@@ -558,6 +560,7 @@ class _WeekPagerState extends State<_WeekPager> {
     final page = _controller.page;
     if (page == null) return;
     final week = page.round() + 1;
+    if (widget.shownWeek.value != week) widget.shownWeek.value = week;
     if (week != model.week) _writeWeek(week);
   }
 
