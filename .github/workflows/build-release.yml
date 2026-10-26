@@ -176,6 +176,7 @@ jobs:
         run: flutter build apk --release --split-per-abi --target-platform android-arm,android-arm64
 
       - name: Collect Android artifacts
+        id: collect
         run: |
           VERSION=$(grep '^version:' pubspec.yaml | sed -E 's/version:[[:space:]]*//; s/\+.*//' | tr -d '\r ')
           mkdir -p dist
@@ -188,12 +189,26 @@ jobs:
             cp build/app/outputs/flutter-apk/app-*-release.apk dist/ 2>/dev/null || true
             echo "未找到版本前缀 APK，已复制 AGP 拆分产物"
           fi
+          ARM64=$(ls dist/*arm64-v8a*.apk 2>/dev/null | head -1)
+          ARMV7=$(ls dist/*armeabi-v7a*.apk 2>/dev/null | head -1)
+          echo "arm64=$ARM64" >> "$GITHUB_OUTPUT"
+          echo "armv7=$ARMV7" >> "$GITHUB_OUTPUT"
 
-      - name: Upload Android Artifact (供在 Actions 页面下载)
-        uses: actions/upload-artifact@v4
+      # 单文件直接上传，archive: false 使得在 Actions 页面点击可直接下载安装包本身（非 zip 压缩包）
+      - name: Upload Android APK (arm64-v8a)
+        if: steps.collect.outputs.arm64 != ''
+        uses: actions/upload-artifact@v7
         with:
-          name: artifact-android
-          path: dist/*.apk
+          path: ${{ steps.collect.outputs.arm64 }}
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload Android APK (armeabi-v7a)
+        if: steps.collect.outputs.armv7 != ''
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.collect.outputs.armv7 }}
+          archive: false
           if-no-files-found: error
 
   # ================= 3. 编译 Windows 客户端（与测试、Android 同时起跑） =================
@@ -232,6 +247,7 @@ jobs:
           }
 
       - name: Package Windows Installer & Zip
+        id: package
         shell: pwsh
         run: |
           $Version = ((Select-String -Path pubspec.yaml -Pattern '^version:').Line -replace '^version:\s*','' -replace '\+.*','').Trim()
@@ -241,15 +257,26 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$Version /O"dist" "windows\packaging\setup.iss"
 
           # 2. 便携版 Zip
-          Compress-Archive -Path "build/windows/x64/runner/Release/*" -DestinationPath "dist/QustSchedule_v${Version}-windows-x64.zip" -Force
+          $ZipPath = "dist/QustSchedule_v${Version}-windows-x64.zip"
+          Compress-Archive -Path "build/windows/x64/runner/Release/*" -DestinationPath $ZipPath -Force
 
-      - name: Upload Windows Artifacts (供在 Actions 页面下载)
-        uses: actions/upload-artifact@v4
+          $SetupPath = (Get-ChildItem -Path dist -Filter "*setup.exe" | Select-Object -First 1).FullName
+          "setup=$SetupPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "zip=$ZipPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      # 单文件上传，archive: false 避免在外层再套一层 zip 压缩包
+      - name: Upload Windows Setup Installer (.exe)
+        uses: actions/upload-artifact@v7
         with:
-          name: artifact-windows
-          path: |
-            dist/*.exe
-            dist/*.zip
+          path: ${{ steps.package.outputs.setup }}
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload Windows Portable Zip (.zip)
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.package.outputs.zip }}
+          archive: false
           if-no-files-found: error
 
   # ================= 4. 发布 GitHub Release（仅 v* 标签，且测试与双端打包全部成功） =================
@@ -271,10 +298,9 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Download All Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
-          pattern: artifact-*
           merge-multiple: true
 
       - name: Generate SHA256SUMS
