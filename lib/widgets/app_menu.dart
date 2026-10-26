@@ -183,9 +183,10 @@ class _AppMenu<T> extends StatelessWidget {
     const half = 70.0;
     final maxLeft = math.max(8.0, screen.width - 140.0 - 8.0);
     final left = (anchor.center.dx - half).clamp(8.0, maxLeft);
-    final alignX = ((anchor.center.dx - left) / half - 1.0).clamp(-0.85, 0.85);
+    final dxRatio = (anchor.center.dx - left) / half - 1.0;
+    final alignX = dxRatio.clamp(-0.85, 0.85);
     final alignY = openUp ? 1.0 : -1.0;
-    final curtainAlign = openUp ? Alignment.bottomCenter : Alignment.topCenter;
+    final align = openUp ? Alignment.bottomCenter : Alignment.topCenter;
 
     return AnimatedBuilder(
       animation: animation,
@@ -207,7 +208,7 @@ class _AppMenu<T> extends StatelessWidget {
             // 必须裁剪：既防止水波纹越出圆角，又在帷幕展开时裁出平滑圆角底边。
             clipBehavior: Clip.antiAlias,
             child: Align(
-              alignment: curtainAlign,
+              alignment: align,
               heightFactor: heightFactor,
               child: ConstrainedBox(
                 constraints: BoxConstraints(maxHeight: maxHeight),
@@ -246,14 +247,20 @@ class _AppMenu<T> extends StatelessWidget {
     final itemT = Curves.easeOutCubic.transform(raw);
     final dy = (1.0 - itemT) * (openUp ? 6.0 : -6.0);
 
-    final child = item.isDivider
-        ? Divider(height: 1, thickness: divider.thickness, color: divider.color)
-        : _MenuTile<T>(item: item);
+    final Widget child;
+    if (item.isDivider) {
+      child = Divider(
+        height: 1,
+        thickness: divider.thickness,
+        color: divider.color,
+      );
+    } else {
+      child = _MenuTile<T>(item: item);
+    }
 
-    return Opacity(
-      opacity: itemT,
-      child: Transform.translate(offset: Offset(0, dy), child: child),
-    );
+    final offset = Offset(0, dy);
+    final shifted = Transform.translate(offset: offset, child: child);
+    return Opacity(opacity: itemT, child: shifted);
   }
 }
 

@@ -243,7 +243,7 @@ class _SliderRow extends StatelessWidget {
 ///     线性插值，两者在非中点处必然错位。
 /// 这里统一用 `rect.left + rect.width * t` 算填充条、刻度点与默认位置标记，
 /// 保证圆形滑柄中心、填充条右端、当前刻度点、默认位置标记四者完全对齐。
-class _TickedTrackShape extends SliderTrackShape with BaseSliderTrackShape {
+class _TickedTrackShape extends RoundedRectSliderTrackShape {
   const _TickedTrackShape({
     required this.divisions,
     required this.tickFraction,
@@ -297,18 +297,20 @@ class _TickedTrackShape extends SliderTrackShape with BaseSliderTrackShape {
     final thumbX = thumbCenter.dx;
 
     // 1. 完整底轨：两端向外延展半个轨道高度，让半圆端帽自然包住首尾刻度点。
+    final idleTrackPaint = Paint()..color = idleTrackColor;
     final fullRect = Rect.fromLTRB(left, top, right, bottom);
     final fullRRect = RRect.fromRectAndRadius(fullRect, radius);
-    canvas.drawRRect(fullRRect, Paint()..color = idleTrackColor);
+    canvas.drawRRect(fullRRect, idleTrackPaint);
 
     // 2. 已填充轨道：左端带圆角，右端严格停在圆形滑柄中心 thumbCenter.dx。
+    final activeTrackPaint = Paint()..color = activeTrackColor;
     final activeRect = Rect.fromLTRB(left, top, thumbX, bottom);
     final activeRRect = RRect.fromRectAndCorners(
       activeRect,
       topLeft: radius,
       bottomLeft: radius,
     );
-    canvas.drawRRect(activeRRect, Paint()..color = activeTrackColor);
+    canvas.drawRRect(activeRRect, activeTrackPaint);
 
     final cy = rect.center.dy;
     final hasDefault = tickFraction >= 0 && tickFraction <= 1;
