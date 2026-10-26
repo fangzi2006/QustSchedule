@@ -140,10 +140,7 @@ Future<int?> showWeekCalibrationWheel(
   return showModalBottomSheet<int>(
     context: context,
     showDragHandle: true,
-    builder: (context) => _WeekCalibrationSheet(
-      currentWeek: currentWeek,
-      maxWeek: maxWeek,
-    ),
+    builder: (context) => _CalibrateSheet(week: currentWeek, max: maxWeek),
   );
 }
 
@@ -746,21 +743,18 @@ class _SectionCountSheetState extends State<_SectionCountSheet> {
   }
 }
 
-class _WeekCalibrationSheet extends StatefulWidget {
-  const _WeekCalibrationSheet({
-    required this.currentWeek,
-    required this.maxWeek,
-  });
+class _CalibrateSheet extends StatefulWidget {
+  const _CalibrateSheet({required this.week, required this.max});
 
-  final int currentWeek;
-  final int maxWeek;
+  final int week;
+  final int max;
 
   @override
-  State<_WeekCalibrationSheet> createState() => _WeekCalibrationSheetState();
+  State<_CalibrateSheet> createState() => _CalibrateSheetState();
 }
 
-class _WeekCalibrationSheetState extends State<_WeekCalibrationSheet> {
-  late int _week = widget.currentWeek.clamp(1, widget.maxWeek);
+class _CalibrateSheetState extends State<_CalibrateSheet> {
+  late int _week = widget.week.clamp(1, widget.max);
 
   @override
   Widget build(BuildContext context) {
@@ -776,7 +770,7 @@ class _WeekCalibrationSheetState extends State<_WeekCalibrationSheet> {
         child: const Text('恢复默认估算'),
       ),
       wheels: _Wheel(
-        labels: <String>[for (var w = 1; w <= widget.maxWeek; w++) '第 $w 周'],
+        labels: <String>[for (var w = 1; w <= widget.max; w++) '第 $w 周'],
         initialIndex: _week - 1,
         textStyle: theme.textTheme.titleMedium,
         onChanged: (index) => setState(() => _week = index + 1),
