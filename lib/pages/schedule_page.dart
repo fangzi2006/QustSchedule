@@ -31,6 +31,7 @@ import '../widgets/course_detail_sheet.dart';
 import '../widgets/course_tile.dart';
 import '../widgets/floating_dock.dart';
 import '../widgets/week_pager.dart';
+import '../widgets/time_wheel_picker.dart';
 import 'appearance_sheet.dart';
 import 'reschedule_page.dart';
 import 'school_address_page.dart';
@@ -1198,100 +1199,20 @@ Future<void> showWeekPicker(
   );
 }
 
-/// 校准："本周实际是第几周" → 反推开学日并持久化。
-void showCalibrateSheet(BuildContext context, AppModel model) {
-  showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
-    builder: (context) => _CalibrateSheet(model: model),
+/// 校准：'本周实际是第几周' → 滚轮选择并反推开学日落盘。
+Future<void> showCalibrateSheet(BuildContext context, AppModel model) async {
+  final picked = await showWeekCalibrationWheel(
+    context,
+    currentWeek: model.currentWeekOfToday,
+    maxWeek: model.maxWeek > 30 ? model.maxWeek : 30,
   );
-}
-
-/// 校准弹窗的内容。
-///
-/// 单独一个 StatefulWidget：输入框的 [TextEditingController] 由它持有，
-/// 弹窗关掉时跟着 dispose —— 控制器放在函数里 new 出来就没人管了（泄漏），
-/// 而在弹窗退场动画还没走完时就 dispose 又会报"disposed 后又被使用"。
-class _CalibrateSheet extends StatefulWidget {
-  const _CalibrateSheet({required this.model});
-
-  final AppModel model;
-
-  @override
-  State<_CalibrateSheet> createState() => _CalibrateSheetState();
-}
-
-class _CalibrateSheetState extends State<_CalibrateSheet> {
-  late final TextEditingController _controller = TextEditingController(
-    text: '${widget.model.currentWeekOfToday}',
-  );
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final AppModel model = widget.model;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        20,
-        0,
-        20,
-        MediaQuery.of(context).viewInsets.bottom + 24,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Text('校准当前周次', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Text(
-            '教务系统不提供开学日期，需手动对齐当前周次。\n'
-            '输入「本周是第几周」，系统将自动推算后续日程并保存。',
-            style: Theme.of(context).textTheme.bodySmall
-                ?.copyWith(color: Theme.of(context).hintColor),
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _controller,
-            keyboardType: TextInputType.number,
-            autofocus: true,
-            decoration: const InputDecoration(labelText: '本周是第几周'),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: <Widget>[
-              FilledButton(
-                onPressed: () {
-                  final week = int.tryParse(_controller.text.trim());
-                  if (week != null && week > 0) {
-                    model.calibrateCurrentWeek(week);
-                    Navigator.of(context).pop();
-                  }
-                },
-                child: const Text('保存'),
-              ),
-              const SizedBox(width: 8),
-              TextButton(
-                onPressed: () {
-                  model.resetCalendar();
-                  Navigator.of(context).pop();
-                },
-                child: const Text('恢复默认估算'),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
+  if (picked == null) return;
+  if (picked == 0) {
+    model.resetCalendar();
+  } else {
+    model.calibrateCurrentWeek(picked);
   }
 }
-
-/// 课表页下方的"备注"区：实践课程 / 其他课程（来自课表响应的 `sjkList`）。
 ///
 /// 它放在周网格的滚动内容里（网格下面），跟着课表一起滚；没有备注时不占地方。
 class _ScheduleRemarks extends StatelessWidget {

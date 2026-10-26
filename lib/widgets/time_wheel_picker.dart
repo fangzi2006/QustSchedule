@@ -16,6 +16,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
+import '../src/term_calendar.dart';
 import '../src/timetable.dart';
 
 /// 弹出时间轮，返回从 00:00 起的分钟数；取消返回 null。
@@ -127,6 +128,25 @@ Future<Map<PeriodGroup, int>?> showSectionCountWheel(
   );
 }
 
+/// 弹出周次校准轮：选择「本周实际是第几周」。
+///
+/// 返回选中的周次（>= 1）；
+/// 若点击「恢复默认估算」返回 0；取消返回 null。
+Future<int?> showWeekCalibrationWheel(
+  BuildContext context, {
+  required int currentWeek,
+  int maxWeek = 30,
+}) {
+  return showModalBottomSheet<int>(
+    context: context,
+    showDragHandle: true,
+    builder: (context) => _WeekCalibrationSheet(
+      currentWeek: currentWeek,
+      maxWeek: maxWeek,
+    ),
+  );
+}
+
 /// 一列滚轮。
 ///
 /// 自己持有 `FixedExtentScrollController` 与当前索引：鼠标滚轮要"一次一格"，
@@ -222,6 +242,7 @@ class _WheelShell extends StatelessWidget {
     required this.onConfirm,
     this.confirmEnabled = true,
     this.wheelHeight = 168,
+    this.extraAction,
   });
 
   final String title;
@@ -232,6 +253,7 @@ class _WheelShell extends StatelessWidget {
   final VoidCallback onConfirm;
   final bool confirmEnabled;
   final double wheelHeight;
+  final Widget? extraAction;
 
   @override
   Widget build(BuildContext context) {
@@ -271,6 +293,10 @@ class _WheelShell extends StatelessWidget {
                 color: theme.hintColor,
               ),
             ),
+            if (extraAction != null) ...<Widget>[
+              const SizedBox(height: 6),
+              extraAction!,
+            ],
           ],
         ),
       ),
@@ -715,6 +741,48 @@ class _SectionCountSheetState extends State<_SectionCountSheet> {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+
+class _WeekCalibrationSheet extends StatefulWidget {
+  const _WeekCalibrationSheet({
+    required this.currentWeek,
+    required this.maxWeek,
+  });
+
+  final int currentWeek;
+  final int maxWeek;
+
+  @override
+  State<_WeekCalibrationSheet> createState() => _WeekCalibrationSheetState();
+}
+
+class _WeekCalibrationSheetState extends State<_WeekCalibrationSheet> {
+  late int _week = widget.currentWeek.clamp(1, widget.maxWeek);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final start = termStartFromWeek(DateTime.now(), _week);
+    final suffix = '推算第 1 周周一为 ${start.month}月${start.day}日 · 自动对齐日程';
+    return _WheelShell(
+      title: '校准当前周次',
+      suffix: suffix,
+      onConfirm: () => Navigator.of(context).pop(_week),
+      extraAction: TextButton(
+        onPressed: () => Navigator.of(context).pop(0),
+        child: const Text('恢复默认估算'),
+      ),
+      wheels: _Wheel(
+        labels: <String>[
+          for (var w = 1; w <= widget.maxWeek; w++) '第 $w 周',
+        ],
+        initialIndex: _week - 1,
+        textStyle: theme.textTheme.titleMedium,
+        onChanged: (index) => setState(() => _week = index + 1),
       ),
     );
   }
