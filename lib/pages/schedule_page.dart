@@ -30,8 +30,8 @@ import '../widgets/app_menu.dart';
 import '../widgets/course_detail_sheet.dart';
 import '../widgets/course_tile.dart';
 import '../widgets/floating_dock.dart';
-import '../widgets/week_pager.dart';
 import '../widgets/time_wheel_picker.dart';
+import '../widgets/week_pager.dart';
 import 'appearance_sheet.dart';
 import 'reschedule_page.dart';
 import 'school_address_page.dart';
@@ -1213,6 +1213,8 @@ Future<void> showCalibrateSheet(BuildContext context, AppModel model) async {
     model.calibrateCurrentWeek(picked);
   }
 }
+
+/// 课表页下方的"备注"区：实践课程 / 其他课程（来自课表响应的 `sjkList`）。
 ///
 /// 它放在周网格的滚动内容里（网格下面），跟着课表一起滚；没有备注时不占地方。
 class _ScheduleRemarks extends StatelessWidget {

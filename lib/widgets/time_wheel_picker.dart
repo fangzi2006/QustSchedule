@@ -746,7 +746,6 @@ class _SectionCountSheetState extends State<_SectionCountSheet> {
   }
 }
 
-
 class _WeekCalibrationSheet extends StatefulWidget {
   const _WeekCalibrationSheet({
     required this.currentWeek,
