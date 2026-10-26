@@ -630,7 +630,7 @@ void main() {
           CachedSchedule(
             baseUrl: _baseUrl,
             schedule: sampleSchedule(),
-            fetchedAt: DateTime.now().subtract(const Duration(hours: 1)),
+            fetchedAt: DateTime.now().subtract(const Duration(hours: 4)),
           ),
         ),
       );

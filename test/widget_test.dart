@@ -362,9 +362,9 @@ void main() {
       );
       await tester.pumpWidget(wrap(SchedulePage(model: model)));
 
-      // 卡片高度固定 = 1 格（72-4=68），不会因为内容多而长高。
+      // 卡片高度固定 = 1 格（60-4=56），不会因为内容多而长高。
       final card = tester.getRect(find.byType(CourseBlock));
-      expect(card.height, closeTo(68, 1), reason: '高度固定为一格');
+      expect(card.height, closeTo(56, 1), reason: '高度固定为一格');
 
       // 内容垂直居中：标题顶 + 地点底的中间 ≈ 卡片中线。
       final title = find.descendant(
@@ -505,7 +505,7 @@ void main() {
     /// 用 400 宽的手机视口：一页 400px，手指横扫半屏就能把页面拖过半页，
     /// 正是"滑一下跳过一页"最容易发生的尺度（默认 800 宽测不出来）。
     Future<void> pumpPhone(WidgetTester tester, AppModel model) async {
-      tester.view.physicalSize = const Size(400, 800);
+      tester.view.physicalSize = const Size(400, 640);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
 
@@ -1248,7 +1248,7 @@ void main() {
         weeks: <int>[1],
       );
       await tester.pumpWidget(
-        sized(width: 56, height: 68, entry: entry, textScale: 0.95),
+        sized(width: 56, height: 60, entry: entry, textScale: 0.95),
       );
 
       // 课名最先被省略：压到 1 行 + 省略号。
