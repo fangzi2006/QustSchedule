@@ -1402,8 +1402,11 @@ class AppModel extends ChangeNotifier {
         return '课表数据格式与预期不符。若持续出现，请前往「调试信息」查看请求记录。';
       case ErrorCode.unsupported:
         return '该账号无课表查询权限。';
+      case ErrorCode.accessForbidden:
+        return '访问被拒绝（403）：学校限制了外网访问，请连接校园网后重试。';
       case ErrorCode.untrustedUrl:
-        return '检测到未受信跳转，已中止以确保安全。若学校已更换入口，请更新教务地址。';
+        return '检测到未受信跳转，已中止。若在非校园网环境，请连接校园网后重试；'
+            '若学校更换了入口，请更新教务地址。';
       case ErrorCode.cancelled:
         return '操作已取消。';
       case ErrorCode.validationFailed:

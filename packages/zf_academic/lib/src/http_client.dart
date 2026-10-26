@@ -23,7 +23,7 @@ import 'dart:typed_data';
 
 import 'cookies.dart';
 import 'errors.dart';
-import 'respond.dart' show looksLikeServerError;
+import 'respond.dart' show looksLikeAccessForbidden, looksLikeServerError;
 import 'types.dart';
 import 'urls.dart';
 import 'util.dart';
@@ -373,10 +373,25 @@ class AcademicHttpClient {
           body = null;
         }
         redirects += 1;
+        final resolved = resolveUrl(raw.url, location);
         if (redirects > _maxRedirects) {
+          if (resolved.startsWith('http://')) {
+            await _reclassifyUntrustedRedirect(
+              raw: raw,
+              targetUrl: resolved,
+              purpose: options.purpose,
+            );
+          }
           throw AcademicError(ErrorCode.pageChanged, 'Too many redirects');
         }
-        final next = _upgradeDowngrade(raw.url, resolveUrl(raw.url, location));
+        final next = _upgradeDowngrade(raw.url, resolved);
+        if (next != resolved && next == url) {
+          await _reclassifyUntrustedRedirect(
+            raw: raw,
+            targetUrl: resolved,
+            purpose: options.purpose,
+          );
+        }
         try {
           _ensureAllowed(next);
         } on AcademicError catch (error) {
@@ -393,12 +408,30 @@ class AcademicHttpClient {
               httpStatus: raw.status,
             );
           }
+          if (error.code == ErrorCode.untrustedUrl) {
+            await _reclassifyUntrustedRedirect(
+              raw: raw,
+              targetUrl: resolved,
+              purpose: options.purpose,
+            );
+          }
           rethrow;
         }
         url = next;
         continue;
       }
 
+      if (raw.status == 403) {
+        final snippet = _snippetOf(raw);
+        if (looksLikeAccessForbidden(snippet) ||
+            options.purpose == RequestPurpose.auth) {
+          throw AcademicError(
+            ErrorCode.accessForbidden,
+            '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
+            httpStatus: 403,
+          );
+        }
+      }
       if (raw.status == 401 || raw.status == 403) {
         throw AcademicError(ErrorCode.sessionExpired, '登录已失效，请重新登录',
             httpStatus: raw.status);
@@ -427,6 +460,8 @@ class AcademicHttpClient {
 
   /// 这条响应看起来哪里不对（null = 正常）。用于调试页的"请求记录"。
   String? _issueFor(RawHttpResponse raw) {
+    final snippet = _snippetOf(raw);
+    if (looksLikeAccessForbidden(snippet)) return '访问被拦截（403）';
     if (raw.status >= 500) return 'HTTP ${raw.status} 服务端异常';
     if (raw.status == 429) return 'HTTP 429 请求过多';
     if (raw.status >= 400) return 'HTTP ${raw.status}';
@@ -436,8 +471,12 @@ class AcademicHttpClient {
       return null;
     }
     // 只看开头 4KB：错误页/维护页的原因都在前面，没必要整个解析一遍。
-    final snippet = _decodeWith(_charsetLabelOf(raw), _head(raw.bytes, 4096));
     return looksLikeServerError(snippet) ? '返回错误页' : null;
+  }
+
+  String _snippetOf(RawHttpResponse raw) {
+    if (raw.bytes.isEmpty) return '';
+    return _decodeWith(_charsetLabelOf(raw), _head(raw.bytes, 4096));
   }
 
   Uint8List _head(Uint8List bytes, int max) =>
@@ -548,6 +587,114 @@ class AcademicHttpClient {
     return query.contains('service=') ||
         query.contains('redirect_uri=') ||
         query.contains('ticket=');
+  }
+
+  /// 当请求被 3xx 跳转到白名单之外的地址（如外网被校园网网关/WAF 拦截跳转）时，
+  /// 识别该跳转是否实际上指向「访问出错-403」策略拦截页或 5xx 维护页。
+  ///
+  /// 探测请求仅发纯 GET，不带 Cookie、Referer 或表单体，也不写回 CookieStore。
+  Future<void> _reclassifyUntrustedRedirect({
+    required RawHttpResponse raw,
+    required String targetUrl,
+    required RequestPurpose purpose,
+  }) async {
+    if (looksLikeAccessForbidden(_snippetOf(raw)) ||
+        _looksLikeBlockRedirectUrl(targetUrl)) {
+      throw AcademicError(
+        ErrorCode.accessForbidden,
+        '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
+        httpStatus: 403,
+      );
+    }
+
+    var currentUrl = targetUrl;
+    final probeTimeout = _timeoutMs < 5000 ? _timeoutMs : 5000;
+    for (var hop = 0; hop < 2; hop++) {
+      final uri = Uri.tryParse(currentUrl);
+      if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+        return;
+      }
+      RawHttpResponse probeRaw;
+      try {
+        probeRaw = await _transport(RawHttpRequest(
+          method: 'GET',
+          url: uri,
+          headers: <String, String>{
+            'Accept': _defaultAccept,
+            'User-Agent': _userAgent,
+            'Accept-Language': _defaultAcceptLanguage,
+          },
+        )).timeout(Duration(milliseconds: probeTimeout));
+      } catch (_) {
+        return;
+      }
+
+      if (probeRaw.status == raw.status &&
+          probeRaw.url == raw.url &&
+          probeRaw.bytes.isEmpty) {
+        return;
+      }
+
+      final snippet = _snippetOf(probeRaw);
+      if (probeRaw.status == 403 || looksLikeAccessForbidden(snippet)) {
+        _onRequest?.call(RequestLog(
+          method: 'GET',
+          url: probeRaw.url,
+          status: probeRaw.status,
+          purpose: purpose == RequestPurpose.auth
+              ? RequestPurpose.auth
+              : RequestPurpose.query,
+          issue: '访问被拦截（403）',
+        ));
+        throw AcademicError(
+          ErrorCode.accessForbidden,
+          '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
+          httpStatus: 403,
+        );
+      }
+      if (probeRaw.status >= 500 || looksLikeServerError(snippet)) {
+        _onRequest?.call(RequestLog(
+          method: 'GET',
+          url: probeRaw.url,
+          status: probeRaw.status,
+          purpose: purpose == RequestPurpose.auth
+              ? RequestPurpose.auth
+              : RequestPurpose.query,
+          issue: _issueFor(probeRaw),
+        ));
+        throw AcademicError(
+          ErrorCode.serverError,
+          '教务系统服务端异常（HTTP ${probeRaw.status}），请稍后重试',
+          httpStatus: probeRaw.status,
+        );
+      }
+
+      if (probeRaw.status >= 300 && probeRaw.status <= 399) {
+        final nextLoc = _firstHeader(probeRaw.headers, 'location');
+        if (nextLoc == null || nextLoc.isEmpty) return;
+        final nextUrl = resolveUrl(probeRaw.url, nextLoc);
+        if (_looksLikeBlockRedirectUrl(nextUrl)) {
+          throw AcademicError(
+            ErrorCode.accessForbidden,
+            '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
+            httpStatus: 403,
+          );
+        }
+        if (nextUrl == currentUrl) return;
+        currentUrl = nextUrl;
+        continue;
+      }
+      return;
+    }
+  }
+
+  static bool _looksLikeBlockRedirectUrl(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return false;
+    final lower = '${uri.path}?${uri.query}'.toLowerCase();
+    return RegExp(
+      r'(?:^|[/_\-?=&])(?:403|forbid(?:den)?|access[_-]?denied)(?:$|[/_\-.&])',
+    ).hasMatch(lower);
   }
 
   void _ensureAllowed(String value) {

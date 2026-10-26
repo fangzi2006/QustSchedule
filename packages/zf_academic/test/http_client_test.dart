@@ -368,6 +368,50 @@ void main() {
       await client.get('$_root/kbcx/xskbcx_cxXsKb.html');
       expect(logs.single.issue, isNull);
     });
+
+    test('外网被拦截的「访问出错-403」页（HTTP 200）→ ACCESS_FORBIDDEN', () {
+      const body = '<html><head><title>访问出错-403</title></head>'
+          '<body><p>访问策略禁止您访问该网站</p><small>错误代码：403</small></body></html>';
+      expect(looksLikeAccessForbidden(body), isTrue);
+      expect(
+        () => listRows(body, const <String>['kbList']),
+        throwsA(isA<AcademicError>()
+            .having((error) => error.code, 'code', ErrorCode.accessForbidden)),
+      );
+    });
+
+    test('302 跳转到外部拦截页「访问出错-403」→ ACCESS_FORBIDDEN', () async {
+      const blockHtml = '<html><head><title>访问出错-403</title></head>'
+          '<body>访问策略禁止您访问该网站（错误代码：403）</body></html>';
+      final fake = FakeTransport(<RawHttpResponse>[
+        _response(302, location: 'http://jw.example.edu.cn:8080/block.html'),
+        _response(
+          200,
+          url: 'http://jw.example.edu.cn:8080/block.html',
+          body: blockHtml,
+        ),
+      ]);
+      final client = _client(fake);
+      await expectLater(
+        client.get('$_root/kbcx/xskbcx_cxXsKb.html'),
+        throwsA(isA<AcademicError>()
+            .having((error) => error.code, 'code', ErrorCode.accessForbidden)),
+      );
+    });
+
+    test('HTTP 403 访问策略拦截页 → ACCESS_FORBIDDEN', () async {
+      const blockHtml = '<html><head><title>访问出错-403</title></head>'
+          '<body>访问策略禁止您访问该网站</body></html>';
+      final fake = FakeTransport(<RawHttpResponse>[
+        _response(403, body: blockHtml),
+      ]);
+      final client = _client(fake);
+      await expectLater(
+        client.get('$_root/kbcx/xskbcx_cxXsKb.html'),
+        throwsA(isA<AcademicError>()
+            .having((error) => error.code, 'code', ErrorCode.accessForbidden)),
+      );
+    });
   });
 
   group('状态码映射与重试', () {

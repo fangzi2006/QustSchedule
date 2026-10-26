@@ -23,6 +23,9 @@ enum ErrorCode {
   /// 与 [networkRetryable] 分开：那个是"没连上/断了"，这个是"服务器自己坏了"。
   /// 混在一起会让人以为是手机网络问题，白白去查网络。
   serverError('SERVER_ERROR'),
+
+  /// 访问被防火墙或网关策略拒绝（如外网访问仅限校园网的教务时返回「访问出错-403」）。
+  accessForbidden('ACCESS_FORBIDDEN'),
   resultUnknown('RESULT_UNKNOWN'),
   untrustedUrl('UNTRUSTED_URL'),
   validationFailed('VALIDATION_FAILED'),

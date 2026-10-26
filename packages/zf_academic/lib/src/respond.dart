@@ -55,6 +55,39 @@ bool looksLikeServerError(String body) {
   return false;
 }
 
+/// 响应正文是否像防火墙 / 网关策略拦截页（如外网被校园网网关拦截时的「访问出错-403」页）。
+///
+/// 典型来源：深信服 / 校园网防火墙对非校园网 IP 返回的拦截页，标题为「访问出错-403」，
+/// 正文提示「访问策略禁止您访问该网站」及「错误代码：403」。与 [looksLikeServerError]
+/// 区分开：此类错误并非教务服务器崩溃，而是学校限制了外网直连。
+bool looksLikeAccessForbidden(String body) {
+  if (body.isEmpty) return false;
+  final text = body.toLowerCase();
+  const markers = <String>[
+    '访问出错-403',
+    '访问出错',
+    '访问策略禁止',
+    '禁止您访问',
+    '访问策略',
+    '仅限校园网',
+    '仅限校内',
+    '校园网内访问',
+    '403 forbidden',
+    'access denied',
+    'request forbidden',
+  ];
+  for (final marker in markers) {
+    if (text.contains(marker)) return true;
+  }
+  if (text.contains('403') &&
+      (text.contains('禁止访问') ||
+          text.contains('拒绝访问') ||
+          text.contains('错误代码'))) {
+    return true;
+  }
+  return false;
+}
+
 /// 从 JSON 字段、`alert()` 或可见文本里取一句人话错误信息（截断 180 字，与原实现一致）。
 String messageOf(String body) {
   // 新正方的错误页会把原因写在 .error_text / .error_text0 里，优先取它。
@@ -171,6 +204,13 @@ List<Map<String, dynamic>> listRows(String body, List<String> keys) {
   }
   final root = _tryParseJson(text);
   if (root == null) {
+    if (looksLikeAccessForbidden(text)) {
+      throw AcademicError(
+        ErrorCode.accessForbidden,
+        '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
+        httpStatus: 403,
+      );
+    }
     // 先分清"服务器坏了"和"页面改版了"：两者的处置完全不同。
     if (looksLikeServerError(text)) {
       throw AcademicError(
@@ -264,6 +304,13 @@ List<Map<String, dynamic>> listRowsOrEmpty(String body, List<String> keys) {
 void requireQueryPage(String body, int httpStatus) {
   if (isLoginPage(body)) {
     throw AcademicError(ErrorCode.sessionExpired, '登录已失效，请重新登录');
+  }
+  if (looksLikeAccessForbidden(body)) {
+    throw AcademicError(
+      ErrorCode.accessForbidden,
+      '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
+      httpStatus: 403,
+    );
   }
   if (httpStatus < 200 || httpStatus >= 300) {
     final ErrorCode status;

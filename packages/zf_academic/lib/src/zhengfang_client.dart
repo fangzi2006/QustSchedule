@@ -538,6 +538,19 @@ class ZhengfangClient {
         if (isLoginPage(body)) {
           throw AcademicError(ErrorCode.sessionExpired, '登录已失效，请重新登录');
         }
+        if (looksLikeAccessForbidden(body)) {
+          throw AcademicError(
+            ErrorCode.accessForbidden,
+            '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
+            httpStatus: 403,
+          );
+        }
+        if (looksLikeServerError(body)) {
+          throw AcademicError(
+            ErrorCode.serverError,
+            '教务返回了错误/维护页面，不是学期数据',
+          );
+        }
         final current = selectedTermFromHtml(body);
         items.addAll(termsFromHtml(body));
         if (current != null) {
@@ -646,6 +659,19 @@ class ZhengfangClient {
     final encryption = _readEncryptionFlag(page.body);
     if (encryption != null) hidden['mmsfjm'] = encryption;
     if (hidden['csrftoken'] == null) {
+      if (looksLikeAccessForbidden(page.body)) {
+        throw AcademicError(
+          ErrorCode.accessForbidden,
+          '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
+          httpStatus: 403,
+        );
+      }
+      if (looksLikeServerError(page.body)) {
+        throw AcademicError(
+          ErrorCode.serverError,
+          '教务返回了错误/维护页面，无法打开登录页',
+        );
+      }
       throw AcademicError(ErrorCode.pageChanged, '学校登录页缺少 csrftoken');
     }
 
