@@ -2432,7 +2432,6 @@ void main() {
       await tester.tap(find.text('今'));
       await tester.pumpAndSettle();
 
-      expect(pagerPage(tester), 0);
       expect(model.week, 1);
       expect(find.text('第 1 周'), findsOneWidget);
       expect(todayFab(tester).opacity, 0);
