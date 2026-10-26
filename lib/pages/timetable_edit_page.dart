@@ -183,8 +183,8 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
                       AppMenuItem<String>(
                         value: 'delete',
                         label: _isNew
-                            ? '还没保存'
-                            : (canDelete ? '删除这张表' : '至少要保留一张'),
+                            ? '未保存'
+                            : (canDelete ? '删除作息表' : '至少保留一张'),
                         enabled: canDelete,
                       ),
                     ],
@@ -334,8 +334,8 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
             ),
             const SizedBox(height: 16),
             Text(
-              '提示：课表显示的节数跟着「课表节数」走（在作息时间表列表页设置）。'
-              '如果教务里出现了超出节数的课，课表会多显示几行并标注，不会把课藏起来。',
+              '提示：课表显示的节数跟随「课表节数」设置（在作息时间表列表页配置）。'
+              '若教务系统中存在超出该节数的课程，课表会自动扩展并标注，不会遗漏课程。',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.hintColor,
               ),
@@ -543,7 +543,7 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('删除这张作息表？'),
+        title: const Text('删除作息表'),
         content: Text('「${draft.name}」将被删除。'),
         actions: <Widget>[
           TextButton(

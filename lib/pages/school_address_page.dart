@@ -106,9 +106,9 @@ class SchoolAddressPage extends StatelessWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('切换到这台教务？'),
+        title: const Text('切换教务地址'),
         content: Text(
-          '切换后会直接用当前账号在这台教务登录，不需要重新输入密码：\n\n'
+          '将使用当前账号自动登录该教务地址：\n\n'
           '$address',
         ),
         actions: <Widget>[
@@ -145,7 +145,7 @@ class SchoolAddressPage extends StatelessWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('删除这个地址？'),
+        title: const Text('删除教务地址'),
         content: Text(address),
         actions: <Widget>[
           TextButton(

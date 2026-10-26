@@ -2,7 +2,7 @@
 ///
 /// 不硬编码：`pubspec.yaml` 被声明为 asset 一起打进包里，运行时读出来解析 `version:`。
 /// 这样"界面显示的版本"和"构建配置的版本"永远一致——发版只改 pubspec 一处，
-/// 不会出现"设置页还写着 1.1.0、装上去其实是 1.1.1"这种对不上的情况。
+/// 确保界面显示与打包配置版本始终一致。
 library;
 
 import 'package:flutter/services.dart' show rootBundle;

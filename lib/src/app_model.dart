@@ -1383,30 +1383,27 @@ class AppModel extends ChangeNotifier {
   String _humanize(AcademicError error) {
     switch (error.code) {
       case ErrorCode.invalidCredentials:
-        return '账号或密码不正确。注意有的学校用学号、有的用身份证号或教务账号。';
+        return '账号或密码错误，请核对后重试。';
       case ErrorCode.sessionExpired:
-        return '会话已过期。自动重登失败（可能是密码已变更或触发学校登录限制），请手动登录。';
+        return '登录凭证已失效，请重新登录。';
       case ErrorCode.captchaRequired:
-        return '需要验证码。请在验证码页输入后重试。';
+        return '需要输入验证码，请在验证码页输入后重试。';
       case ErrorCode.webLoginRequired:
         return '该学校要求先完成网页统一认证，暂不支持自动登录。';
       case ErrorCode.networkRetryable:
-        return '网络不稳定或连不上教务系统，请检查网络后重试。';
+        return '网络不稳定或无法连接教务系统，请检查网络后重试。';
       case ErrorCode.serverError:
         // 和"网络不行"分开说：这里网络是通的，是教务那边坏了。
         final status = error.httpStatus == null
             ? ''
             : '（HTTP ${error.httpStatus}）';
-        return '教务系统服务端异常$status：它返回的是错误/维护页面，不是课表。'
-            '这不是你的账号问题，请稍后重试；一直不行可以换一条线路。';
+        return '教务系统异常$status：返回错误或维护页面。请稍后重试或切换线路。';
       case ErrorCode.pageChanged:
-        return '课表数据结构与预期不一致。'
-            '如果反复出现，请到「调试 → 请求记录」确认该请求确实正常返回。';
+        return '课表数据格式与预期不符。若持续出现，请前往「调试信息」查看请求记录。';
       case ErrorCode.unsupported:
-        return '该账号没有课表查询权限。';
+        return '该账号无课表查询权限。';
       case ErrorCode.untrustedUrl:
-        return '教务系统把请求跳转到了未声明的地址，已中止以保护账号安全。'
-            '如果学校换了入口，请到「教务地址」里更新后再试。';
+        return '检测到未受信跳转，已中止以确保安全。若学校已更换入口，请更新教务地址。';
       case ErrorCode.cancelled:
         return '操作已取消。';
       case ErrorCode.validationFailed:
@@ -1414,7 +1411,7 @@ class AppModel extends ChangeNotifier {
       case ErrorCode.staleContext:
         return '登录会话已过期，请重新登录。';
       case ErrorCode.resultUnknown:
-        return '教务系统未明确返回结果，请刷新查看最新状态。';
+        return '教务系统未返回明确结果，请刷新后查看。';
       case ErrorCode.notOpen:
       case ErrorCode.noCapacity:
       case ErrorCode.conflict:

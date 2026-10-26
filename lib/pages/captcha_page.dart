@@ -90,7 +90,7 @@ class _CaptchaPageState extends State<CaptchaPage> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      '看不清就点图片换一张，仍保留当前登录进度',
+                      '看不清可点击图片更换，登录进度将保留',
                       textAlign: TextAlign.center,
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.hintColor,

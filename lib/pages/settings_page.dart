@@ -95,7 +95,7 @@ class SettingsPage extends StatelessWidget {
                         size: 20,
                       ),
                       title: const Text('显示教师'),
-                      subtitle: const Text('关掉后格子里只有课程名和地点'),
+                      subtitle: const Text('在课表格子中展示授课教师'),
                       value: model.showTeacher,
                       onChanged: model.setShowTeacher,
                     ),
@@ -103,7 +103,7 @@ class SettingsPage extends StatelessWidget {
                     SwitchListTile(
                       secondary: const Icon(Icons.place_outlined, size: 20),
                       title: const Text('显示上课地点'),
-                      subtitle: const Text('关掉后格子里只有课程名和教师'),
+                      subtitle: const Text('在课表格子中展示上课地点'),
                       value: model.showLocation,
                       onChanged: model.setShowLocation,
                     ),
@@ -415,7 +415,7 @@ class _PasswordDialogState extends State<_PasswordDialog> {
             TextFormField(
               controller: _confirm,
               obscureText: _obscure,
-              decoration: const InputDecoration(labelText: '再输一次'),
+              decoration: const InputDecoration(labelText: '确认新密码'),
               onFieldSubmitted: (_) => _submit(),
               validator: (value) => value == _password.text ? null : '两次输入不一致',
             ),

@@ -63,7 +63,7 @@ class _CourseDetailSheet extends StatelessWidget {
       if (entry.location != null) ('地点', entry.location!),
       for (final detail in entry.details ?? const <ScheduleDetail>[])
         (detail.label, detail.value),
-      ('记录 id', entry.id),
+      ('课程 ID', entry.id),
     ];
 
     return SafeArea(

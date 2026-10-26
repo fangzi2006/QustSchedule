@@ -104,7 +104,7 @@ class _Empty extends StatelessWidget {
         children: <Widget>[
           Icon(Icons.swap_horiz_rounded, size: 44, color: theme.hintColor),
           const SizedBox(height: 12),
-          Text('还没有调课', style: theme.textTheme.titleMedium),
+          Text('暂无调课记录', style: theme.textTheme.titleMedium),
           const SizedBox(height: 6),
           Text(
             '点右下角「添加调课」，把某一天（月日）的课挪到另一天。',

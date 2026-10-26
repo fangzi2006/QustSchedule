@@ -1147,8 +1147,8 @@ class _EmptyWeek extends StatelessWidget {
               Text('第 $week 周没有课', style: theme.textTheme.titleMedium),
               const SizedBox(height: 8),
               Text(
-                '可能是假期、考试周，或者周次校准不准。\n'
-                '如果这周实际有课，用「校准当前周次」对准一次。',
+                '这周可以爽玩了，芜湖~~\n'
+                '若周次不正确，可通过「校准当前周次」进行调整。',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.hintColor,
@@ -1250,8 +1250,8 @@ class _CalibrateSheetState extends State<_CalibrateSheet> {
           Text('校准当前周次', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           Text(
-            '教务系统不提供开学日期，所以"第几周"需要对齐一次。\n'
-            '填「本周实际是第几周」，之后按日历自动推算，并记住这个学期。',
+            '教务系统不提供开学日期，需手动对齐当前周次。\n'
+            '输入「本周是第几周」，系统将自动推算后续日程并保存。',
             style: Theme.of(context).textTheme.bodySmall
                 ?.copyWith(color: Theme.of(context).hintColor),
           ),

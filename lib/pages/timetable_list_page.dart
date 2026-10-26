@@ -143,7 +143,7 @@ class TimetableListPage extends StatelessWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('删除这张作息表？'),
+        title: const Text('删除作息表'),
         content: Text('「${table.name}」将被删除，课表会改用其余表里生效日期最近的一张。'),
         actions: <Widget>[
           TextButton(
@@ -256,7 +256,7 @@ class _TimetableCard extends StatelessWidget {
                     items: <AppMenuItem<String>>[
                       AppMenuItem<String>(
                         value: 'delete',
-                        label: canDelete ? '删除' : '至少要保留一张',
+                        label: canDelete ? '删除' : '至少保留一张',
                         enabled: canDelete,
                       ),
                     ],
