@@ -375,23 +375,14 @@ class AcademicHttpClient {
         redirects += 1;
         final resolved = resolveUrl(raw.url, location);
         if (redirects > _maxRedirects) {
-          if (resolved.startsWith('http://')) {
-            await _reclassifyUntrustedRedirect(
-              raw: raw,
-              targetUrl: resolved,
-              purpose: options.purpose,
-            );
-          }
-          throw AcademicError(ErrorCode.pageChanged, 'Too many redirects');
-        }
-        final next = _upgradeDowngrade(raw.url, resolved);
-        if (next != resolved && next == url) {
           await _reclassifyUntrustedRedirect(
             raw: raw,
             targetUrl: resolved,
             purpose: options.purpose,
           );
+          throw AcademicError(ErrorCode.pageChanged, 'Too many redirects');
         }
+        final next = _upgradeDowngrade(raw.url, resolved);
         try {
           _ensureAllowed(next);
         } on AcademicError catch (error) {
