@@ -364,7 +364,10 @@ void main() {
       );
 
       expect(prefs.autoRefresh, isTrue);
-      expect(prefs.autoRefreshIntervalMinutes, 30);
+      expect(
+        prefs.autoRefreshIntervalMinutes,
+        defaultAutoRefreshIntervalMinutes,
+      );
       expect(prefs.reschedules, isEmpty);
     });
 

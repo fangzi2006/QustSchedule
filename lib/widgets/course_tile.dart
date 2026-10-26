@@ -53,7 +53,7 @@ class CourseBlock extends StatelessWidget {
   /// 显式锁定 letterSpacing: 0，避免合并 Material 3 DefaultTextStyle (bodyMedium)
   /// 时继承默认的 0.25 字间距导致测量与渲染宽度不一致。
   static const TextStyle titleStyle = TextStyle(
-    fontSize: 12,
+    fontSize: 11,
     height: 1.25,
     fontWeight: FontWeight.w500,
     letterSpacing: 0,

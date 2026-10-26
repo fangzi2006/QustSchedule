@@ -32,9 +32,9 @@ const int preferencesSchema = 8;
 /// 课表格子（一节那一行）的高度，逻辑像素。
 ///
 /// 下限保证三行字（课名 / 教师 / 地点）还是放得下，上限是"再高就太浪费屏幕"。
-const double minCellHeight = 56;
-const double maxCellHeight = 112;
-const double defaultCellHeight = 72;
+const double minCellHeight = 50;
+const double maxCellHeight = 120;
+const double defaultCellHeight = 60;
 
 /// 课程卡片里的文字缩放（只影响卡片，不影响时间列等其他文字）。
 const double minCourseTextScale = 0.8;
@@ -54,9 +54,9 @@ double clampCourseTextScale(double value) {
 }
 
 /// 静默更新的最小间隔（分钟）范围与默认值。
-const int minAutoRefreshIntervalMinutes = 5;
-const int maxAutoRefreshIntervalMinutes = 180;
-const int defaultAutoRefreshIntervalMinutes = 30;
+const int minAutoRefreshIntervalMinutes = 60;
+const int maxAutoRefreshIntervalMinutes = 1440;
+const int defaultAutoRefreshIntervalMinutes = 180;
 
 int clampAutoRefreshIntervalMinutes(int value) =>
     value.clamp(minAutoRefreshIntervalMinutes, maxAutoRefreshIntervalMinutes);

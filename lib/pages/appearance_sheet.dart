@@ -35,7 +35,7 @@ class _AppearanceSheet extends StatefulWidget {
 }
 
 class _AppearanceSheetState extends State<_AppearanceSheet> {
-  static const int _heightDivisions = 28; // 56..112，每格 2px
+  static const int _heightDivisions = 35; // 50..120，每格 2px
   static const int _scaleDivisions = 12; // 0.8..1.4，每格 0.05
 
   /// 上一次是不是停在默认值上：只在"刚刚进入默认值"那一刻震一下。

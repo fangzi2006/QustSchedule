@@ -132,7 +132,7 @@ class SettingsPage extends StatelessWidget {
                         leading: const Icon(Icons.timer_outlined, size: 20),
                         title: const Text('最小更新间隔'),
                         subtitle: Text(
-                          '${model.autoRefreshIntervalMinutes} 分钟',
+                          _formatInterval(model.autoRefreshIntervalMinutes),
                         ),
                         trailing: _IntervalStepper(
                           value: model.autoRefreshIntervalMinutes,
@@ -456,6 +456,13 @@ class _SectionTitle extends StatelessWidget {
 }
 
 /// 最小更新间隔的步进器：- / + 各 5 分钟，夹在合法区间内。
+String _formatInterval(int minutes) {
+  final hours = minutes ~/ 60;
+  final rem = minutes % 60;
+  if (rem == 0) return '$hours 小时';
+  return '$hours 小时 $rem 分钟';
+}
+
 class _IntervalStepper extends StatelessWidget {
   const _IntervalStepper({required this.value, required this.onChanged});
 
@@ -464,6 +471,7 @@ class _IntervalStepper extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hours = (value / 60).round();
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
@@ -471,15 +479,15 @@ class _IntervalStepper extends StatelessWidget {
           icon: const Icon(Icons.remove_circle_outline_rounded, size: 22),
           visualDensity: VisualDensity.compact,
           onPressed: value > minAutoRefreshIntervalMinutes
-              ? () => onChanged(value - 5)
+              ? () => onChanged(((value - 1) ~/ 60) * 60)
               : null,
         ),
-        Text('$value', style: const TextStyle(fontSize: 14)),
+        Text('$hours', style: const TextStyle(fontSize: 14)),
         IconButton(
           icon: const Icon(Icons.add_circle_outline_rounded, size: 22),
           visualDensity: VisualDensity.compact,
           onPressed: value < maxAutoRefreshIntervalMinutes
-              ? () => onChanged(value + 5)
+              ? () => onChanged(((value ~/ 60) + 1) * 60)
               : null,
         ),
       ],

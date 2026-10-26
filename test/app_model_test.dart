@@ -745,11 +745,11 @@ void main() {
       final prefs = Preferences.inMemory();
       final model = bootRig(preferences: prefs);
 
-      await model.setAutoRefreshIntervalMinutes(999);
+      await model.setAutoRefreshIntervalMinutes(9999);
       expect(model.autoRefreshIntervalMinutes, maxAutoRefreshIntervalMinutes);
 
       await model.setAutoRefreshIntervalMinutes(15);
-      expect(model.autoRefreshIntervalMinutes, 15);
+      expect(model.autoRefreshIntervalMinutes, minAutoRefreshIntervalMinutes);
       model.dispose();
     });
   });

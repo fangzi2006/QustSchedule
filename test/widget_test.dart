@@ -1301,7 +1301,7 @@ void main() {
     testWidgets('文字缩放只乘在卡片文字上', (tester) async {
       await tester.pumpWidget(sized(width: 140, height: 140, textScale: 1.3));
       final title = lineOf(tester, '高等数学');
-      expect(title.style!.fontSize, closeTo(12 * 1.3, 0.01));
+      expect(title.style!.fontSize, closeTo(11 * 1.3, 0.01));
     });
 
     testWidgets('扫雷：不溢出，也不"有空间却省略"', (tester) async {
@@ -1604,7 +1604,7 @@ void main() {
       expect(sliders, hasLength(2));
       expect(sliders.first.value, defaultCellHeight);
       expect(sliders.last.value, defaultCourseTextScale);
-      expect(find.text('72'), findsOneWidget);
+      expect(find.text('60'), findsOneWidget);
       expect(find.text('100%'), findsOneWidget);
     });
 
