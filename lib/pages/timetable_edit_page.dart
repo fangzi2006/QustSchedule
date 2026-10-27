@@ -12,7 +12,6 @@ import 'package:flutter/material.dart';
 
 import '../src/app_model.dart';
 import '../src/timetable.dart';
-import '../widgets/app_menu.dart';
 import '../widgets/time_wheel_picker.dart';
 
 class TimetableEditPage extends StatefulWidget {
@@ -170,36 +169,12 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
                   : scheme.onSurfaceVariant.withValues(alpha: 0.4),
               onPressed: _dirty ? _save : null,
             ),
-            Builder(
-              builder: (buttonContext) => IconButton(
-                icon: const Icon(Icons.more_vert_rounded),
-                tooltip: '更多',
-                onPressed: () {
-                  final canDelete = !_isNew && model.timetables.length > 1;
-                  showAppMenu<String>(
-                    context: buttonContext,
-                    items: <AppMenuItem<String>>[
-                      const AppMenuItem<String>(value: 'rename', label: '重命名'),
-                      AppMenuItem<String>(
-                        value: 'delete',
-                        label: _isNew
-                            ? '未保存'
-                            : (canDelete ? '删除作息表' : '至少保留一张'),
-                        enabled: canDelete,
-                      ),
-                    ],
-                    onSelected: (value) {
-                      switch (value) {
-                        case 'rename':
-                          _rename();
-                        case 'delete':
-                          _delete();
-                      }
-                    },
-                  );
-                },
+            if (!_isNew)
+              IconButton(
+                icon: const Icon(Icons.delete_outline_rounded),
+                tooltip: model.timetables.length > 1 ? '删除作息表' : '至少保留一张',
+                onPressed: model.timetables.length > 1 ? _delete : null,
               ),
-            ),
           ],
         ),
         body: ListView(

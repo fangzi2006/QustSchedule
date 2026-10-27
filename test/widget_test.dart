@@ -1990,6 +1990,80 @@ void main() {
       final sections = tester.getTopLeft(find.text('节次时间')).dy;
       expect(quick, lessThan(sections));
     });
+
+    testWidgets('新建作息表不显示三点菜单或删除键，点击名称可重命名', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(TimetableListPage(model: model)));
+
+      await tester.tap(find.byIcon(Icons.add_rounded).first);
+      await tester.pumpAndSettle();
+
+      expect(find.text('新建作息表'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.byIcon(Icons.more_vert_rounded),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.byIcon(Icons.delete_outline_rounded),
+        ),
+        findsNothing,
+      );
+
+      await tester.tap(find.text('名称'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).last, '冬季作息');
+      await tester.tap(find.widgetWithText(FilledButton, '确定'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('冬季作息'), findsOneWidget);
+    });
+
+    testWidgets('编辑已有作息表不显示三点菜单，右上角直接显示删除按钮', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      final first = model.timetables.first;
+      await pushEditor(tester, model, first.id);
+
+      expect(
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.byIcon(Icons.more_vert_rounded),
+        ),
+        findsNothing,
+      );
+      final deleteBtn = find.descendant(
+        of: find.byType(AppBar),
+        matching: find.widgetWithIcon(IconButton, Icons.delete_outline_rounded),
+      );
+      expect(deleteBtn, findsOneWidget);
+      // 仅剩一张表时禁用删除（至少保留一张）。
+      expect(tester.widget<IconButton>(deleteBtn).onPressed, isNull);
+
+      await tester.tap(find.byType(BackButton));
+      await tester.pumpAndSettle();
+      await model.upsertTimetable(
+        Timetable(
+          id: 't2',
+          name: '春夏作息',
+          effectiveFrom: first.effectiveFrom,
+          sections: first.sections,
+        ),
+      );
+      await pushEditor(tester, model, 't2');
+      expect(tester.widget<IconButton>(deleteBtn).onPressed, isNotNull);
+
+      await tester.tap(deleteBtn);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, '删除'));
+      await tester.pumpAndSettle();
+      expect(model.timetables.any((t) => t.id == 't2'), isFalse);
+    });
   });
 
   group('课表节数（三段滚轮）', () {
