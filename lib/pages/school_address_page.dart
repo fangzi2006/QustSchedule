@@ -196,48 +196,56 @@ class _AddressDialogState extends State<_AddressDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('新增教务地址'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          TextField(
-            controller: _controller,
-            autofocus: true,
-            decoration: InputDecoration(
-              labelText: '教务系统地址',
-              hintText: 'https://jw.example.edu.cn/jwglxt',
-              errorText: _error,
-              helperText: '写到 /jwglxt 为止，不要带 login_slogin.html',
-              helperMaxLines: 2,
+    // 软键盘弹出时不让 Dialog 按 viewInsets.bottom 挤压变短，
+    // 否则内部预设按钮与底部操作栏会错位重叠。
+    return MediaQuery.removeViewInsets(
+      context: context,
+      removeBottom: true,
+      child: AlertDialog(
+        title: const Text('新增教务地址'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            TextField(
+              controller: _controller,
+              autofocus: true,
+              decoration: InputDecoration(
+                labelText: '教务系统地址',
+                hintText: 'https://jw.example.edu.cn/jwglxt',
+                errorText: _error,
+                helperText: '写到 /jwglxt 为止，不要带 login_slogin.html',
+                helperMaxLines: 2,
+              ),
+              onSubmitted: (_) => _submit(),
             ),
-            onSubmitted: (_) => _submit(),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: <Widget>[
+                for (final school in knownSchools)
+                  ActionChip(
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                    label: Text(school.name),
+                    onPressed: () => setState(() {
+                      _controller.text = school.baseUrl;
+                      _error = null;
+                    }),
+                  ),
+              ],
+            ),
+          ],
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
           ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: <Widget>[
-              for (final school in knownSchools)
-                ActionChip(
-                  label: Text(school.name),
-                  onPressed: () => setState(() {
-                    _controller.text = school.baseUrl;
-                    _error = null;
-                  }),
-                ),
-            ],
-          ),
+          FilledButton(onPressed: _submit, child: const Text('添加')),
         ],
       ),
-      actions: <Widget>[
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('取消'),
-        ),
-        FilledButton(onPressed: _submit, child: const Text('添加')),
-      ],
     );
   }
 }

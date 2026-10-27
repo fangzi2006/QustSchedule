@@ -2236,6 +2236,32 @@ void main() {
       // 让提示/弹窗里的一次性定时器走完，避免残留 Timer 触发测试框架断言。
       await tester.pump(const Duration(seconds: 2));
     });
+
+    testWidgets('新增地址弹窗：弹出输入法时不被挤压变短，且预设按钮间距紧凑', (tester) async {
+      final model = buildModel();
+      await tester.pumpWidget(wrap(SchoolAddressPage(model: model)));
+
+      await tester.tap(find.byIcon(Icons.add_rounded));
+      await tester.pumpAndSettle();
+
+      final dialog = find.byType(AlertDialog);
+      final addBtn = find.widgetWithText(FilledButton, '添加');
+      final beforeDialog = tester.getRect(dialog);
+      final beforeAddBtn = tester.getRect(addBtn);
+
+      final chip = tester.widget<ActionChip>(find.byType(ActionChip).first);
+      expect(chip.materialTapTargetSize, MaterialTapTargetSize.shrinkWrap);
+      expect(chip.visualDensity, VisualDensity.compact);
+
+      // 模拟软键盘弹出占用底部 300px。
+      tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+      addTearDown(tester.view.resetViewInsets);
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(tester.getRect(dialog).height, beforeDialog.height);
+      expect(tester.getRect(addBtn), beforeAddBtn);
+    });
   });
 
   group('节次时间（开始+结束一起设）', () {
