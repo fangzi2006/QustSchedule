@@ -302,6 +302,7 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+          skip-decompress: true
 
       - name: Generate SHA256SUMS
         run: |
