@@ -75,13 +75,7 @@ enum ReminderStyle {
 /// 默认形态：横幅。开启流体云要额外消费一个前台服务，必须由用户显式选择。
 const ReminderStyle defaultReminderStyle = ReminderStyle.banner;
 
-/// 流体云卡片是否"显示到下课"。
-///
-/// 默认 false：上课铃一响卡片就撤（停止条件 = 上课时刻），符合"提醒"的直觉；
-/// 想把它当上课进度条用再手动打开（停止条件 = 下课时刻）。
-///
-/// 该值进 payload **也进指纹**：改它必须触发一次重排，否则原生仍按旧语义
-/// 挂那条"到点收起"的闹钟。
+/// 流体云卡片是否显示到下课（保留字段兼容，默认 false 即上课时刻准时收起）。
 const bool defaultReminderFluidUntilEnd = false;
 
 /// 一条待提醒的课程实例（某一天、某个节次）。

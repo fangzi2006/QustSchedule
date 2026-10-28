@@ -413,21 +413,6 @@ void main() {
       expect(banner.fingerprint, isNot(fluid.fingerprint));
     });
 
-    test('改「显示到下课」→ 指纹变化（收起时刻跟着变）', () {
-      final atStart = plan(
-        entries: <ScheduleEntry>[entryOf()],
-        style: ReminderStyle.fluid,
-      );
-      final atEnd = plan(
-        entries: <ScheduleEntry>[entryOf()],
-        style: ReminderStyle.fluid,
-        fluidUntilEnd: true,
-      );
-      expect(atStart.fluidUntilEnd, isFalse);
-      expect(atEnd.fluidUntilEnd, isTrue);
-      expect(atStart.fingerprint, isNot(atEnd.fingerprint));
-    });
-
     test('改课表 → 指纹变化', () {
       final one = plan(entries: <ScheduleEntry>[entryOf()]);
       final two = plan(

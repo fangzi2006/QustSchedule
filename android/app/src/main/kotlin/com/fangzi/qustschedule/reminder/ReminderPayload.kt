@@ -33,7 +33,7 @@ data class ReminderPayload(
     val leadMinutes: Int,
     val fingerprint: String,
     val style: String,
-    /** 流体云是否显示到下课（false = 上课即收起）。缺字段按 false。 */
+    /** 保留兼容字段，默认 false 即上课准时收起。 */
     val fluidUntilEnd: Boolean,
     val events: List<ReminderEvent>,
 ) {

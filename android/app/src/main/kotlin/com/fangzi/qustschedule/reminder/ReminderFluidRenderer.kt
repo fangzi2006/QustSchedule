@@ -36,13 +36,7 @@ data class FluidCardState(
         return ceil((startMs - now) / 60_000.0).toInt()
     }
 
-    /** 0..100：从"该提醒"到"上课"的线性进度，给系统画进度环/进度条。 */
-    fun progress(now: Long): Int {
-        val span = startMs - notifyEpoch
-        if (span <= 0L) return 100
-        val done = (now - notifyEpoch).toDouble() / span
-        return (done * 100).toInt().coerceIn(0, 100)
-    }
+
 
     fun detailText(): String {
         val fmt = SimpleDateFormat("HH:mm", Locale.CHINA)
@@ -54,24 +48,14 @@ data class FluidCardState(
         return parts.joinToString(" · ")
     }
 
-    fun periodText(): String =
-        if (startPeriod == endPeriod) {
-            "第 $startPeriod 节"
-        } else {
-            "第 $startPeriod-$endPeriod 节"
-        }
 }
 
 /**
- * 流体云（ColorOS / HyperOS 等把常驻进度通知渲染成胶囊卡片）的构建器。
+ * 流体云（ColorOS / HyperOS 等把常驻通知渲染成胶囊卡片）的构建器。
  *
- * 走的是**公开 API**：`ProgressStyle` + `setRequestPromotedOngoing(true)`。
- * 没有 OPPO 幼苗 SDK，也不需要 UPK 白名单——厂商是否把这条常驻通知提升为
- * 胶囊由系统决定，最差退化成普通进度通知，不会崩、不会静默失败。
- *
- * 进度环**不自绘**：`ProgressStyle` 由系统按自己的模板渲染（胶囊上可能是
- * 绕图标的环/进度条），小图标保持静态矢量即可。早先自绘 bitmap 环的做法
- * 会与系统环叠加、还会跟卡片底色混色，已移除。
+ * 走的是公开 API：setRequestPromotedOngoing(true) + 高优先级常驻通知。
+ * 倒计时使用系统原生 Chronometer（setUsesChronometer(true) + setChronometerCountDown(true)），
+ * 由 SystemUI 纳秒精度自递减，极低功耗，并在课程开始时刻通过 setTimeoutAfter 准时收起。
  */
 object ReminderFluidRenderer {
 

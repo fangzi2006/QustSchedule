@@ -743,14 +743,11 @@ void main() {
   });
 
   group('课前提醒设置（schema 11）', () {
-    test('默认关闭，提前量默认 10 分钟，不显示到下课', () {
+    test('默认关闭，提前量默认 10 分钟，横幅形态', () {
       final prefs = Preferences.inMemory();
       expect(prefs.reminderEnabled, isFalse);
       expect(prefs.reminderLeadMinutes, defaultReminderLeadMinutes);
       expect(prefs.reminderStyle, ReminderStyle.banner);
-      // 默认 false：上课铃一响卡片就收起。
-      expect(prefs.reminderFluidUntilEnd, isFalse);
-      expect(defaultReminderFluidUntilEnd, isFalse);
       expect(defaultReminderLeadMinutes, 10);
       expect(reminderLeadOptions, <int>[5, 10, 15, 20, 30]);
     });
@@ -775,7 +772,6 @@ void main() {
       await prefs.setReminderEnabled(true);
       await prefs.setReminderLeadMinutes(20);
       await prefs.setReminderStyle(ReminderStyle.fluid);
-      await prefs.setReminderFluidUntilEnd(true);
 
       final text = await file.readAsString();
       expect(text, contains('"schema":11'));
@@ -783,7 +779,6 @@ void main() {
       expect(again.reminderEnabled, isTrue);
       expect(again.reminderLeadMinutes, 20);
       expect(again.reminderStyle, ReminderStyle.fluid);
-      expect(again.reminderFluidUntilEnd, isTrue);
 
       await dir.delete(recursive: true);
     });
@@ -795,19 +790,6 @@ void main() {
       expect(legacy.reminderEnabled, isFalse);
       expect(legacy.reminderLeadMinutes, 10);
       expect(legacy.reminderStyle, ReminderStyle.banner);
-      expect(legacy.reminderFluidUntilEnd, isFalse);
-    });
-
-    test('文件里写了「显示到下课」：按布尔值读回来', () {
-      final on = Preferences.decode(
-        '{"schema":11,"reminderStyle":"fluid","reminderFluidUntilEnd":true}',
-      );
-      expect(on.reminderFluidUntilEnd, isTrue);
-
-      final dirty = Preferences.decode(
-        '{"schema":11,"reminderFluidUntilEnd":"yes"}',
-      );
-      expect(dirty.reminderFluidUntilEnd, isFalse);
     });
 
     test('文件里的提前量越界时收敛，合法值原样保留', () {

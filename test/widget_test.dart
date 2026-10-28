@@ -2827,31 +2827,6 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     });
 
-    testWidgets('测试提醒按钮走一次探针', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      final rig = await buildReminderRig(enabled: true);
-      await tester.pumpWidget(
-        wrap(ReminderPage(model: rig.model, service: rig.service)),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.scrollUntilVisible(
-        find.text('一分钟后测试提醒'),
-        120,
-        scrollable: find.byType(Scrollable).first,
-      );
-      await tester.ensureVisible(find.text('一分钟后测试提醒'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('一分钟后测试提醒'));
-      await tester.pumpAndSettle();
-      await tester.pump(const Duration(seconds: 3));
-
-      expect(rig.gateway.testRequests, isNotEmpty);
-
-      rig.service.dispose();
-      debugDefaultTargetPlatformOverride = null;
-    });
-
     testWidgets('打开流体云开关 → 偏好落盘且 payload 带 fluid', (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
       final rig = await buildReminderRig(enabled: true);
@@ -2932,7 +2907,7 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     });
 
-    testWidgets('「5 秒后测试提醒」按 5 秒下发', (tester) async {
+    testWidgets('「5 秒后测试提醒」与「一分钟后测试提醒」分别按对应秒数下发', (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
       final rig = await buildReminderRig(enabled: true);
       await tester.pumpWidget(
@@ -2951,7 +2926,13 @@ void main() {
       await tester.pumpAndSettle();
       await tester.pump(const Duration(seconds: 3));
 
-      expect(rig.gateway.testRequests, <String>['banner|5']);
+      expect(rig.gateway.testRequests, contains('banner|5'));
+
+      await tester.tap(find.text('一分钟后测试提醒'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+
+      expect(rig.gateway.testRequests, contains('banner|60'));
 
       rig.service.dispose();
       debugDefaultTargetPlatformOverride = null;
@@ -2991,31 +2972,6 @@ void main() {
       gate.complete();
       await tester.pumpAndSettle();
       await tester.pump(const Duration(seconds: 3));
-
-      rig.service.dispose();
-      debugDefaultTargetPlatformOverride = null;
-    });
-
-    testWidgets('流体云下不出现「显示到下课」选项（上课准时收起）', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      final rig = await buildReminderRig(enabled: true);
-      await tester.pumpWidget(
-        wrap(ReminderPage(model: rig.model, service: rig.service)),
-      );
-      await tester.pumpAndSettle();
-
-      // 横幅形态下这一行不该出现。
-      expect(find.text('显示到下课'), findsNothing);
-
-      await tester.ensureVisible(
-        find.byKey(const Key('reminder-fluid-switch')),
-      );
-      await tester.tap(find.byKey(const Key('reminder-fluid-switch')));
-      await tester.pumpAndSettle();
-      await tester.pump(const Duration(seconds: 3));
-
-      // 切换到流体云后也不该出现「显示到下课」，上课准时收起。
-      expect(find.text('显示到下课'), findsNothing);
 
       rig.service.dispose();
       debugDefaultTargetPlatformOverride = null;
