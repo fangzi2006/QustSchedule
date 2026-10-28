@@ -75,9 +75,6 @@ class _HomeShellState extends State<HomeShell> {
   /// 按下 dock 时用户已经决定要走了，这一帧的代价才是可以接受的。
   void _ensureSettingsPage() {
     if (_settingsPage != null) return;
-    // 切换到设置页时在后台静默预热一次提醒状态，
-    // 使得后续点击「课程提醒」时已有最新缓存，进入页面零等待。
-    widget.reminders?.refreshStatus();
     setState(
       () => _settingsPage = SettingsPage(
         model: widget.model,

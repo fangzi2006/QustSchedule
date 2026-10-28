@@ -32,14 +32,6 @@ class ReminderBridge(
 
     fun attach() {
         channel.setMethodCallHandler(this)
-        // 冷启动预热：在后台线程预先解析厂商自启动组件和读取本地存储，
-        // 彻底消除首次进入提醒页面时的首查开销。
-        worker.execute {
-            runCatching {
-                ReminderPermissions.hasAutostartSettings(activity)
-                scheduler.status()
-            }
-        }
     }
 
     fun dispose() {
@@ -53,8 +45,10 @@ class ReminderBridge(
             "sync" -> handleSync(call, result)
 
             "cancel" -> {
-                scheduler.cancelAll()
-                result.success(null)
+                worker.execute {
+                    scheduler.cancelAll()
+                    mainHandler.post { result.success(null) }
+                }
             }
 
             "status" -> {
