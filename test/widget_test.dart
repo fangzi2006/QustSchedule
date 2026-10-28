@@ -2996,7 +2996,7 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     });
 
-    testWidgets('「显示到下课」只在流体云下出现，默认关', (tester) async {
+    testWidgets('流体云下不出现「显示到下课」选项（上课准时收起）', (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
       final rig = await buildReminderRig(enabled: true);
       await tester.pumpWidget(
@@ -3014,21 +3014,8 @@ void main() {
       await tester.pumpAndSettle();
       await tester.pump(const Duration(seconds: 3));
 
-      expect(find.text('显示到下课'), findsOneWidget);
-      // 默认 false：上课铃一响就收起。
-      expect(rig.model.reminderFluidUntilEnd, isFalse);
-      expect(find.text('上课铃一响就收起（默认）'), findsOneWidget);
-
-      final untilEnd = find.byKey(const Key('reminder-until-end-switch'));
-      await tester.ensureVisible(untilEnd);
-      await tester.pumpAndSettle();
-      await tester.tap(untilEnd);
-      await tester.pumpAndSettle();
-      await tester.pump(const Duration(seconds: 3));
-
-      expect(rig.model.reminderFluidUntilEnd, isTrue);
-      expect(find.text('卡片留到下课，顺便当上课进度条'), findsOneWidget);
-      expect(rig.gateway.lastPayload['fluidUntilEnd'], isTrue);
+      // 切换到流体云后也不该出现「显示到下课」，上课准时收起。
+      expect(find.text('显示到下课'), findsNothing);
 
       rig.service.dispose();
       debugDefaultTargetPlatformOverride = null;

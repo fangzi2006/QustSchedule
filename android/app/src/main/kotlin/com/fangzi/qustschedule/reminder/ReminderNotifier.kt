@@ -39,11 +39,14 @@ object ReminderNotifier {
         val manager = context.getSystemService(NotificationManager::class.java)
             ?: return false
 
+        val now = System.currentTimeMillis()
+        val timeoutMs = (event.startMs - now).coerceAtLeast(1000L)
+
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_lesson)
             .setContentTitle(event.name.ifEmpty { "上课提醒" })
             .setContentText(bodyText(event))
-            .setSubText(subtitleText(event, leadMinutes))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(bodyText(event)))
             .setContentIntent(contentIntent(context))
             .setAutoCancel(true)
             .setOnlyAlertOnce(true)
@@ -52,6 +55,9 @@ object ReminderNotifier {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setWhen(event.startMs)
             .setShowWhen(true)
+            .setUsesChronometer(true)
+            .setChronometerCountDown(true)
+            .setTimeoutAfter(timeoutMs)
             .build()
 
         manager.notify(NOTIFY_ID, notification)
@@ -89,16 +95,6 @@ object ReminderNotifier {
         if (event.location.isNotEmpty()) parts.add(event.location)
         if (event.teacher.isNotEmpty()) parts.add(event.teacher)
         return parts.joinToString(" · ")
-    }
-
-    /** `第 3-4 节 · 还有 10 分钟`。 */
-    fun subtitleText(event: ReminderEvent, leadMinutes: Int): String {
-        val periods = if (event.startPeriod == event.endPeriod) {
-            "第 ${event.startPeriod} 节"
-        } else {
-            "第 ${event.startPeriod}-${event.endPeriod} 节"
-        }
-        return "$periods · 还有 $leadMinutes 分钟"
     }
 
     fun contentIntent(context: Context): PendingIntent {

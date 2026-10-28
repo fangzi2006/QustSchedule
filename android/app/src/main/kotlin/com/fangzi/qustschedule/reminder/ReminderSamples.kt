@@ -1,5 +1,7 @@
 package com.fangzi.qustschedule.reminder
 
+import java.util.Calendar
+
 /**
  * 示例事件：诊断页「立即显示通知」与「5 秒后测试提醒」共用一份。
  *
@@ -19,13 +21,25 @@ object ReminderSamples {
     private const val CLASS_MINUTES = 95L
 
     /**
-     * @param leadMinutes 距离上课还有几分钟。预览时传当前设置的提前量，
-     *   卡片上的「还有 N 分钟」才和真实提醒一致。
+     * @param leadMinutes 距离上课还有几分钟。
+     *
+     * 目标时间最低分度直到分钟（秒和毫秒清零，不需要特别处理）；
+     * 在计算剩余时间 (startMs - now) 时，当前时间的秒自然算入倒计时与关闭超时中，
+     * 确保手机时间、倒计时与通知关闭时刻严格对齐。
      */
     fun event(leadMinutes: Int): ReminderEvent {
         val now = System.currentTimeMillis()
         val safeLead = leadMinutes.coerceIn(1, 60)
-        val startMs = now + safeLead * 60_000L
+        val cal = Calendar.getInstance().apply {
+            timeInMillis = now
+            add(Calendar.MINUTE, safeLead)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        if (cal.timeInMillis <= now) {
+            cal.add(Calendar.MINUTE, 1)
+        }
+        val startMs = cal.timeInMillis
         return ReminderEvent(
             id = "test",
             name = NAME,

@@ -146,15 +146,6 @@ class _ReminderPageState extends State<ReminderPage>
     await _refreshStatus();
   });
 
-  /// 「显示到下课」：false = 上课时刻就收起卡片。
-  Future<void> _toggleUntilEnd(bool enabled) => _run(() async {
-    await widget.model.setReminderFluidUntilEnd(enabled);
-    await widget.service.syncNow(force: true);
-    await _refreshStatus();
-    if (!mounted) return;
-    _toast(enabled ? '卡片将显示到下课' : '上课时刻自动收起卡片');
-  });
-
   /// 自启动没有公共 API 也不能申请：能跳厂商页就跳，跳不动就跳应用详情。
   Future<void> _openAutostart() => _run(() async {
     final vendor = await widget.service.openAutostartSettings();
@@ -321,30 +312,12 @@ class _ReminderPageState extends State<ReminderPage>
                       title: const Text('流体云卡片'),
                       subtitle: Text(
                         model.reminderStyle == ReminderStyle.fluid
-                            ? '上课前用常驻卡片倒计时'
+                            ? '上课前用常驻卡片倒计时（上课准时收起）'
                             : '关闭时为普通横幅通知，点开回到 App',
                       ),
                       value: model.reminderStyle == ReminderStyle.fluid,
                       onChanged: _toggleFluid,
                     ),
-                    if (model.reminderStyle == ReminderStyle.fluid) ...[
-                      const Divider(height: 0, indent: 56),
-                      SwitchListTile(
-                        key: const Key('reminder-until-end-switch'),
-                        secondary: const Icon(
-                          Icons.timelapse_rounded,
-                          size: 20,
-                        ),
-                        title: const Text('显示到下课'),
-                        subtitle: Text(
-                          model.reminderFluidUntilEnd
-                              ? '卡片留到下课，顺便当上课进度条'
-                              : '上课铃一响就收起（默认）',
-                        ),
-                        value: model.reminderFluidUntilEnd,
-                        onChanged: _toggleUntilEnd,
-                      ),
-                    ],
                     if (status?.fluidCasting ?? false)
                       Padding(
                         padding: const EdgeInsets.fromLTRB(56, 0, 16, 8),

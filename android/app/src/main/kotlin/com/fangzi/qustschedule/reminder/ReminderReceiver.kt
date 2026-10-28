@@ -24,10 +24,13 @@ class ReminderReceiver : BroadcastReceiver() {
                 return
             }
 
-            // 流体云"到点收起"的兜底闹钟：进程被冻结过也会被这条唤醒。
+            // 开课准时消失闹钟、或流体云到点收起的兜底闹钟
+            ACTION_DISMISS,
             ACTION_FLUID_STOP -> {
+                context.getSystemService(android.app.NotificationManager::class.java)
+                    ?.cancel(ReminderNotifier.NOTIFY_ID)
                 ReminderFluidService.stop(context)
-                Log.i(TAG, "fluid card stopped by end alarm")
+                Log.i(TAG, "reminder dismissed by alarm action=${intent.action}")
                 return
             }
 
@@ -48,52 +51,52 @@ class ReminderReceiver : BroadcastReceiver() {
 
     private fun handleRemind(context: Context, intent: Intent) {
         val eventId = intent.getStringExtra(EXTRA_EVENT_ID)
-        val fingerprint = intent.getStringExtra(EXTRA_FINGERPRINT)
         val expected = intent.getLongExtra(EXTRA_REMIND_AT_MS, 0L)
         val code = intent.getIntExtra(EXTRA_REQUEST_CODE, 0)
-        if (eventId.isNullOrEmpty() || fingerprint.isNullOrEmpty() ||
-            expected <= 0L
-        ) {
+        if (eventId.isNullOrEmpty() || expected <= 0L) {
             Log.w(TAG, "malformed alarm, ignored")
             return
         }
 
         val store = ReminderStore(context)
-        val currentFingerprint = store.fingerprint()
-        if (currentFingerprint.isEmpty() || currentFingerprint != fingerprint) {
-            Log.w(TAG, "stale alarm id=$eventId, reschedule current payload")
-            runCatching { ReminderScheduler(context).rescheduleFromStore() }
-            return
-        }
-
         val payload = store.loadPayload()
         if (payload == null) {
             Log.w(TAG, "payload missing while firing id=$eventId")
             return
         }
         val event = payload.events.firstOrNull { it.id == eventId }
-        if (event == null || event.remindAtMs != expected) {
-            Log.w(TAG, "alarm does not match payload id=$eventId")
+        if (event == null) {
+            Log.w(TAG, "event $eventId no longer in payload, ignored")
+            return
+        }
+        if (kotlin.math.abs(event.remindAtMs - expected) > 1000L) {
+            Log.w(TAG, "alarm time $expected does not match current event time ${event.remindAtMs}")
             return
         }
 
         val actual = System.currentTimeMillis()
         val fluid = payload.style == ReminderPayload.STYLE_FLUID
+        var posted = false
         if (fluid) {
-            ReminderFluidService.start(
+            val started = ReminderFluidService.start(
                 context,
                 event,
-                untilEnd = payload.fluidUntilEnd,
             )
+            if (!started) {
+                Log.w(TAG, "fluid service start rejected, falling back to banner notification")
+                posted = ReminderNotifier.show(context, event, payload.leadMinutes)
+            } else {
+                posted = true
+            }
         } else {
-            ReminderNotifier.show(context, event, payload.leadMinutes)
+            posted = ReminderNotifier.show(context, event, payload.leadMinutes)
         }
         if (code != 0) store.removeAlarmCode(code)
         Log.i(
             TAG,
             "fired id=$eventId style=${payload.style} expected=$expected " +
                 "actual=$actual deltaMs=${actual - expected} " +
-                "fluid=$fluid posted=${!fluid}",
+                "fluid=$fluid posted=$posted",
         )
     }
 
@@ -103,11 +106,10 @@ class ReminderReceiver : BroadcastReceiver() {
             ?: ReminderPayload.STYLE_BANNER
         val event = ReminderSamples.event(TEST_LEAD_MINUTES)
         if (style == ReminderPayload.STYLE_FLUID) {
-            // 测试卡片也跟随用户的"显示到下课"设置，否则预览语义和正式不一致。
-            val untilEnd = runCatching {
-                ReminderStore(context).loadPayload()?.fluidUntilEnd
-            }.getOrNull() ?: false
-            ReminderFluidService.start(context, event, untilEnd = untilEnd)
+            val started = ReminderFluidService.start(context, event)
+            if (!started) {
+                ReminderNotifier.show(context, event, TEST_LEAD_MINUTES)
+            }
         } else if (!ReminderNotifier.show(context, event, TEST_LEAD_MINUTES)) {
             Log.w(TAG, "test reminder not posted: notification unavailable")
         }
@@ -118,6 +120,7 @@ class ReminderReceiver : BroadcastReceiver() {
         const val TAG = "ReminderReceiver"
         const val ACTION_REMIND = "com.fangzi.qustschedule.action.REMIND"
         const val ACTION_TEST = "com.fangzi.qustschedule.action.TEST_REMIND"
+        const val ACTION_DISMISS = "com.fangzi.qustschedule.action.DISMISS"
         const val ACTION_FLUID_STOP = "com.fangzi.qustschedule.action.FLUID_STOP"
         const val EXTRA_EVENT_ID = "event_id"
         const val EXTRA_FINGERPRINT = "fingerprint"

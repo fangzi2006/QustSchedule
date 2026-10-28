@@ -149,11 +149,11 @@ class ReminderScheduler(context: Context) {
         val exact = ReminderPermissions.canScheduleExactAlarms(appContext)
         return try {
             if (exact) {
-                manager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
+                val info = AlarmManager.AlarmClockInfo(
                     epoch,
-                    operation,
+                    ReminderNotifier.contentIntent(appContext),
                 )
+                manager.setAlarmClock(info, operation)
             } else {
                 manager.setAndAllowWhileIdle(
                     AlarmManager.RTC_WAKEUP,
@@ -215,14 +215,15 @@ class ReminderScheduler(context: Context) {
             ?: return false
         val operation = pendingIntent(code, event, fingerprint)
         var exact = ReminderPermissions.canScheduleExactAlarms(appContext)
+        var armed = false
         while (true) {
             try {
                 if (exact) {
-                    manager.setExactAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP,
+                    val info = AlarmManager.AlarmClockInfo(
                         event.remindAtMs,
-                        operation,
+                        ReminderNotifier.contentIntent(appContext),
                     )
+                    manager.setAlarmClock(info, operation)
                 } else {
                     manager.setAndAllowWhileIdle(
                         AlarmManager.RTC_WAKEUP,
@@ -230,7 +231,8 @@ class ReminderScheduler(context: Context) {
                         operation,
                     )
                 }
-                return true
+                armed = true
+                break
             } catch (error: SecurityException) {
                 if (!exact) {
                     Log.e(TAG, "arm denied code=$code", error)
@@ -241,6 +243,37 @@ class ReminderScheduler(context: Context) {
                 exact = false
             }
         }
+
+        // 同时挂一个开课时刻准时收起/撤销通知的闹钟（双保险）
+        val now = System.currentTimeMillis()
+        if (event.startMs > now) {
+            val dismissCode = dismissCodeFor(event.id)
+            val dismissOp = dismissPendingIntent(dismissCode, event.id)
+            var dismissExact = exact
+            while (true) {
+                try {
+                    if (dismissExact) {
+                        val info = AlarmManager.AlarmClockInfo(
+                            event.startMs,
+                            ReminderNotifier.contentIntent(appContext),
+                        )
+                        manager.setAlarmClock(info, dismissOp)
+                    } else {
+                        manager.setAndAllowWhileIdle(
+                            AlarmManager.RTC_WAKEUP,
+                            event.startMs,
+                            dismissOp,
+                        )
+                    }
+                    break
+                } catch (error: SecurityException) {
+                    if (!dismissExact) break
+                    dismissExact = false
+                }
+            }
+        }
+
+        return armed
     }
 
     private fun cancel(code: Int) {
@@ -254,9 +287,26 @@ class ReminderScheduler(context: Context) {
             code,
             intent,
             PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
-        ) ?: return
-        manager.cancel(operation)
-        operation.cancel()
+        )
+        if (operation != null) {
+            manager.cancel(operation)
+            operation.cancel()
+        }
+
+        val dismissCode = (code and 0x3fffffff) or 0x40000000
+        val dismissIntent = Intent(appContext, ReminderReceiver::class.java).apply {
+            action = ReminderReceiver.ACTION_DISMISS
+        }
+        val dismissOp = PendingIntent.getBroadcast(
+            appContext,
+            dismissCode,
+            dismissIntent,
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
+        )
+        if (dismissOp != null) {
+            manager.cancel(dismissOp)
+            dismissOp.cancel()
+        }
     }
 
     /** 每天 00:05 重挂一次自愈闹钟（一次性链，触发后再挂次日）。 */
@@ -337,10 +387,32 @@ class ReminderScheduler(context: Context) {
         )
     }
 
+    private fun dismissPendingIntent(
+        code: Int,
+        eventId: String,
+    ): PendingIntent {
+        val intent = Intent(appContext, ReminderReceiver::class.java).apply {
+            action = ReminderReceiver.ACTION_DISMISS
+            putExtra(ReminderReceiver.EXTRA_EVENT_ID, eventId)
+        }
+        return PendingIntent.getBroadcast(
+            appContext,
+            code,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
     /** 稳定 requestCode：同一事件永远落在同一槽位，重排即覆盖。 */
     private fun requestCodeFor(eventId: String): Int {
-        val code = eventId.hashCode() and 0x7fffffff
+        val code = eventId.hashCode() and 0x3fffffff
         return if (code == 0) 1 else code
+    }
+
+    /** 撤销闹钟 requestCode：最高有效位标识，与提醒槽位绝对不冲突。 */
+    private fun dismissCodeFor(eventId: String): Int {
+        val code = eventId.hashCode() and 0x3fffffff
+        return (if (code == 0) 1 else code) or 0x40000000
     }
 
     companion object {

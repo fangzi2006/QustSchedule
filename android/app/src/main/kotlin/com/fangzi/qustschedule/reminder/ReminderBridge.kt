@@ -86,10 +86,9 @@ class ReminderBridge(
                 val style = call.argument<String>("style")
                     ?: ReminderPayload.STYLE_BANNER
                 val lead = call.argument<Int>("leadMinutes") ?: 10
-                val untilEnd = call.argument<Boolean>("untilEnd") ?: false
                 val event = ReminderSamples.event(lead)
                 val shown = if (style == ReminderPayload.STYLE_FLUID) {
-                    ReminderFluidService.start(activity, event, untilEnd)
+                    ReminderFluidService.start(activity, event)
                 } else {
                     ReminderNotifier.show(activity, event, lead)
                 }

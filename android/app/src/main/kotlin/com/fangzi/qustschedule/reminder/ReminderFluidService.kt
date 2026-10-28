@@ -13,27 +13,21 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 
 /**
- * 流体云常驻卡片：一节课前 [FluidCardState.notifyEpoch] 到下课之间，
- * 用前台服务维持一条带倒计时进度环的常驻通知。
+ * 流体云常驻卡片：一节课前 [FluidCardState.notifyEpoch] 到开课时刻之间，
+ * 用前台服务维持一条带系统原生倒计时的常驻通知。
  *
- * 为什么必须每 15 秒重发一次：胶囊上的倒计时/进度是由**通知本身携带的
- * 进度值**渲染的，系统不会替你走秒。重发即"刷新一帧"。
- *
- * 为什么还要额外挂一条"到点收起"的闹钟：`Handler.postDelayed` 只在本进程
- * 被调度时才跑，灭屏进 Doze / App Standby 冻结后 tick 会停摆，卡片就带着
- * 最后一帧一直挂在通知栏。前台服务通知又不能靠 `setTimeoutAfter` 撤销
- * （ongoing 通知的存活由服务生命周期决定），所以必须有一个"进程冻着也会响"
- * 的触发器——精确闹钟。[RC_FLUID_STOP] 独立于账本，[stop] / [onDestroy]
- * 会主动撤掉它。
- *
- * 生命周期出口：下课时间到（tick 或兜底闹钟）、用户关提醒、切回横幅、
- * 或系统回收。force-stop 后无法恢复，与提醒本身一致。
+ * 倒计时由系统 SystemUI Chronometer 原生走秒，无需应用进程频繁 postDelayed 重发通知。
+ * 开课时刻准时收起：由前台服务延迟回调、精确闹钟（[RC_FLUID_STOP] / ACTION_DISMISS）
+ * 以及通知自带的 `setTimeoutAfter` 共同保障，上课准时撤销。
  */
 class ReminderFluidService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var card: FluidCardState? = null
-    private val ticker = Runnable { tick() }
+    private val stopRunnable = Runnable {
+        Log.i(TAG, "reached start time, stop fluid card")
+        stopSelf()
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -43,6 +37,12 @@ class ReminderFluidService : Service() {
                 val state = parse(intent)
                 if (state == null) {
                     Log.w(TAG, "start without valid extras")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                val now = System.currentTimeMillis()
+                if (now >= state.startMs) {
+                    Log.i(TAG, "already reached class start time, skipping fluid card")
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -60,14 +60,14 @@ class ReminderFluidService : Service() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                // 进程被冻结时 tick 会停摆，必须再挂一条"到点收起"的闹钟兜底。
-                armStopAlarm(this, state.stopAtMs)
-                handler.removeCallbacks(ticker)
-                handler.postDelayed(ticker, TICK_MS)
+                // 挂一条"开课准时收起"的闹钟兜底（防止进程被冻结时 Handler 延迟失效）。
+                armStopAlarm(this, state.startMs)
+                handler.removeCallbacks(stopRunnable)
+                handler.postDelayed(stopRunnable, (state.startMs - now).coerceAtLeast(0L))
                 Log.i(
                     TAG,
                     "fluid card started name=${state.name} " +
-                        "left=${state.minutesLeft(System.currentTimeMillis())}min",
+                        "left=${state.minutesLeft(now)}min",
                 )
             }
 
@@ -80,30 +80,11 @@ class ReminderFluidService : Service() {
     }
 
     override fun onDestroy() {
-        handler.removeCallbacks(ticker)
+        handler.removeCallbacks(stopRunnable)
         disarmStopAlarm(this)
         card = null
         casting = false
         super.onDestroy()
-    }
-
-    private fun tick() {
-        val state = card ?: return
-        val now = System.currentTimeMillis()
-        if (now >= state.stopAtMs) {
-            Log.i(
-                TAG,
-                "reached ${if (state.untilEnd) "end" else "start"}, stop fluid card",
-            )
-            stopSelf()
-            return
-        }
-        val notification = ReminderFluidRenderer.build(this, state)
-        val manager = getSystemService(NotificationManager::class.java)
-        manager?.notify(ReminderNotifier.NOTIFY_ID, notification)
-        // 上课后进度环已经停在满圈、文案也不再变，没必要每 15 秒唤醒一次。
-        val interval = if (now >= state.startMs) TICK_SLOW_MS else TICK_MS
-        handler.postDelayed(ticker, interval)
     }
 
     private fun parse(intent: Intent): FluidCardState? {
@@ -120,7 +101,6 @@ class ReminderFluidService : Service() {
             startPeriod = intent.getIntExtra(EXTRA_START_PERIOD, 1),
             endPeriod = intent.getIntExtra(EXTRA_END_PERIOD, 1),
             notifyEpoch = intent.getLongExtra(EXTRA_NOTIFY_EPOCH, startMs),
-            untilEnd = intent.getBooleanExtra(EXTRA_UNTIL_END, false),
         )
     }
 
@@ -137,12 +117,6 @@ class ReminderFluidService : Service() {
         private const val EXTRA_START_PERIOD = "start_period"
         private const val EXTRA_END_PERIOD = "end_period"
         private const val EXTRA_NOTIFY_EPOCH = "notify_epoch"
-        private const val EXTRA_UNTIL_END = "until_end"
-
-        private const val TICK_MS = 15_000L
-
-        /** 上课后进度不再变化，刷新间隔放宽到 1 分钟，省电。 */
-        private const val TICK_SLOW_MS = 60_000L
 
         /** 「到点收起」闹钟的槽位：独立于课表账本（2001 自愈 / 2002 测试）。 */
         private const val RC_FLUID_STOP = 2003
@@ -153,13 +127,11 @@ class ReminderFluidService : Service() {
             private set
 
         /**
-         * @param untilEnd true = 显示到下课；false = 上课即收起。
          * @return 是否成功把启动请求交给了系统（诊断页预览要用它）。
          */
         fun start(
             context: Context,
             event: ReminderEvent,
-            untilEnd: Boolean = false,
         ): Boolean {
             val intent = Intent(context, ReminderFluidService::class.java).apply {
                 action = ACTION_START
@@ -171,7 +143,6 @@ class ReminderFluidService : Service() {
                 putExtra(EXTRA_START_PERIOD, event.startPeriod)
                 putExtra(EXTRA_END_PERIOD, event.endPeriod)
                 putExtra(EXTRA_NOTIFY_EPOCH, event.remindAtMs)
-                putExtra(EXTRA_UNTIL_END, untilEnd)
             }
             return try {
                 ContextCompat.startForegroundService(context, intent)
@@ -196,10 +167,7 @@ class ReminderFluidService : Service() {
         }
 
         /**
-         * 挂一条"到点收起"的一次性精确闹钟。
-         *
-         * 精确权限缺失时降级成 `setAndAllowWhileIdle`（与提醒本身同一套规则），
-         * 最差是晚几分钟收，但不会不收。
+         * 挂一条"开课准时收起"的一次性闹钟。
          */
         private fun armStopAlarm(context: Context, endMs: Long) {
             val manager = context.getSystemService(AlarmManager::class.java) ?: return
@@ -208,11 +176,11 @@ class ReminderFluidService : Service() {
             val exact = ReminderPermissions.canScheduleExactAlarms(context)
             try {
                 if (exact) {
-                    manager.setExactAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP,
+                    val info = AlarmManager.AlarmClockInfo(
                         endMs,
-                        operation,
+                        ReminderNotifier.contentIntent(context),
                     )
+                    manager.setAlarmClock(info, operation)
                 } else {
                     manager.setAndAllowWhileIdle(
                         AlarmManager.RTC_WAKEUP,

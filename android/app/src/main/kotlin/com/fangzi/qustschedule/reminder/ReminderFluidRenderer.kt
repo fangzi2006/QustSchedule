@@ -25,12 +25,10 @@ data class FluidCardState(
     val startPeriod: Int,
     val endPeriod: Int,
     val notifyEpoch: Long,
-    /** true = 显示到下课；false（默认）= 上课即收起。 */
-    val untilEnd: Boolean = false,
 ) {
-    /** 卡片该在什么时刻收起：显示到下课 → [endMs]，否则上课时刻。 */
+    /** 卡片上课时刻即收起。 */
     val stopAtMs: Long
-        get() = if (untilEnd) endMs else startMs
+        get() = startMs
 
     /** 距离上课还有几分钟（不足一分钟按 1 算；已上课为 0）。 */
     fun minutesLeft(now: Long): Int {
@@ -53,7 +51,7 @@ data class FluidCardState(
         parts.add(span)
         if (room.isNotEmpty()) parts.add(room)
         if (teacher.isNotEmpty()) parts.add(teacher)
-        return parts.joinToString(" | ")
+        return parts.joinToString(" · ")
     }
 
     fun periodText(): String =
@@ -102,38 +100,30 @@ object ReminderFluidRenderer {
     fun build(context: Context, state: FluidCardState): Notification {
         ensureChannel(context)
         val now = System.currentTimeMillis()
-        val progress = state.progress(now)
-        val started = now >= state.startMs
         val primary = state.room.ifEmpty { state.name }.ifEmpty { "上课提醒" }
 
-        // 小图标固定用矢量资源，进度表现完全交给系统 `ProgressStyle`。
-        // 自己再画一圈会和系统环叠在一起，而且位图会和卡片底色混色，
-        // 出现"先灰环后黑环"两种观感。
         val builder = NotificationCompat.Builder(context, CHANNEL_FLUID)
             .setSmallIcon(R.drawable.ic_stat_lesson)
-        builder
             .setContentTitle(state.name.ifEmpty { "上课提醒" })
             .setContentText(state.detailText())
-            .setSubText(
-                if (started) {
-                    "${state.periodText()} · 上课中"
-                } else {
-                    "${state.periodText()} · ${state.minutesLeft(now)} 分钟后上课"
-                },
-            )
-            .setProgress(100, progress, false)
             .setStyle(
-                NotificationCompat.ProgressStyle()
-                    .setProgress(progress)
-                    .setStyledByProgress(true),
+                NotificationCompat.BigTextStyle()
+                    .bigText(state.detailText())
             )
+            .setWhen(state.startMs)
+            .setShowWhen(true)
+            .setUsesChronometer(true)
+            .setChronometerCountDown(true)
+            .setTimeoutAfter((state.startMs - now).coerceAtLeast(1000L))
             .setShortCriticalText(primary.take(7))
             .setRequestPromotedOngoing(true)
             .setOngoing(true)
             .setSilent(true)
             .setOnlyAlertOnce(true)
-            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(contentIntent(context))
         return builder.build()
     }
