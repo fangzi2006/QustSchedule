@@ -541,10 +541,7 @@ class _DiagnosticsCard extends StatelessWidget {
               spacing: 10,
               runSpacing: 8,
               children: <Widget>[
-                OutlinedButton(
-                  onPressed: onResync,
-                  child: const Text('立即重排'),
-                ),
+                OutlinedButton(onPressed: onResync, child: const Text('立即重排')),
                 OutlinedButton(
                   onPressed: onPreview,
                   child: const Text('立即显示通知'),
@@ -660,9 +657,7 @@ class _InfoRow extends StatelessWidget {
             width: 84,
             child: Text(label, style: theme.textTheme.bodySmall),
           ),
-          Expanded(
-            child: Text(value, style: theme.textTheme.bodySmall),
-          ),
+          Expanded(child: Text(value, style: theme.textTheme.bodySmall)),
         ],
       ),
     );
