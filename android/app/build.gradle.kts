@@ -56,6 +56,17 @@ android {
     }
 
     buildTypes {
+        // 方案 A：debug 也复用 release 签名。
+        // 否则 debug.keystore 与 release keystore 证书不同，同包名无法覆盖安装，
+        // Flutter 会先卸载旧包，导致偏好、缓存、Cookie 与 Keystore 密码全部丢失。
+        // 注意：签名后的 debug APK 能覆盖正式版，不要外传。
+        debug {
+            signingConfig = if (hasReleaseKey) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+        }
         release {
             // 有 key.properties 就用自己那把钥匙签；没有就退回 debug 签名
             // （能装能用，但换了机器就不能覆盖升级）。
@@ -72,6 +83,12 @@ kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
+}
+
+dependencies {
+    // 流体云走公开 API：NotificationCompat.ProgressStyle / setRequestPromotedOngoing /
+    // setShortCriticalText 都在 androidx.core 1.17 才齐；不接 OPPO 幼苗 SDK 与 UPK。
+    implementation("androidx.core:core-ktx:1.17.0")
 }
 
 flutter {

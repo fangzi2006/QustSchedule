@@ -9,6 +9,8 @@
 /// 密码只是为了 Cookie 失效时能自动重登。
 library;
 
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -17,9 +19,11 @@ import 'package:zf_academic/zf_academic.dart' show AcademicError;
 import '../src/app_model.dart';
 import '../src/app_version.dart';
 import '../src/preferences_repository.dart';
+import '../src/reminder_service.dart';
 import '../src/timetable.dart' show formatMonthDayDate;
 import '../widgets/floating_dock.dart';
 import 'debug_page.dart';
+import 'reminder_page.dart';
 import 'schedule_page.dart' show showCalibrateSheet;
 import 'school_address_page.dart';
 import 'timetable_list_page.dart';
@@ -28,9 +32,12 @@ import 'timetable_list_page.dart';
 const String kProjectHomeUrl = 'https://github.com/fangzi2006/QustSchedule';
 
 class SettingsPage extends StatelessWidget {
-  const SettingsPage({super.key, required this.model});
+  const SettingsPage({super.key, required this.model, this.reminders});
 
   final AppModel model;
+
+  /// 课程提醒编排层。null = 当前宿主（桌面 / 测试）没有挂它，入口不显示。
+  final ReminderService? reminders;
 
   @override
   Widget build(BuildContext context) {
@@ -88,6 +95,30 @@ class SettingsPage extends StatelessWidget {
                       trailing: const Icon(Icons.chevron_right_rounded),
                       onTap: () => showCalibrateSheet(context, model),
                     ),
+                    if (reminders != null &&
+                        defaultTargetPlatform ==
+                            TargetPlatform.android) ...<Widget>[
+                      const Divider(height: 0, indent: 56),
+                      ListTile(
+                        leading: const Icon(
+                          Icons.notifications_active_outlined,
+                          size: 20,
+                        ),
+                        title: const Text('课程提醒'),
+                        subtitle: Text(
+                          model.reminderEnabled
+                              ? '已开启 · 提前 ${model.reminderLeadMinutes} 分钟'
+                              : '未开启',
+                        ),
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) =>
+                                ReminderPage(model: model, service: reminders!),
+                          ),
+                        ),
+                      ),
+                    ],
                     const Divider(height: 0, indent: 56),
                     SwitchListTile(
                       secondary: const Icon(

@@ -17,6 +17,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../src/app_model.dart';
+import '../src/reminder_service.dart';
 import '../widgets/floating_dock.dart';
 import '../widgets/status_popup.dart';
 import 'debug_page.dart';
@@ -24,9 +25,12 @@ import 'schedule_page.dart';
 import 'settings_page.dart';
 
 class HomeShell extends StatefulWidget {
-  const HomeShell({super.key, required this.model});
+  const HomeShell({super.key, required this.model, this.reminders});
 
   final AppModel model;
+
+  /// 课程提醒编排层（仅 Android 由 main 挂上来；测试里可以为 null）。
+  final ReminderService? reminders;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -71,7 +75,12 @@ class _HomeShellState extends State<HomeShell> {
   /// 按下 dock 时用户已经决定要走了，这一帧的代价才是可以接受的。
   void _ensureSettingsPage() {
     if (_settingsPage != null) return;
-    setState(() => _settingsPage = SettingsPage(model: widget.model));
+    setState(
+      () => _settingsPage = SettingsPage(
+        model: widget.model,
+        reminders: widget.reminders,
+      ),
+    );
   }
 
   final GlobalKey<_ShellPagerState> _pagerKey = GlobalKey<_ShellPagerState>();

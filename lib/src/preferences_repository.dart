@@ -6,12 +6,13 @@
 ///  3. 课表节数（上午 / 下午 / 晚上各几节，全局设置，所有作息表共用）；
 ///  4. 课表格子里显不显示教师 / 上课地点；
 ///  5. 外观：格子高度与课程卡片文字缩放；
-///  6. 静默更新开关与最小间隔、调课规则。
+///  6. 静默更新开关与最小间隔、调课规则；
+///  7. 课前提醒开关与提前量（schema 9）。
 ///
 /// 为什么不复用 Cookie 快照文件：那个是会话资产（可清可重建），
 /// 这里是用户资产（清 Cookie 不该丢），分开存。
 ///
-/// 版本迁移（当前 schema 6）：读到旧版的单个 `sectionCount` 整数时按 4/4/其余
+/// 版本迁移（当前 schema 11）：读到旧版的单个 `sectionCount` 整数时按 4/4/其余
 /// 拆成三段，避免升级后节数被重置；任何缺失字段一律回落到默认值。
 library;
 
@@ -23,11 +24,12 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
+import 'reminder_planner.dart';
 import 'reschedule.dart';
 import 'school.dart';
 import 'timetable.dart';
 
-const int preferencesSchema = 8;
+const int preferencesSchema = 11;
 
 /// 课表格子（一节那一行）的高度，逻辑像素。
 ///
@@ -78,6 +80,10 @@ class Preferences {
     int autoRefreshIntervalMinutes = defaultAutoRefreshIntervalMinutes,
     List<RescheduleRule> reschedules = const <RescheduleRule>[],
     bool showScheduleRemarks = true,
+    bool reminderEnabled = false,
+    int reminderLeadMinutes = defaultReminderLeadMinutes,
+    ReminderStyle reminderStyle = defaultReminderStyle,
+    bool reminderFluidUntilEnd = defaultReminderFluidUntilEnd,
     File? file,
   }) : _termStarts = termStarts,
        _timetables = timetables,
@@ -100,6 +106,10 @@ class Preferences {
        ),
        _reschedules = reschedules,
        _showScheduleRemarks = showScheduleRemarks,
+       _reminderEnabled = reminderEnabled,
+       _reminderLeadMinutes = clampReminderLead(reminderLeadMinutes),
+       _reminderStyle = reminderStyle,
+       _reminderFluidUntilEnd = reminderFluidUntilEnd,
        _file = file;
 
   final Map<String, String> _termStarts;
@@ -141,6 +151,20 @@ class Preferences {
 
   /// 是否在课表页下方显示"备注"（实践课程 / 其他课程）。
   bool _showScheduleRemarks;
+
+  /// 课前提醒：总开关与提前量（分钟）。
+  ///
+  /// 默认关闭：通知权限、精确闹钟权限都要用户自己点，静默打开只会
+  /// "开了也不响"。提前量是 1~60 分钟的任意整数（界面上是滑块）。
+  bool _reminderEnabled;
+  int _reminderLeadMinutes;
+
+  /// 提醒形态：横幅 or 流体云（schema 10）。
+  ReminderStyle _reminderStyle;
+
+  /// 流体云是否显示到下课（schema 11，默认 false = 上课即收起）。
+  bool _reminderFluidUntilEnd;
+
   final File? _file;
 
   /// 内存实例（测试用；不落盘）。可预置学期起始日、时间表与节数。
@@ -160,6 +184,10 @@ class Preferences {
     int autoRefreshIntervalMinutes = defaultAutoRefreshIntervalMinutes,
     List<RescheduleRule> reschedules = const <RescheduleRule>[],
     bool showScheduleRemarks = true,
+    bool reminderEnabled = false,
+    int reminderLeadMinutes = defaultReminderLeadMinutes,
+    ReminderStyle reminderStyle = defaultReminderStyle,
+    bool reminderFluidUntilEnd = defaultReminderFluidUntilEnd,
   }) => Preferences._(
     termStarts: termStarts ?? <String, String>{},
     timetables: timetables ?? <Timetable>[defaultTimetable()],
@@ -176,6 +204,10 @@ class Preferences {
     autoRefreshIntervalMinutes: autoRefreshIntervalMinutes,
     reschedules: reschedules,
     showScheduleRemarks: showScheduleRemarks,
+    reminderEnabled: reminderEnabled,
+    reminderLeadMinutes: reminderLeadMinutes,
+    reminderStyle: reminderStyle,
+    reminderFluidUntilEnd: reminderFluidUntilEnd,
     file: null,
   );
 
@@ -221,6 +253,10 @@ class Preferences {
     var autoRefreshIntervalMinutes = defaultAutoRefreshIntervalMinutes;
     var reschedules = <RescheduleRule>[];
     var showScheduleRemarks = true;
+    var reminderEnabled = false;
+    var reminderLeadMinutes = defaultReminderLeadMinutes;
+    var reminderStyle = defaultReminderStyle;
+    var reminderFluidUntilEnd = defaultReminderFluidUntilEnd;
 
     if (text.trim().isNotEmpty) {
       try {
@@ -318,6 +354,18 @@ class Preferences {
           // schema 6：是否显示课表备注。缺字段 = 旧版本，按"显示"处理。
           final rawRemarks = decoded['showScheduleRemarks'];
           if (rawRemarks is bool) showScheduleRemarks = rawRemarks;
+          // schema 9：课前提醒。缺字段 = 旧版本，按"关闭 + 默认提前量"。
+          final rawReminder = decoded['reminderEnabled'];
+          if (rawReminder is bool) reminderEnabled = rawReminder;
+          final rawLead = (decoded['reminderLeadMinutes'] as num?)?.toInt();
+          if (rawLead != null) reminderLeadMinutes = clampReminderLead(rawLead);
+          // schema 10：提醒形态。缺字段 / 脏值一律按横幅。
+          reminderStyle = ReminderStyle.parse(
+            decoded['reminderStyle'] as String?,
+          );
+          // schema 11：流体云是否显示到下课。缺字段 = 默认（上课即收起）。
+          final rawUntilEnd = decoded['reminderFluidUntilEnd'];
+          if (rawUntilEnd is bool) reminderFluidUntilEnd = rawUntilEnd;
         }
       } catch (_) {
         // 文件损坏按空设置处理：不值得因为一份设置让 app 起不来。
@@ -333,6 +381,10 @@ class Preferences {
         autoRefreshIntervalMinutes = defaultAutoRefreshIntervalMinutes;
         reschedules = <RescheduleRule>[];
         showScheduleRemarks = true;
+        reminderEnabled = false;
+        reminderLeadMinutes = defaultReminderLeadMinutes;
+        reminderStyle = defaultReminderStyle;
+        reminderFluidUntilEnd = defaultReminderFluidUntilEnd;
       }
     }
 
@@ -352,6 +404,10 @@ class Preferences {
       autoRefreshIntervalMinutes: autoRefreshIntervalMinutes,
       reschedules: reschedules,
       showScheduleRemarks: showScheduleRemarks,
+      reminderEnabled: reminderEnabled,
+      reminderLeadMinutes: reminderLeadMinutes,
+      reminderStyle: reminderStyle,
+      reminderFluidUntilEnd: reminderFluidUntilEnd,
       file: file,
     );
   }
@@ -566,6 +622,47 @@ class Preferences {
   }
 
   // ---------------------------------------------------------------------------
+  // 课前提醒
+  // ---------------------------------------------------------------------------
+
+  /// 是否开启课前提醒（默认关闭）。
+  bool get reminderEnabled => _reminderEnabled;
+
+  /// 提前多少分钟（1~60 的任意整数）。
+  int get reminderLeadMinutes => _reminderLeadMinutes;
+
+  Future<void> setReminderEnabled(bool value) async {
+    if (_reminderEnabled == value) return;
+    _reminderEnabled = value;
+    await _flush();
+  }
+
+  Future<void> setReminderLeadMinutes(int value) async {
+    final safe = clampReminderLead(value);
+    if (safe == _reminderLeadMinutes) return;
+    _reminderLeadMinutes = safe;
+    await _flush();
+  }
+
+  /// 提醒形态（横幅 / 流体云）。
+  ReminderStyle get reminderStyle => _reminderStyle;
+
+  Future<void> setReminderStyle(ReminderStyle value) async {
+    if (_reminderStyle == value) return;
+    _reminderStyle = value;
+    await _flush();
+  }
+
+  /// 流体云卡片是否显示到下课（false = 上课即收起）。
+  bool get reminderFluidUntilEnd => _reminderFluidUntilEnd;
+
+  Future<void> setReminderFluidUntilEnd(bool value) async {
+    if (_reminderFluidUntilEnd == value) return;
+    _reminderFluidUntilEnd = value;
+    await _flush();
+  }
+
+  // ---------------------------------------------------------------------------
   // 内置作息表补齐
   // ---------------------------------------------------------------------------
 
@@ -642,6 +739,10 @@ class Preferences {
         'autoRefreshIntervalMinutes': _autoRefreshIntervalMinutes,
         'reschedules': _reschedules.map((rule) => rule.toJson()).toList(),
         'showScheduleRemarks': _showScheduleRemarks,
+        'reminderEnabled': _reminderEnabled,
+        'reminderLeadMinutes': _reminderLeadMinutes,
+        'reminderStyle': _reminderStyle.wireName,
+        'reminderFluidUntilEnd': _reminderFluidUntilEnd,
         'timetables': _timetables.map((table) => table.toJson()).toList(),
         if (_quickSetup != null) 'quickSetup': _quickSetup!.toJson(),
       }),

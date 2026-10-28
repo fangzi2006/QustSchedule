@@ -20,6 +20,7 @@ import 'school.dart';
 import 'session_repository.dart';
 import 'credentials_repository.dart';
 import 'preferences_repository.dart';
+import 'reminder_planner.dart';
 import 'reschedule.dart';
 import 'schedule_cache.dart';
 import 'term_calendar.dart';
@@ -81,6 +82,7 @@ class AppModel extends ChangeNotifier {
        _repositoryReady = repository != null,
        _preferences = preferences ?? Preferences.inMemory(),
        _preferencesReady = preferences != null,
+       _preferencesLoaded = preferences != null,
        _scheduleCache = scheduleCache ?? LateScheduleCache(),
        _cacheReady = scheduleCache != null {
     // 自动回登遇到验证码时由状态机挂起、UI 输入（见 _handleCaptcha）。
@@ -95,6 +97,11 @@ class AppModel extends ChangeNotifier {
   /// 用户设置。构造时先给内存实现，`boot()` 时替换为落盘实现。
   Preferences _preferences;
   final bool _preferencesReady;
+
+  /// 偏好是否已经读到（注入内存实现时一开始就算读到）。
+  ///
+  /// 见 [preferencesLoaded]：提醒服务不能用"默认值"判断用户关掉了提醒。
+  bool _preferencesLoaded;
 
   /// 课表本地缓存（课表 + 抓取时间）。同样在 `boot()` 时替换为落盘实现。
   ScheduleCache _scheduleCache;
@@ -416,6 +423,58 @@ class AppModel extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
+  // 课前提醒（开关 + 提前量）
+  // ---------------------------------------------------------------------------
+
+  /// 偏好是否已经从磁盘读到。
+  ///
+  /// 冷启动时 [Preferences.open] 还没回来，读到的 `reminderEnabled` 是默认的
+  /// `false`——提醒服务如果这时同步，会把用户真正开着的提醒当成"关掉了"
+  /// 而清空全部闹钟。所以服务必须等这个标志为 true 才动手。
+  bool get preferencesLoaded => _preferencesLoaded;
+
+  /// 是否开启课前提醒（仅 Android 有这条路径）。
+  bool get reminderEnabled => _preferences.reminderEnabled;
+
+  /// 提前多少分钟（1~60 的任意整数，界面用滑块取）。
+  int get reminderLeadMinutes => _preferences.reminderLeadMinutes;
+
+  /// 提醒形态：横幅 / 流体云。
+  ReminderStyle get reminderStyle => _preferences.reminderStyle;
+
+  Future<void> setReminderEnabled(bool value) async {
+    if (_preferences.reminderEnabled == value) return;
+    await _preferences.setReminderEnabled(value);
+    notifyListeners();
+    _notifyPrefs();
+  }
+
+  Future<void> setReminderLeadMinutes(int value) async {
+    final safe = clampReminderLead(value);
+    if (_preferences.reminderLeadMinutes == safe) return;
+    await _preferences.setReminderLeadMinutes(safe);
+    notifyListeners();
+    _notifyPrefs();
+  }
+
+  Future<void> setReminderStyle(ReminderStyle value) async {
+    if (_preferences.reminderStyle == value) return;
+    await _preferences.setReminderStyle(value);
+    notifyListeners();
+    _notifyPrefs();
+  }
+
+  /// 流体云卡片是否显示到下课（默认 false = 上课即收起）。
+  bool get reminderFluidUntilEnd => _preferences.reminderFluidUntilEnd;
+
+  Future<void> setReminderFluidUntilEnd(bool value) async {
+    if (_preferences.reminderFluidUntilEnd == value) return;
+    await _preferences.setReminderFluidUntilEnd(value);
+    notifyListeners();
+    _notifyPrefs();
+  }
+
+  // ---------------------------------------------------------------------------
   // 调课（只影响渲染，不改原始课表）
   // ---------------------------------------------------------------------------
 
@@ -584,6 +643,8 @@ class AppModel extends ChangeNotifier {
       final cacheFuture = _cacheReady ? null : FileScheduleCache.open();
       if (sessionFuture != null) _rebindRepository(await sessionFuture);
       if (preferencesFuture != null) _preferences = await preferencesFuture;
+      // 偏好到手（或本来就注入了内存实现）：提醒服务从这一刻起才允许同步。
+      _preferencesLoaded = true;
       // 冷启动也算"刚看见过今天"：回到前台时拿它比对，跨天才重建。
       _lastSeenDay = dayOnly(DateTime.now());
       if (cacheFuture != null) _scheduleCache = await cacheFuture;

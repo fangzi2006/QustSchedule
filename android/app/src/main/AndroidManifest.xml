@@ -3,6 +3,16 @@
          （debug/profile 的 manifest 里已自带，release 没有），表现就是"网络不稳定"。
          不要删这行。 -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- 课程提醒：Android 13+ 运行时通知权限；Android 12+ 精确闹钟特殊权限。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <!-- 重启 / 覆盖安装后重排闹钟（系统会清空全部闹钟，必须自己恢复）。 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- 流体云：上课期间维持一条常驻进度卡片（前台服务，specialUse 子类型）。
+         Android 16 起把常驻通知提升为胶囊还需要 promoted 通知权限。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS"/>
     <application
         android:label="青科课表通"
         android:name="${applicationName}"
@@ -32,6 +42,36 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- 正式提醒：闹钟到点 → 校验收据 → 发通知。 -->
+        <receiver
+            android:name=".reminder.ReminderReceiver"
+            android:exported="false" />
+        <!-- 重启 / 覆盖安装 / 时间与时区变化 / 精确闹钟授权后恢复排程。
+             这些都是系统广播，不需要对外导出。 -->
+        <receiver
+            android:name=".reminder.ReminderRestoreReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                <action android:name="android.intent.action.TIME_SET"/>
+                <action android:name="android.intent.action.TIMEZONE_CHANGED"/>
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED"/>
+            </intent-filter>
+        </receiver>
+        <!-- 每天 00:05 的自愈重排：只重放已保存的 payload，不重新规划课表。 -->
+        <receiver
+            android:name=".reminder.ReminderDailyResyncReceiver"
+            android:exported="false" />
+        <!-- 流体云常驻卡片：前台服务，specialUse 子类型（Android 14+ 必须显式声明）。 -->
+        <service
+            android:name=".reminder.ReminderFluidService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="course reminder countdown card before class"/>
+        </service>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

@@ -20,6 +20,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:zf_academic/zf_academic.dart';
 
+import '../src/course_text.dart';
 import '../theme/course_palette.dart';
 
 class CourseBlock extends StatelessWidget {
@@ -100,7 +101,7 @@ class CourseBlock extends StatelessWidget {
     }
 
     final location = showLocation && entry.location != null
-        ? _roomOnly(entry.location!)
+        ? roomOnly(entry.location!)
         : '';
     final scaler = MediaQuery.textScalerOf(context);
     final textDirection = Directionality.of(context);
@@ -202,24 +203,6 @@ class CourseBlock extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  static String _roomOnly(String location) {
-    var text = location.trim();
-    if (text.isEmpty) return text;
-
-    final lastSpace = text.lastIndexOf(RegExp(r'\s'));
-    if (lastSpace >= 0 && lastSpace < text.length - 1) {
-      text = text.substring(lastSpace + 1).trim();
-    }
-
-    final campus = RegExp(r'^.*?校区').firstMatch(text);
-    if (campus != null) {
-      final rest = text.substring(campus.end).trim();
-      if (rest.isNotEmpty) text = rest;
-    }
-
-    return text.isEmpty ? location.trim() : text;
   }
 }
 

@@ -25,29 +25,26 @@ class DebugPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tabs = <Widget>[
+      const Tab(text: '概览'),
+      const Tab(text: '请求'),
+      const Tab(text: '原始课表'),
+      const Tab(text: '解析结果'),
+    ];
+    final views = <Widget>[
+      _OverviewTab(model: model),
+      _RequestsTab(model: model),
+      _RawTab(model: model),
+      _ParsedTab(model: model),
+    ];
     return DefaultTabController(
-      length: 4,
+      length: tabs.length,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('调试信息'),
-          bottom: const TabBar(
-            isScrollable: true,
-            tabs: <Widget>[
-              Tab(text: '概览'),
-              Tab(text: '请求'),
-              Tab(text: '原始课表'),
-              Tab(text: '解析结果'),
-            ],
-          ),
+          bottom: TabBar(isScrollable: true, tabs: tabs),
         ),
-        body: TabBarView(
-          children: <Widget>[
-            _OverviewTab(model: model),
-            _RequestsTab(model: model),
-            _RawTab(model: model),
-            _ParsedTab(model: model),
-          ],
-        ),
+        body: TabBarView(children: views),
       ),
     );
   }

@@ -3,10 +3,13 @@
 /// 这里不碰网络与平台通道：AppModel 注入内存凭据存储 + 假后端 + 内存设置。
 library;
 
+import 'dart:async';
+
 import 'package:qustschedule/main.dart' show pageForStatus;
 import 'package:qustschedule/pages/debug_page.dart';
 import 'package:qustschedule/pages/home_shell.dart';
 import 'package:qustschedule/pages/login_page.dart';
+import 'package:qustschedule/pages/reminder_page.dart';
 import 'package:qustschedule/pages/schedule_page.dart';
 import 'package:qustschedule/pages/school_address_page.dart';
 import 'package:qustschedule/pages/settings_page.dart';
@@ -16,16 +19,22 @@ import 'package:qustschedule/widgets/course_tile.dart';
 import 'package:qustschedule/widgets/floating_dock.dart';
 import 'package:qustschedule/src/app_model.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
+import 'package:qustschedule/src/reminder_gateway.dart';
+import 'package:qustschedule/src/reminder_planner.dart';
+import 'package:qustschedule/src/reminder_service.dart';
 import 'package:qustschedule/src/schedule_service.dart';
 import 'package:qustschedule/src/term_calendar.dart';
 import 'package:qustschedule/src/timetable.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPicker;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zf_academic/zf_academic_io.dart';
 
 import 'support/fake_backend.dart';
+import 'support/fake_reminder_gateway.dart';
 
 AppModel buildModel({FakeBackend? backend}) {
   final fake = backend ?? FakeBackend();
@@ -1928,7 +1937,7 @@ void main() {
     });
   });
 
-  group('作息表编辑（保存语义）', () {
+  group('作息表编辑与新建', () {
     testWidgets('未改动时保存键禁用；改动后可保存并真正写盘', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
@@ -2063,6 +2072,51 @@ void main() {
       await tester.tap(find.widgetWithText(FilledButton, '删除'));
       await tester.pumpAndSettle();
       expect(model.timetables.any((t) => t.id == 't2'), isFalse);
+    });
+
+    testWidgets('进编辑页时还没进列表，点对勾后才创建', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(TimetableListPage(model: model)));
+      final before = model.timetables.length;
+
+      await tester.tap(find.widgetWithText(OutlinedButton, '新建作息表'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(TimetableEditPage), findsOneWidget);
+      expect(model.timetables.length, before, reason: '还没点对勾，不该落盘');
+
+      final check = find.widgetWithIcon(IconButton, Icons.check_rounded);
+      expect(
+        tester.widget<IconButton>(check).onPressed,
+        isNotNull,
+        reason: '新表一进来就可以直接保存',
+      );
+
+      await tester.tap(check);
+      await tester.pumpAndSettle();
+
+      expect(model.timetables.length, before + 1);
+      expect(find.byType(TimetableEditPage), findsNothing);
+    });
+
+    testWidgets('新表未保存就返回：弹确认且不创建', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(TimetableListPage(model: model)));
+      final before = model.timetables.length;
+
+      await tester.tap(find.widgetWithText(OutlinedButton, '新建作息表'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(BackButton));
+      await tester.pumpAndSettle();
+      expect(find.text('放弃修改？'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, '放弃'));
+      await tester.pumpAndSettle();
+
+      expect(model.timetables.length, before);
+      expect(find.byType(TimetableEditPage), findsNothing);
     });
   });
 
@@ -2448,53 +2502,6 @@ void main() {
     });
   });
 
-  group('新建作息表（点对勾才保存）', () {
-    testWidgets('进编辑页时还没进列表，点对勾后才创建', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(TimetableListPage(model: model)));
-      final before = model.timetables.length;
-
-      await tester.tap(find.widgetWithText(OutlinedButton, '新建作息表'));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(TimetableEditPage), findsOneWidget);
-      expect(model.timetables.length, before, reason: '还没点对勾，不该落盘');
-
-      final check = find.widgetWithIcon(IconButton, Icons.check_rounded);
-      expect(
-        tester.widget<IconButton>(check).onPressed,
-        isNotNull,
-        reason: '新表一进来就可以直接保存',
-      );
-
-      await tester.tap(check);
-      await tester.pumpAndSettle();
-
-      expect(model.timetables.length, before + 1);
-      expect(find.byType(TimetableEditPage), findsNothing);
-    });
-
-    testWidgets('新表未保存就返回：弹确认且不创建', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(TimetableListPage(model: model)));
-      final before = model.timetables.length;
-
-      await tester.tap(find.widgetWithText(OutlinedButton, '新建作息表'));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byType(BackButton));
-      await tester.pumpAndSettle();
-      expect(find.text('放弃修改？'), findsOneWidget);
-      await tester.tap(find.widgetWithText(FilledButton, '放弃'));
-      await tester.pumpAndSettle();
-
-      expect(model.timetables.length, before);
-      expect(find.byType(TimetableEditPage), findsNothing);
-    });
-  });
-
   group('"今"按钮', () {
     testWidgets('看本周时不出现，翻到别的周才浮出来', (tester) async {
       final model = buildModel();
@@ -2674,6 +2681,425 @@ void main() {
 
       // 中断后不能停在两页中间（更不该闪回设置页），最终必须干净地回到课表。
       expect(shellPagePosition(tester), 0, reason: '整页滑回课表');
+    });
+  });
+
+  group('课程提醒', () {
+    /// 提醒页需要 model + 编排层；用假通道避免碰平台。
+    Future<
+      ({AppModel model, FakeReminderGateway gateway, ReminderService service})
+    >
+    buildReminderRig({
+      bool enabled = false,
+      ReminderRuntimeStatus? status,
+    }) async {
+      final model = buildModel();
+      if (enabled) await model.setReminderEnabled(true);
+      model.hydrateForTest(
+        schedule: sampleSchedule(),
+        termStart: DateTime(2026, 9, 7),
+        week: 1,
+      );
+      final gateway = FakeReminderGateway(
+        statusValue:
+            status ??
+            const ReminderRuntimeStatus(
+              notificationPermission: true,
+              notificationsEnabled: true,
+              exactAlarmAllowed: true,
+              scheduled: 3,
+              style: 'banner',
+              nextTriggerMs: 1789000000000,
+            ),
+      );
+      final service = ReminderService(
+        model: model,
+        gateway: gateway,
+        now: () => DateTime(2026, 9, 7, 6),
+      );
+      return (model: model, gateway: gateway, service: service);
+    }
+
+    testWidgets('Android 下设置页才有「课程提醒」入口', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final rig = await buildReminderRig();
+      await tester.pumpWidget(
+        wrap(SettingsPage(model: rig.model, reminders: rig.service)),
+      );
+
+      expect(find.text('课程提醒'), findsOneWidget);
+      expect(find.text('未开启'), findsOneWidget);
+
+      // 没有挂编排层（桌面端）时不显示。
+      await tester.pumpWidget(
+        wrap(SettingsPage(model: rig.model, reminders: null)),
+      );
+      expect(find.text('课程提醒'), findsNothing);
+
+      // 非 Android 平台即使挂了也不显示。
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      await tester.pumpWidget(
+        wrap(SettingsPage(model: rig.model, reminders: rig.service)),
+      );
+      expect(find.text('课程提醒'), findsNothing);
+
+      rig.service.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('提醒页展示提前量滑块、预设与诊断信息', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final rig = await buildReminderRig();
+      await tester.pumpWidget(
+        wrap(ReminderPage(model: rig.model, service: rig.service)),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('上课前提醒'), findsOneWidget);
+      // 滑块负责连续取值，预设按钮只是快捷跳转。
+      final slider = tester.widget<Slider>(
+        find.byKey(const Key('reminder-lead-slider')),
+      );
+      expect(slider.min, 1);
+      expect(slider.max, 60);
+      expect(slider.divisions, 59);
+      expect(slider.value, 10);
+      expect(find.text('提前 10 分钟'), findsOneWidget);
+      for (final minutes in <int>[5, 10, 15, 20, 30]) {
+        expect(find.text('$minutes 分钟'), findsWidgets);
+      }
+
+      // 诊断卡片在首屏之外，懒加载列表要滚到才会构建。
+      await tester.scrollUntilVisible(
+        find.text('一分钟后测试提醒'),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('3 条'), findsOneWidget);
+      // 「精确闹钟」既是权限项标题，也是诊断里的排程精度值。
+      expect(find.text('精确闹钟'), findsWidgets);
+      expect(find.text('未显示'), findsOneWidget);
+      expect(find.text('立即显示通知'), findsOneWidget);
+      expect(find.text('5 秒后测试提醒'), findsOneWidget);
+
+      rig.service.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('打开开关 → 偏好生效并下发排程', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final rig = await buildReminderRig();
+      await tester.pumpWidget(
+        wrap(ReminderPage(model: rig.model, service: rig.service)),
+      );
+      await tester.pumpAndSettle();
+      expect(rig.model.reminderEnabled, isFalse);
+
+      await tester.tap(find.byKey(const Key('reminder-enabled-switch')));
+      await tester.pumpAndSettle();
+      // 让 SnackBar 计时器走完，避免测试结束时报 pending timer。
+      await tester.pump(const Duration(seconds: 3));
+
+      expect(rig.model.reminderEnabled, isTrue);
+      expect(rig.gateway.syncedPayloads, isNotEmpty);
+      expect(rig.gateway.lastPayload['leadMinutes'], 10);
+
+      rig.service.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('选 20 分钟 → 偏好与下发内容都跟着变', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final rig = await buildReminderRig(enabled: true);
+      await tester.pumpWidget(
+        wrap(ReminderPage(model: rig.model, service: rig.service)),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('20 分钟'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+
+      expect(rig.model.reminderLeadMinutes, 20);
+      expect(rig.gateway.lastPayload['leadMinutes'], 20);
+
+      rig.service.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('测试提醒按钮走一次探针', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final rig = await buildReminderRig(enabled: true);
+      await tester.pumpWidget(
+        wrap(ReminderPage(model: rig.model, service: rig.service)),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.scrollUntilVisible(
+        find.text('一分钟后测试提醒'),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.ensureVisible(find.text('一分钟后测试提醒'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('一分钟后测试提醒'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+
+      expect(rig.gateway.testRequests, isNotEmpty);
+
+      rig.service.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('打开流体云开关 → 偏好落盘且 payload 带 fluid', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final rig = await buildReminderRig(enabled: true);
+      await tester.pumpWidget(
+        wrap(ReminderPage(model: rig.model, service: rig.service)),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('reminder-fluid-switch')));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+
+      expect(rig.model.reminderStyle, ReminderStyle.fluid);
+      expect(rig.gateway.lastPayload['style'], 'fluid');
+
+      // 关回去要顺手收起正在显示的卡片。
+      await tester.tap(find.byKey(const Key('reminder-fluid-switch')));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+
+      expect(rig.model.reminderStyle, ReminderStyle.banner);
+      expect(rig.gateway.stopFluidCount, 1);
+
+      rig.service.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('拖滑块中不落盘，抬手才下发一次', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final rig = await buildReminderRig(enabled: true);
+      await tester.pumpWidget(
+        wrap(ReminderPage(model: rig.model, service: rig.service)),
+      );
+      await tester.pumpAndSettle();
+      final before = rig.gateway.syncedPayloads.length;
+
+      // 拖动过程中只改本地草稿：偏好与下发都不动。
+      final slider = find.byKey(const Key('reminder-lead-slider'));
+      final gesture = await tester.startGesture(tester.getCenter(slider));
+      await gesture.moveBy(const Offset(60, 0));
+      await tester.pump();
+      expect(rig.model.reminderLeadMinutes, 10, reason: '拖动中只改草稿');
+      expect(rig.gateway.syncedPayloads.length, before);
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+      expect(rig.gateway.syncedPayloads.length, greaterThan(before));
+      expect(rig.model.reminderLeadMinutes, isNot(10));
+
+      rig.service.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('「立即显示通知」只发预览，不挂闹钟', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final rig = await buildReminderRig(enabled: true);
+      await tester.pumpWidget(
+        wrap(ReminderPage(model: rig.model, service: rig.service)),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.scrollUntilVisible(
+        find.text('立即显示通知'),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.ensureVisible(find.text('立即显示通知'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('立即显示通知'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+
+      expect(rig.gateway.previewRequests, <String>['banner|10|false']);
+      expect(rig.gateway.testRequests, isEmpty);
+
+      rig.service.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('「5 秒后测试提醒」按 5 秒下发', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final rig = await buildReminderRig(enabled: true);
+      await tester.pumpWidget(
+        wrap(ReminderPage(model: rig.model, service: rig.service)),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.scrollUntilVisible(
+        find.text('5 秒后测试提醒'),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.ensureVisible(find.text('5 秒后测试提醒'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('5 秒后测试提醒'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+
+      expect(rig.gateway.testRequests, <String>['banner|5']);
+
+      rig.service.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('操作进行中按钮不禁用（否则整页会闪一下）', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final rig = await buildReminderRig(enabled: true);
+      await tester.pumpWidget(
+        wrap(ReminderPage(model: rig.model, service: rig.service)),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.scrollUntilVisible(
+        find.text('立即重排'),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.ensureVisible(find.text('立即重排'));
+      await tester.pumpAndSettle();
+
+      // 让原生 sync 挂住，模拟真实设备上几百毫秒的排程。
+      final gate = Completer<void>();
+      rig.gateway.syncGate = gate;
+      await tester.tap(find.text('立即重排'));
+      await tester.pump();
+
+      final button = tester.widget<OutlinedButton>(
+        find.widgetWithText(OutlinedButton, '立即重排'),
+      );
+      expect(
+        button.onPressed,
+        isNotNull,
+        reason: '进行中不能把 onPressed 置空，否则按钮会闪一次禁用色',
+      );
+
+      gate.complete();
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+
+      rig.service.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('「显示到下课」只在流体云下出现，默认关', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final rig = await buildReminderRig(enabled: true);
+      await tester.pumpWidget(
+        wrap(ReminderPage(model: rig.model, service: rig.service)),
+      );
+      await tester.pumpAndSettle();
+
+      // 横幅形态下这一行不该出现。
+      expect(find.text('显示到下课'), findsNothing);
+
+      await tester.ensureVisible(
+        find.byKey(const Key('reminder-fluid-switch')),
+      );
+      await tester.tap(find.byKey(const Key('reminder-fluid-switch')));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+
+      expect(find.text('显示到下课'), findsOneWidget);
+      // 默认 false：上课铃一响就收起。
+      expect(rig.model.reminderFluidUntilEnd, isFalse);
+      expect(find.text('上课铃一响就收起（默认）'), findsOneWidget);
+
+      final untilEnd = find.byKey(const Key('reminder-until-end-switch'));
+      await tester.ensureVisible(untilEnd);
+      await tester.pumpAndSettle();
+      await tester.tap(untilEnd);
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+
+      expect(rig.model.reminderFluidUntilEnd, isTrue);
+      expect(find.text('卡片留到下课，顺便当上课进度条'), findsOneWidget);
+      expect(rig.gateway.lastPayload['fluidUntilEnd'], isTrue);
+
+      rig.service.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('自启动项只能「需手动确认」，点开去设置', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final rig = await buildReminderRig(
+        enabled: true,
+        status: const ReminderRuntimeStatus(
+          notificationPermission: true,
+          notificationsEnabled: true,
+          exactAlarmAllowed: true,
+          autoStartDeclared: true,
+          autoStartVendorPage: false,
+        ),
+      );
+      await tester.pumpWidget(
+        wrap(ReminderPage(model: rig.model, service: rig.service)),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.scrollUntilVisible(
+        find.text('自启动'),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
+      // 厂商私有权限读不到真实状态，不能给假绿灯。
+      expect(find.text('需手动确认 · 点「去设置」到应用详情里开'), findsOneWidget);
+
+      final tile = find.ancestor(
+        of: find.text('自启动'),
+        matching: find.byType(ListTile),
+      );
+      await tester.ensureVisible(tile);
+      await tester.pumpAndSettle();
+      await tester.tap(find.descendant(of: tile, matching: find.text('去设置')));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+
+      expect(rig.gateway.autostartSettingsCount, 1);
+
+      rig.service.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('从系统设置返回后刷新权限状态', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final rig = await buildReminderRig(
+        enabled: true,
+        status: const ReminderRuntimeStatus(),
+      );
+      await tester.pumpWidget(
+        wrap(ReminderPage(model: rig.model, service: rig.service)),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('未授权'), findsOneWidget);
+
+      // 用户在系统设置里授权后回到 App：状态必须自己刷新。
+      rig.gateway.statusValue = const ReminderRuntimeStatus(
+        notificationPermission: true,
+        notificationsEnabled: true,
+        exactAlarmAllowed: true,
+      );
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+
+      expect(find.text('已授权'), findsOneWidget);
+
+      rig.service.dispose();
+      debugDefaultTargetPlatformOverride = null;
     });
   });
 }

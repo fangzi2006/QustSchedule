@@ -7,7 +7,9 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:qustschedule/src/course_text.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
+import 'package:qustschedule/src/reminder_planner.dart';
 import 'package:qustschedule/src/timetable.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -428,6 +430,26 @@ void main() {
     });
   });
 
+  group('房间号文本（课表格子与提醒共用）', () {
+    test('多段地点只留最后一段', () {
+      expect(roomOnly('高密校区 M1-239'), 'M1-239');
+      expect(roomOnly('青岛科技大学 崂山校区 明德楼 201'), '201');
+    });
+
+    test('单段里带校区前缀时截掉前缀', () {
+      expect(roomOnly('崂山校区3教201'), '3教201');
+    });
+
+    test('没有可截的内容时只去首尾空白', () {
+      expect(roomOnly(' 3教201 '), '3教201');
+    });
+
+    test('空串与纯空白返回空串', () {
+      expect(roomOnly(''), '');
+      expect(roomOnly('   '), '');
+    });
+  });
+
   group('全局节数（三段）', () {
     test('clampCounts：每段非负、总数不超过 20', () {
       final capped = clampCounts(
@@ -718,5 +740,94 @@ void main() {
       '{"schema":7,"lastAccounts":{"https://a.edu.cn/jwglxt/":"333"}}',
     );
     expect(restored.accountOf('https://a.edu.cn/jwglxt'), '333');
+  });
+
+  group('课前提醒设置（schema 11）', () {
+    test('默认关闭，提前量默认 10 分钟，不显示到下课', () {
+      final prefs = Preferences.inMemory();
+      expect(prefs.reminderEnabled, isFalse);
+      expect(prefs.reminderLeadMinutes, defaultReminderLeadMinutes);
+      expect(prefs.reminderStyle, ReminderStyle.banner);
+      // 默认 false：上课铃一响卡片就收起。
+      expect(prefs.reminderFluidUntilEnd, isFalse);
+      expect(defaultReminderFluidUntilEnd, isFalse);
+      expect(defaultReminderLeadMinutes, 10);
+      expect(reminderLeadOptions, <int>[5, 10, 15, 20, 30]);
+    });
+
+    test('提前量收敛到 1~60 分钟（滑块连续取值）', () async {
+      final prefs = Preferences.inMemory();
+      await prefs.setReminderLeadMinutes(7);
+      expect(prefs.reminderLeadMinutes, 7);
+      await prefs.setReminderLeadMinutes(30);
+      expect(prefs.reminderLeadMinutes, 30);
+      await prefs.setReminderLeadMinutes(0);
+      expect(prefs.reminderLeadMinutes, reminderMinLeadMinutes);
+      await prefs.setReminderLeadMinutes(999);
+      expect(prefs.reminderLeadMinutes, reminderMaxLeadMinutes);
+    });
+
+    test('落盘后重新读回来一致', () async {
+      final dir = await Directory.systemTemp.createTemp('kb_prefs_remind');
+      final file = File('${dir.path}/app_prefs.json');
+      final prefs = Preferences.decode('', file: file);
+
+      await prefs.setReminderEnabled(true);
+      await prefs.setReminderLeadMinutes(20);
+      await prefs.setReminderStyle(ReminderStyle.fluid);
+      await prefs.setReminderFluidUntilEnd(true);
+
+      final text = await file.readAsString();
+      expect(text, contains('"schema":11'));
+      final again = Preferences.decode(text);
+      expect(again.reminderEnabled, isTrue);
+      expect(again.reminderLeadMinutes, 20);
+      expect(again.reminderStyle, ReminderStyle.fluid);
+      expect(again.reminderFluidUntilEnd, isTrue);
+
+      await dir.delete(recursive: true);
+    });
+
+    test('schema 8 旧文件没有这些字段：按关闭 + 默认提前量 + 横幅处理', () {
+      final legacy = Preferences.decode(
+        '{"schema":8,"termStarts":{},"autoRefresh":false}',
+      );
+      expect(legacy.reminderEnabled, isFalse);
+      expect(legacy.reminderLeadMinutes, 10);
+      expect(legacy.reminderStyle, ReminderStyle.banner);
+      expect(legacy.reminderFluidUntilEnd, isFalse);
+    });
+
+    test('文件里写了「显示到下课」：按布尔值读回来', () {
+      final on = Preferences.decode(
+        '{"schema":11,"reminderStyle":"fluid","reminderFluidUntilEnd":true}',
+      );
+      expect(on.reminderFluidUntilEnd, isTrue);
+
+      final dirty = Preferences.decode(
+        '{"schema":11,"reminderFluidUntilEnd":"yes"}',
+      );
+      expect(dirty.reminderFluidUntilEnd, isFalse);
+    });
+
+    test('文件里的提前量越界时收敛，合法值原样保留', () {
+      final kept = Preferences.decode(
+        '{"schema":10,"reminderEnabled":true,"reminderLeadMinutes":7}',
+      );
+      expect(kept.reminderEnabled, isTrue);
+      expect(kept.reminderLeadMinutes, 7);
+
+      final clamped = Preferences.decode(
+        '{"schema":10,"reminderLeadMinutes":999}',
+      );
+      expect(clamped.reminderLeadMinutes, reminderMaxLeadMinutes);
+    });
+
+    test('文件里写了未知形态：回落横幅', () {
+      final prefs = Preferences.decode(
+        '{"schema":10,"reminderStyle":"capsule"}',
+      );
+      expect(prefs.reminderStyle, ReminderStyle.banner);
+    });
   });
 }

@@ -9,6 +9,8 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -17,6 +19,7 @@ import 'pages/home_shell.dart';
 import 'pages/login_page.dart';
 import 'src/app_model.dart';
 import 'src/app_version.dart';
+import 'src/reminder_service.dart';
 import 'theme/app_theme.dart';
 
 void main() {
@@ -63,6 +66,15 @@ class _AppShell extends StatefulWidget {
 class _AppShellState extends State<_AppShell> {
   final AppModel _model = AppModel();
 
+  /// 课程提醒编排层：只有 Android 有原生闹钟通道，桌面端不建。
+  ///
+  /// 建它的时候会向 model 注册监听：课表刷新、改调课、改作息、改设置
+  /// 都会防抖后重排一次提醒。
+  late final ReminderService? _reminders =
+      defaultTargetPlatform == TargetPlatform.android
+      ? ReminderService(model: _model)
+      : null;
+
   /// 前后台切换监听。只订阅 onShow（`hidden → inactive` 时触发）：
   /// 手机切回前台、桌面端最小化后还原都会走到这里。
   late final AppLifecycleListener _lifecycle;
@@ -71,14 +83,23 @@ class _AppShellState extends State<_AppShell> {
   void initState() {
     super.initState();
     _model.boot();
-    _lifecycle = AppLifecycleListener(
-      onShow: () => unawaited(_model.onAppShown()),
-    );
+    _lifecycle = AppLifecycleListener(onShow: () => unawaited(_onShown()));
+  }
+
+  /// 回到前台：先校正日期/周次，再过一遍提醒。
+  ///
+  /// 提醒**必须强制重排**：系统会在 force-stop、一键清理、覆盖安装时
+  /// 清空闹钟，而指纹没变——不 force 就会漏排。
+  Future<void> _onShown() async {
+    await _model.onAppShown();
+    await _reminders?.syncNow(force: true);
   }
 
   @override
   void dispose() {
     _lifecycle.dispose();
+    // 先停编排（它监听 model），再销毁 model。
+    _reminders?.dispose();
     _model.dispose();
     super.dispose();
   }
@@ -87,7 +108,8 @@ class _AppShellState extends State<_AppShell> {
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: _model,
-      builder: (BuildContext context, _) => pageForStatus(_model),
+      builder: (BuildContext context, _) =>
+          pageForStatus(_model, reminders: _reminders),
     );
   }
 }
@@ -97,7 +119,7 @@ class _AppShellState extends State<_AppShell> {
 /// 抽成函数是为了能测路由：这里判错一次，用户打错密码就会直接被丢到
 /// 一张空课表上（而不是留在表单前面）。
 @visibleForTesting
-Widget pageForStatus(AppModel model) {
+Widget pageForStatus(AppModel model, {ReminderService? reminders}) {
   switch (model.status) {
     case AppStatus.booting:
       return const _BootScreen();
@@ -116,10 +138,10 @@ Widget pageForStatus(AppModel model) {
       if (model.errorCode == 'SESSION_EXPIRED' || model.schedule == null) {
         return LoginPage(model: model);
       }
-      return HomeShell(model: model);
+      return HomeShell(model: model, reminders: reminders);
     case AppStatus.loading:
     case AppStatus.ready:
-      return HomeShell(model: model);
+      return HomeShell(model: model, reminders: reminders);
   }
 }
 
