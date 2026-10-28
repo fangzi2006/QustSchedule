@@ -18,6 +18,9 @@ import android.util.Log
 class ReminderStore(context: Context) {
 
     private val appContext = context.applicationContext
+    @Volatile
+    private var cachedPayload: ReminderPayload? = null
+
     private val prefs: SharedPreferences =
         appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -26,6 +29,7 @@ class ReminderStore(context: Context) {
     // -------------------------------------------------------------------------
 
     fun savePayload(json: String, payload: ReminderPayload) {
+        cachedPayload = payload
         prefs.edit()
             .putString(KEY_PAYLOAD_JSON, json)
             .putString(KEY_FINGERPRINT, payload.fingerprint)
@@ -39,6 +43,7 @@ class ReminderStore(context: Context) {
 
     /** 解析失败返回 null（保留原文，避免脏数据把旧 payload 覆盖掉）。 */
     fun loadPayload(): ReminderPayload? {
+        cachedPayload?.let { return it }
         val json = loadPayloadJson() ?: return null
         return try {
             ReminderPayload.parse(json)
@@ -104,6 +109,7 @@ class ReminderStore(context: Context) {
 
     /** 关闭提醒 / 退出登录：连 payload 一起清，避免旧课表继续响。 */
     fun clear() {
+        cachedPayload = null
         prefs.edit()
             .remove(KEY_PAYLOAD_JSON)
             .remove(KEY_FINGERPRINT)

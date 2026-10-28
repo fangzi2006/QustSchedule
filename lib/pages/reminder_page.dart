@@ -41,16 +41,52 @@ class _ReminderPageState extends State<ReminderPage>
   /// 拖滑块时不能每动 1 像素就落盘 + 重排：那样一次拖动会打出几十次同步，
   /// 原生侧要跑几十遍账本差分。所以拖动只改本地草稿，抬手才落盘。
   int? _leadDraft;
+  Timer? _fallbackTimer;
+  bool _refreshScheduled = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _status = widget.service.lastStatus;
+    // 监听路由切页过渡动画：在动画彻底播完（或首帧后平稳期）再发起状态刷新，
+    // 杜绝切页滑动过程中的 JNI 通道交互与 setState 导致掉帧卡顿。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scheduleTransitionAwareRefresh();
+    });
+  }
+
+  void _scheduleTransitionAwareRefresh() {
+    if (_refreshScheduled) return;
+    final animation = ModalRoute.of(context)?.animation;
+    if (animation != null && !animation.isCompleted) {
+      _fallbackTimer = Timer(const Duration(milliseconds: 350), _safeRefresh);
+      late final AnimationStatusListener listener;
+      listener = (status) {
+        if (status == AnimationStatus.completed) {
+          animation.removeStatusListener(listener);
+          _safeRefresh();
+        }
+      };
+      animation.addStatusListener(listener);
+    } else {
+      _safeRefresh();
+    }
+  }
+
+  void _safeRefresh() {
+    if (_refreshScheduled || !mounted) return;
+    _refreshScheduled = true;
+    _fallbackTimer?.cancel();
+    _fallbackTimer = null;
     unawaited(_refreshStatus());
   }
 
   @override
   void dispose() {
+    _fallbackTimer?.cancel();
+    _fallbackTimer = null;
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -67,7 +103,9 @@ class _ReminderPageState extends State<ReminderPage>
   Future<void> _refreshStatus() async {
     final status = await widget.service.refreshStatus();
     if (!mounted) return;
-    setState(() => _status = status);
+    if (_status != status) {
+      setState(() => _status = status);
+    }
   }
 
   /// 串行执行一次原生操作：重入时直接忽略（避免连点排出一串闹钟）。

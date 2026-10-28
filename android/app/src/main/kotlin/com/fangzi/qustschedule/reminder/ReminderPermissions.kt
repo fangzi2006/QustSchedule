@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
+import java.util.Locale
 
 /**
  * 权限判断与系统设置跳转：正式排程与调试探针共用同一套判断，
@@ -96,20 +97,35 @@ object ReminderPermissions {
      * `startActivity` 会直接抛 SecurityException。所以这里只当作"万一能跳"
      * 的尝试，失败一律退到应用详情页。
      */
-    private fun autostartCandidates(): List<Intent> = listOf(
-        // 小米 / 红米
-        Intent("miui.intent.action.OP_AUTO_START")
-            .addCategory(Intent.CATEGORY_DEFAULT),
-        // OPPO / realme / 一加（ColorOS）
-        Intent("com.coloros.safecenter.permission.startup.StartupAppListActivity"),
-        Intent("com.oppo.safe.permission.startup.StartupAppListActivity"),
-        // vivo / iQOO
-        Intent("com.vivo.permissionmanager.activity.BgStartUpManagerActivity"),
-        // 华为 / 荣耀
-        Intent("huawei.intent.action.HSM_BOOTAPP_MANAGER"),
-        // 魅族
-        Intent("com.meizu.safe.permission.SmartBGActivity"),
-    )
+    private fun autostartCandidates(): List<Intent> {
+        val manufacturer = Build.MANUFACTURER.lowercase(Locale.ROOT)
+        return when {
+            manufacturer.contains("xiaomi") || manufacturer.contains("redmi") -> listOf(
+                Intent("miui.intent.action.OP_AUTO_START").addCategory(Intent.CATEGORY_DEFAULT),
+            )
+            manufacturer.contains("oppo") || manufacturer.contains("realme") || manufacturer.contains("oneplus") -> listOf(
+                Intent("com.coloros.safecenter.permission.startup.StartupAppListActivity"),
+                Intent("com.oppo.safe.permission.startup.StartupAppListActivity"),
+            )
+            manufacturer.contains("vivo") || manufacturer.contains("iqoo") -> listOf(
+                Intent("com.vivo.permissionmanager.activity.BgStartUpManagerActivity"),
+            )
+            manufacturer.contains("huawei") || manufacturer.contains("honor") -> listOf(
+                Intent("huawei.intent.action.HSM_BOOTAPP_MANAGER"),
+            )
+            manufacturer.contains("meizu") -> listOf(
+                Intent("com.meizu.safe.permission.SmartBGActivity"),
+            )
+            else -> listOf(
+                Intent("miui.intent.action.OP_AUTO_START").addCategory(Intent.CATEGORY_DEFAULT),
+                Intent("com.coloros.safecenter.permission.startup.StartupAppListActivity"),
+                Intent("com.oppo.safe.permission.startup.StartupAppListActivity"),
+                Intent("com.vivo.permissionmanager.activity.BgStartUpManagerActivity"),
+                Intent("huawei.intent.action.HSM_BOOTAPP_MANAGER"),
+                Intent("com.meizu.safe.permission.SmartBGActivity"),
+            )
+        }
+    }
 
     /** 本机是否存在可解析的自启动管理页（纯查询，不跳转）。 */
     fun hasAutostartSettings(context: Context): Boolean {

@@ -157,6 +157,42 @@ class ReminderRuntimeStatus {
       fluidCasting: map['fluidCasting'] == true,
     );
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ReminderRuntimeStatus &&
+          runtimeType == other.runtimeType &&
+          available == other.available &&
+          notificationPermission == other.notificationPermission &&
+          notificationsEnabled == other.notificationsEnabled &&
+          exactAlarmAllowed == other.exactAlarmAllowed &&
+          batteryOptimizationIgnored == other.batteryOptimizationIgnored &&
+          autoStartDeclared == other.autoStartDeclared &&
+          autoStartVendorPage == other.autoStartVendorPage &&
+          scheduled == other.scheduled &&
+          nextTriggerMs == other.nextTriggerMs &&
+          payloadAtMs == other.payloadAtMs &&
+          fingerprint == other.fingerprint &&
+          style == other.style &&
+          fluidCasting == other.fluidCasting;
+
+  @override
+  int get hashCode => Object.hash(
+        available,
+        notificationPermission,
+        notificationsEnabled,
+        exactAlarmAllowed,
+        batteryOptimizationIgnored,
+        autoStartDeclared,
+        autoStartVendorPage,
+        scheduled,
+        nextTriggerMs,
+        payloadAtMs,
+        fingerprint,
+        style,
+        fluidCasting,
+      );
 }
 
 /// 提醒原生能力的窄接口（生产实现 + 测试假实现都走它）。

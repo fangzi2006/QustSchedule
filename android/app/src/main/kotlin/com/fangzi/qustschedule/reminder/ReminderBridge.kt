@@ -32,6 +32,14 @@ class ReminderBridge(
 
     fun attach() {
         channel.setMethodCallHandler(this)
+        // 冷启动预热：在后台线程预先解析厂商自启动组件和读取本地存储，
+        // 彻底消除首次进入提醒页面时的首查开销。
+        worker.execute {
+            runCatching {
+                ReminderPermissions.hasAutostartSettings(activity)
+                scheduler.status()
+            }
+        }
     }
 
     fun dispose() {
@@ -49,7 +57,17 @@ class ReminderBridge(
                 result.success(null)
             }
 
-            "status" -> result.success(scheduler.status())
+            "status" -> {
+                worker.execute {
+                    try {
+                        val status = scheduler.status()
+                        mainHandler.post { result.success(status) }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "failed to get status", e)
+                        mainHandler.post { result.error("STATUS_FAILED", e.message, null) }
+                    }
+                }
+            }
 
             "requestNotificationPermission" ->
                 requestNotificationPermission(result)
