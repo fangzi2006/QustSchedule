@@ -76,7 +76,6 @@ class ReminderRuntimeStatus {
     this.notificationsEnabled = false,
     this.exactAlarmAllowed = false,
     this.batteryOptimizationIgnored = false,
-    this.autoStartDeclared = false,
     this.autoStartVendorPage = false,
     this.scheduled = 0,
     this.nextTriggerMs,
@@ -93,7 +92,6 @@ class ReminderRuntimeStatus {
       notificationsEnabled = false,
       exactAlarmAllowed = false,
       batteryOptimizationIgnored = false,
-      autoStartDeclared = false,
       autoStartVendorPage = false,
       scheduled = 0,
       nextTriggerMs = null,
@@ -107,12 +105,6 @@ class ReminderRuntimeStatus {
   final bool notificationsEnabled;
   final bool exactAlarmAllowed;
   final bool batteryOptimizationIgnored;
-
-  /// 开机广播权限（`RECEIVE_BOOT_COMPLETED`）是否在位。
-  ///
-  /// 这是自启动里唯一能读到的确定事实；真正的"自启动开关"是厂商私有的，
-  /// 系统没有读取接口，所以界面只能写"需手动确认"。
-  final bool autoStartDeclared;
 
   /// 本机是否存在可跳转的厂商自启动管理页（ColorOS 12+ 起通常为 false）。
   final bool autoStartVendorPage;
@@ -147,7 +139,6 @@ class ReminderRuntimeStatus {
       notificationsEnabled: map['notificationsEnabled'] == true,
       exactAlarmAllowed: map['exactAlarmAllowed'] == true,
       batteryOptimizationIgnored: map['batteryOptimizationIgnored'] == true,
-      autoStartDeclared: map['autoStartDeclared'] == true,
       autoStartVendorPage: map['autoStartVendorPage'] == true,
       scheduled: _intOf(map['scheduled']) ?? 0,
       nextTriggerMs: _intOf(map['nextTriggerMs']),
@@ -168,7 +159,6 @@ class ReminderRuntimeStatus {
           notificationsEnabled == other.notificationsEnabled &&
           exactAlarmAllowed == other.exactAlarmAllowed &&
           batteryOptimizationIgnored == other.batteryOptimizationIgnored &&
-          autoStartDeclared == other.autoStartDeclared &&
           autoStartVendorPage == other.autoStartVendorPage &&
           scheduled == other.scheduled &&
           nextTriggerMs == other.nextTriggerMs &&
@@ -184,7 +174,6 @@ class ReminderRuntimeStatus {
     notificationsEnabled,
     exactAlarmAllowed,
     batteryOptimizationIgnored,
-    autoStartDeclared,
     autoStartVendorPage,
     scheduled,
     nextTriggerMs,

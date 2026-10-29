@@ -459,10 +459,8 @@ class _PermissionsCard extends StatelessWidget {
               _PermissionTile(
                 icon: Icons.power_settings_new_rounded,
                 title: '自启动',
-                value: _autostartText(status),
-                ok: status == null
-                    ? null
-                    : (status.autoStartDeclared ? null : false),
+                value: '该权限不可检测，需自行确认',
+                ok: null,
                 actionLabel: '去设置',
                 onAction: onOpenAutostart,
               ),
@@ -586,12 +584,6 @@ class _DiagnosticsCard extends StatelessWidget {
       ),
     );
   }
-}
-
-String _autostartText(ReminderRuntimeStatus? status) {
-  //  if (status == null) return '查询中…';
-  //  if (!status.autoStartDeclared) return '缺少开机广播权限 · 重启后不会恢复';
-  return '该权限不可检测，需自行确认';
 }
 
 String _timeText(int? ms) {

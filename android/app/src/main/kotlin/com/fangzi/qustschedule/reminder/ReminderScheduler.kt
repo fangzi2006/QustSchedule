@@ -186,10 +186,6 @@ class ReminderScheduler(context: Context) {
                 ReminderPermissions.canScheduleExactAlarms(appContext),
             "batteryOptimizationIgnored" to
                 ReminderPermissions.isIgnoringBatteryOptimizations(appContext),
-            // 自启动：只能给出"开机广播是否在位"＋"本机有没有可跳的厂商页"，
-            // 真正的开关状态系统不给读（见 ReminderPermissions）。
-            "autoStartDeclared" to
-                ReminderPermissions.hasBootBroadcastPermission(appContext),
             "autoStartVendorPage" to
                 ReminderPermissions.hasAutostartSettings(appContext),
             "scheduled" to store.alarmCodes().size,

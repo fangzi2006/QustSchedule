@@ -2985,7 +2985,6 @@ void main() {
           notificationPermission: true,
           notificationsEnabled: true,
           exactAlarmAllowed: true,
-          autoStartDeclared: true,
           autoStartVendorPage: false,
         ),
       );
@@ -2999,8 +2998,8 @@ void main() {
         120,
         scrollable: find.byType(Scrollable).first,
       );
-      // 厂商私有权限读不到真实状态，不能给假绿灯。
-      expect(find.text('无法读取状态 · 需自行确认'), findsOneWidget);
+      // 厂商私有权限读不到真实状态，统一显示固定文案。
+      expect(find.text('该权限不可检测，需自行确认'), findsOneWidget);
 
       final tile = find.ancestor(
         of: find.text('自启动'),

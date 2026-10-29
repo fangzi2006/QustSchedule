@@ -98,17 +98,6 @@ object ReminderPermissions {
     // -------------------------------------------------------------------------
 
     /**
-     * 开机广播权限是否还在。
-     *
-     * 这是"自启动"里**唯一读得到的确定事实**：真正的自启动开关是厂商私有的，
-     * AOSP 既没有 API 也没有读取途径。`RECEIVE_BOOT_COMPLETED` 是普通权限，
-     * 正常恒为 granted，只有被特殊手段收回才会变 false。
-     */
-    fun hasBootBroadcastPermission(context: Context): Boolean =
-        context.checkSelfPermission(Manifest.permission.RECEIVE_BOOT_COMPLETED) ==
-            PackageManager.PERMISSION_GRANTED
-
-    /**
      * 厂商自启动管理页的候选入口。
      *
      * 各家都是私有 Activity，且从 ColorOS 12 起这些页面**不导出**：
