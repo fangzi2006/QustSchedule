@@ -205,7 +205,7 @@ abstract class ReminderGateway {
 
   Future<bool> requestNotificationPermission();
 
-  /// 打开通知渠道 / 通知设置页（供用户手动开启横幅与锁屏）。
+  /// 打开应用通知管理页（供用户手动开启横幅与锁屏总开关）。
   Future<void> openNotificationSettings();
 
   /// 跳到精确闹钟授权页，返回"当前是否已授权"。

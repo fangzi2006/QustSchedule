@@ -71,20 +71,16 @@ object ReminderPermissions {
     }
 
     /**
-     * 打开通知设置页。
+     * 应用通知管理页。
      *
-     * 优先直达「上课提醒」渠道详情页，方便用户手动开启横幅与锁屏；
-     * 渠道页打不开时回退到应用通知管理页，最后回退到应用详情。
+     * 直接打开本应用在系统中的通知管理页（ACTION_APP_NOTIFICATION_SETTINGS）。
+     * ColorOS、HyperOS 等系统的横幅与锁屏总开关位于应用通知管理总页，总开关未开时
+     * 单个渠道页无法单独修改，因此直接进入应用通知管理页。
+     *
+     * 顺序：应用通知管理总页 → （万一系统剪掉）应用详情页。
      */
     fun openNotificationSettings(context: Context) {
-        ReminderNotifier.ensureChannel(context)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channelIntent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
-                putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-                putExtra(Settings.EXTRA_CHANNEL_ID, ReminderNotifier.CHANNEL_ID)
-            }
-            if (tryStart(context, channelIntent)) return
-
             val appNotifyIntent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
                 putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
             }

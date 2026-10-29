@@ -3042,7 +3042,7 @@ void main() {
 
       expect(find.text('已允许 · 横幅与锁屏需手动开启'), findsOneWidget);
 
-      // 授权后按钮变为「去设置」，点击跳到渠道设置页（不弹 Toast）
+      // 授权后按钮变为「去设置」，点击跳到应用通知管理页（不弹 Toast）
       final setBtn = find.widgetWithText(TextButton, '去设置').first;
       await tester.tap(setBtn);
       await tester.pumpAndSettle();

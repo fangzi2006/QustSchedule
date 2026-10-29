@@ -153,7 +153,7 @@ class ReminderService {
     return granted;
   }
 
-  /// 打开通知渠道 / 通知设置页，供用户手动配置横幅与锁屏。
+  /// 打开应用通知管理页，供用户手动配置横幅与锁屏总开关。
   Future<void> openNotificationSettings() async {
     await _gateway.openNotificationSettings();
     await refreshStatus();
