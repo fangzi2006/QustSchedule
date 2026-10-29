@@ -221,9 +221,8 @@ class _ReminderPageState extends State<ReminderPage>
           ),
           const SizedBox(height: 12),
           Text(
-            '提醒依赖系统闹钟：重启、覆盖安装、修改时间后会自动恢复；'
-            '强制停止 App 或使用"一键清理"后闹钟会被系统清空，'
-            '重新打开 App 即可恢复。',
+            '闹钟由系统托管：重启、修改时间、覆盖安装后会自动恢复；'
+            '强制停止或「一键清理」会清空，重启 App 即可恢复。',
             style: theme.textTheme.bodySmall,
           ),
         ],
@@ -334,7 +333,7 @@ class _ReminderSettingsCardState extends State<_ReminderSettingsCard> {
                       ),
                     ),
                     Text(
-                      '拖动调整（1~60 分钟），改动后自动重排全部提醒',
+                      '拖动调整（1~60 分钟），改后自动重排提醒',
                       style: theme.textTheme.bodySmall,
                     ),
                     const SizedBox(height: 10),
@@ -569,14 +568,13 @@ class _DiagnosticsCard extends StatelessWidget {
                 ),
                 OutlinedButton(
                   onPressed: onTestInOneMinute,
-                  child: const Text('一分钟后测试提醒'),
+                  child: const Text('1 分钟后测试提醒'),
                 ),
               ],
             ),
             const SizedBox(height: 6),
             Text(
-              '测试提醒是独立闹钟：不计入上面的条数，「立即重排」'
-              '也不会取消或重排它。',
+              '测试提醒是独立闹钟，不计入上面的条数，也不会被「立即重排」取消。',
               style: theme.textTheme.bodySmall,
             ),
           ],

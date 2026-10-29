@@ -29,8 +29,8 @@ class ReschedulePage extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
                 child: Text(
-                  '把某一天（月日）的课整体挪到另一天（月日），只改显示、'
-                  '不覆盖教务课表。例如"10 月 20 日 → 10 月 25 日"。',
+                  '把某天的课整体移动到另一天，冲突课程会提醒。'
+                  '如 10 月 20 日 → 10 月 25 日。',
                   style: Theme.of(context).textTheme.bodySmall
                       ?.copyWith(color: Theme.of(context).hintColor),
                 ),

@@ -120,7 +120,7 @@ class Preferences {
   /// 每张表只是"这些节分别几点上"，节数由这里统一决定。
   Map<PeriodGroup, int> _sectionCounts;
 
-  /// 已添加的教务地址（换校用的地址簿），以及当前使用的那一个。
+  /// 已添加的教务地址，以及当前使用的那一个。
   List<String> _schools;
   String _currentSchool;
 

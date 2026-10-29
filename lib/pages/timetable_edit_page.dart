@@ -309,8 +309,7 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
             ),
             const SizedBox(height: 16),
             Text(
-              '提示：课表显示的节数跟随「课表节数」设置（在作息时间表列表页配置）。'
-              '若教务系统中存在超出该节数的课程，课表会自动扩展并标注，不会遗漏课程。',
+              '提示：课表显示的节数跟随「课表节数」设置；教务里超出该节数的课，课表会自动扩展并标注。',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.hintColor,
               ),

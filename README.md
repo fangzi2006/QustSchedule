@@ -52,10 +52,13 @@ qustschedule/
 │   │   ├── reschedule.dart            调课规则与显示叠加
 │   │   ├── term_calendar.dart         周次 ↔ 日期换算、同日课程冲突布局
 │   │   ├── timetable.dart             作息表模型、节数、快捷设置
-│   │   ├── preferences_repository.dart 用户设置（schema 8，含旧版迁移）
+│   │   ├── preferences_repository.dart 用户设置（schema 11，含旧版迁移）
 │   │   ├── credentials_repository.dart 学号密码 → 系统安全存储
 │   │   ├── session_repository.dart    Cookie 快照 → app 私有目录
-│   │   └── school.dart                默认学校配置
+│   │   ├── reminder_planner.dart      提醒纯函数：事件规划 / 指纹 / payload
+│   │   ├── reminder_gateway.dart      提醒通道抽象（MethodChannel）
+│   │   ├── reminder_service.dart      提醒编排：防抖 / 去重 / 重试
+│   │   └── school.dart                青科大 6 条线路配置
 │   ├── pages/                         登录 / 验证码 / 课表 / 设置 / 作息表 / 调课 / 调试
 │   ├── widgets/                       课程卡片 / 状态弹窗 / 悬浮 dock / 滚轮 / 菜单
 │   └── theme/                         主题与课程配色
@@ -73,11 +76,11 @@ qustschedule/
 - **平台**：Windows（CMake + MSVC）、Android（minSdk 24 / compileSdk 37）。
 - **运行时依赖精简可控**：`flutter_secure_storage`（存密码）、`path_provider`（Cookie 与缓存目录）、`url_launcher`（外部链接跳转）、`flutter_localizations`（本地化日期支持）。
 - **教务协议层零 Flutter 依赖**：HTTP 客户端（手动重定向 + 白名单 + 限速）、Cookie 存储、HTML 取值、RSA 密码加密、课表解析均为自行实现，只依赖 `pointycastle` 与 `crypto`，因此可以脱离 UI 单独测试。
-- **测试**：`flutter test`，界面与状态机 295+ 项用例 + 协议层 80 项用例，全部离线（协议层用合成教务服务端对拍）。
+- **测试**：`flutter test`，界面与状态机 312 项用例 + 协议层 83 项用例，全部离线（协议层用合成教务服务端对拍）。
 
 ## 已知限制
 
-- 只支持青岛科技大学使用的**新正方**教务系统。统一认证（CAS）与旧版/其他厂商系统会明确报错，不会静默失败。
+- **只面向青岛科技大学**，不做多校适配。教务侧遇到统一认证（CAS）或非新正方系统会明确报错，不会静默失败。
 - 周次需要手动校准一次（教务不提供开学日期）。
 - 只有浅色主题。
 - 同一门课若教务按不同周次拆成多行（如 `1-8周` 与 `9-16周` 各一行），周视图显示正常，但课程详情只展示其中一行。

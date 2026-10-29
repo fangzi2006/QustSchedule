@@ -1,15 +1,11 @@
-/// 学校配置：默认只适配青岛科技大学，但保留换校能力。
+/// 学校配置：适配青岛科技大学，但保留换校能力。
 ///
-/// 换校只需要在登录页修改教务地址（或在这里加一个 [SchoolProfile]），
-/// 模块侧的全部能力（登录 / Cookie / 课表 / 路由发现）与学校无关：
+/// 6 条线路（`jwglxt1` ~ `jwglxt6`）是同一套教务系统的多台前端，账号密码通用。
+///
+/// 换线路只改 `baseUrl`，协议层能力（登录 / Cookie / 课表 / 路由发现）与前端口径无关：
 ///  - 地址：`ZfClientConfig.baseUrl`；
-///  - 端点：`ZfClientConfig.endpoints`（课表 `gnmkdm` 等可逐校覆盖）；
+///  - 端点：`ZfClientConfig.endpoints`；
 ///  - 主机白名单：`ZfClientConfig.allowedHosts`。
-///
-/// 尚未适配的学校类型（会由探测明确报出，而不是静默失败）：
-///  - 旧正方 / 强智 / 金智 等非新正方系统；
-///  - 需要统一认证（CAS）登录的新正方实例——探测会报 `requiresCas`，
-///    app 会提示"该学校需要网页统一认证，暂不支持"。
 library;
 
 /// 一所学校的接入信息。
@@ -70,7 +66,7 @@ const List<SchoolProfile> qustLines = <SchoolProfile>[
   ),
 ];
 
-/// 全部已知接入。新增学校时加到这里，登录页 / 地址页的快捷选项就有它。
+/// 全部已知接入（目前只有青科大 6 条线路）。加线路时改这里，登录页与地址页的快捷选项随之更新。
 const List<SchoolProfile> knownSchools = qustLines;
 
 /// 出厂预设的教务地址（地址簿的初始内容，顺序即展示顺序）。
@@ -93,7 +89,7 @@ String schoolLabel(String baseUrl) {
 
 /// 判断两个教务地址是否指向同一套系统（忽略末尾斜杠与 http/https 差异）。
 ///
-/// 换校后旧的 Cookie 快照必须丢弃：快照是跟主机绑定的，且 `CookieStore.import`
+/// 换地址后旧的 Cookie 快照必须丢弃：快照与主机绑定，且 `CookieStore.import`
 /// 会用快照里的 baseUrl 覆盖当前配置。
 bool sameSchool(String a, String b) {
   String key(String value) {

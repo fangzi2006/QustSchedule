@@ -153,7 +153,7 @@ class SettingsPage extends StatelessWidget {
                     SwitchListTile(
                       secondary: const Icon(Icons.sync_rounded, size: 20),
                       title: const Text('静默更新'),
-                      subtitle: const Text('打开 App 时在后台自动刷新课表'),
+                      subtitle: const Text('打开 App 时自动刷新课表'),
                       value: model.autoRefresh,
                       onChanged: model.setAutoRefresh,
                     ),
@@ -214,7 +214,7 @@ class SettingsPage extends StatelessWidget {
                     ListTile(
                       leading: const Icon(Icons.password_rounded, size: 20),
                       title: const Text('修改密码'),
-                      subtitle: const Text('在教务网页改过密码后，用它更新本机保存的密码'),
+                      subtitle: const Text('修改教务密码后，在此更新本机保存的密码'),
                       trailing: const Icon(Icons.chevron_right_rounded),
                       onTap: () => _changePassword(context),
                     ),
@@ -255,7 +255,7 @@ class SettingsPage extends StatelessWidget {
                     ListTile(
                       leading: const Icon(Icons.description_outlined, size: 20),
                       title: const Text('开源许可'),
-                      subtitle: const Text('本应用使用的第三方组件许可'),
+                      subtitle: const Text('第三方组件许可'),
                       trailing: const Icon(Icons.chevron_right_rounded),
                       onTap: () => showLicensePage(
                         context: context,
@@ -267,7 +267,7 @@ class SettingsPage extends StatelessWidget {
                     ListTile(
                       leading: const Icon(Icons.gavel_outlined, size: 20),
                       title: const Text('开源协议'),
-                      subtitle: const Text('GNU GPL v3 · 本应用协议全文'),
+                      subtitle: const Text('GNU GPL v3 · 协议全文'),
                       trailing: const Icon(Icons.chevron_right_rounded),
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute<void>(
@@ -287,7 +287,7 @@ class SettingsPage extends StatelessWidget {
                     ListTile(
                       leading: const Icon(Icons.info_outline_rounded, size: 20),
                       title: const Text('版本'),
-                      subtitle: Text('青科课表通 $appVersion · 仅适配新正方教务系统'),
+                      subtitle: Text('青科课表通 $appVersion · 适配青岛科技大学教务'),
                     ),
                   ],
                 ),
@@ -417,8 +417,8 @@ class _PasswordDialogState extends State<_PasswordDialog> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             Text(
-              '先到教务网页把密码改掉，再在这里填新密码。\n'
-              '点确定会用新密码登录一次验证，成功后才替换本机保存的密码。',
+              '先到教务网页改密码，再在这里填新密码。\n'
+              '确定后会先用新密码登录验证，成功才替换本机保存的密码。',
               style: Theme.of(context).textTheme.bodySmall
                   ?.copyWith(color: Theme.of(context).hintColor),
             ),

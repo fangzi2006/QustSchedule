@@ -162,14 +162,14 @@ void main() {
       expect(backend.loginCount, 0);
     });
 
-    testWidgets('可展开高级设置并看到换校入口', (tester) async {
+    testWidgets('可展开高级设置并看到教务地址入口', (tester) async {
       final model = buildModel();
       // 登录页只在 needLogin 时出现；booting 会带一个无限转圈的进度，
       // pumpAndSettle 会等不到头。
       model.setStatusForTest(AppStatus.needLogin);
       await tester.pumpWidget(wrap(LoginPage(model: model)));
 
-      await tester.tap(find.text('其他学校 / 高级'));
+      await tester.tap(find.text('教务地址 / 高级'));
       await tester.pumpAndSettle();
 
       expect(find.text('教务系统地址'), findsOneWidget);
@@ -2771,7 +2771,7 @@ void main() {
 
       // 诊断卡片在首屏之外，懒加载列表要滚到才会构建。
       await tester.scrollUntilVisible(
-        find.text('一分钟后测试提醒'),
+        find.text('1 分钟后测试提醒'),
         120,
         scrollable: find.byType(Scrollable).first,
       );
@@ -2907,7 +2907,7 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     });
 
-    testWidgets('「5 秒后测试提醒」与「一分钟后测试提醒」分别按对应秒数下发', (tester) async {
+    testWidgets('「5 秒后测试提醒」与「1 分钟后测试提醒」分别按对应秒数下发', (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
       final rig = await buildReminderRig(enabled: true);
       await tester.pumpWidget(
@@ -2928,7 +2928,7 @@ void main() {
 
       expect(rig.gateway.testRequests, contains('banner|5'));
 
-      await tester.tap(find.text('一分钟后测试提醒'));
+      await tester.tap(find.text('1 分钟后测试提醒'));
       await tester.pumpAndSettle();
       await tester.pump(const Duration(seconds: 3));
 

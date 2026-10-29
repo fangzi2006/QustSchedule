@@ -1,4 +1,4 @@
-/// 登录页：账号 + 密码；「其他学校 / 高级」可改教务地址。
+/// 登录页：账号 + 密码；「教务地址 / 高级」可改线路或手填地址。
 ///
 /// 没有"记住密码"开关：这个 app 的密码只为 Cookie 失效后的自动重登服务，
 /// 不保存就永远要手输。退出登录会连密码一起清掉。
@@ -207,7 +207,7 @@ class _LoginPageState extends State<LoginPage> {
                               size: 18,
                             ),
                           ),
-                          label: const Text('其他学校 / 高级'),
+                          label: const Text('教务地址 / 高级'),
                         ),
                         // 展开也要有高度动画，和作息表里的折叠项保持一致。
                         AnimatedSize(
@@ -224,9 +224,9 @@ class _LoginPageState extends State<LoginPage> {
                                       controller: _addressController,
                                       decoration: const InputDecoration(
                                         labelText: '教务系统地址',
-                                        hintText:
-                                            'https://jw.example.edu.cn/jwglxt',
-                                        helperText: '只支持新正方教务系统；写到 /jwglxt 为止，不要带登录页文件名',
+                                        hintText: 'https://jwglxt1.qust.edu.cn/jwglxt',
+                                        helperText:
+                                            '支持新正方教务系统，地址写到 /jwglxt 为止',
                                         helperMaxLines: 2,
                                       ),
                                     ),
@@ -248,7 +248,7 @@ class _LoginPageState extends State<LoginPage> {
                                     ),
                                     const SizedBox(height: 8),
                                     Text(
-                                      '改完地址后点「登录」即可用上面填的账号登录这台教务。需要网页统一认证（CAS）的学校暂不支持。',
+                                      '改完地址后点「登录」，会用上面填写的账号重新登录。',
                                       style: theme.textTheme.bodySmall
                                           ?.copyWith(color: theme.hintColor),
                                     ),
@@ -258,7 +258,7 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                         const SizedBox(height: 24),
                         Text(
-                          '仅适配新正方教务系统 · 密码只存在本机安全存储',
+                          '适配青岛科技大学 · 密码只存在本机安全存储',
                           textAlign: TextAlign.center,
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: theme.hintColor,

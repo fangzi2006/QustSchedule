@@ -260,7 +260,7 @@ class _RequestsTab extends StatelessWidget {
           child: Text(
             '课表是走**数据接口**抓的（如 kbcx/xskbcx_cxXsKb.html?gnmkdm=N253508）：'
             '它在浏览器里直接打开是空的——要登录态 + POST 才返回数据。'
-            '想人工核对课表，请在已登录的浏览器里打开"课表查询"页面（如 '
+            '想人工核对课表，请在已登录的浏览器里打开「课表查询」页面（如 '
             'kbcx/xskbcx_cxXskbcxIndex.html?gnmkdm=N2151）。',
             style: Theme.of(context).textTheme.bodySmall
                 ?.copyWith(color: Theme.of(context).hintColor),

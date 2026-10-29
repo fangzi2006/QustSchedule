@@ -79,7 +79,7 @@ void main() {
       expect(snapshot!.cookies.single.value, 'saved');
     });
 
-    test('换校后旧快照被丢弃并清盘（避免把 A 校会话带去 B 校）', () async {
+    test('换地址后旧快照被丢弃并清盘（避免把旧线路会话带过去）', () async {
       final storage = FakeSessionRepository(
         snapshotOf('https://old.example.edu.cn/jwglxt'),
       );

@@ -644,7 +644,7 @@ void main() {
       model.dispose();
     });
 
-    test('换校后旧学校的缓存被丢弃，不展示', () async {
+    test('换地址后旧线路的缓存被丢弃，不展示', () async {
       final model = bootRig(
         cache: FakeScheduleCache(
           CachedSchedule(

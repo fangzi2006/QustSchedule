@@ -351,7 +351,7 @@ class ZhengfangClient {
     }
 
     if (!looksLikeZhengfang) {
-      notes.add('登录页没有发现新正方特征：本模块只覆盖新正方，其他教务系统需要另行适配');
+      notes.add('登录页没有发现新正方特征，本模块只覆盖新正方。');
     }
     if (_cookies.size > 0) {
       notes.add('当前实例已带 Cookie；请用 checkSession() 确认是否仍然有效');

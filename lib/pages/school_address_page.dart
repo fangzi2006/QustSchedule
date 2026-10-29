@@ -40,8 +40,7 @@ class SchoolAddressPage extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             children: <Widget>[
               Text(
-                '只支持新正方教务系统；地址写到 /jwglxt 为止，不要带登录页文件名。\n'
-                '6 条线路账号通用；切换后会用当前账号重新登录（会话与主机绑定）。',
+                '理论上支持新正方教务系统；切换线路后会用当前账号重新登录。',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.hintColor,
                 ),
@@ -212,9 +211,9 @@ class _AddressDialogState extends State<_AddressDialog> {
               autofocus: true,
               decoration: InputDecoration(
                 labelText: '教务系统地址',
-                hintText: 'https://jw.example.edu.cn/jwglxt',
+                hintText: 'https://jwglxt1.qust.edu.cn/jwglxt',
                 errorText: _error,
-                helperText: '写到 /jwglxt 为止，不要带 login_slogin.html',
+                helperText: '写到 /jwglxt 为止，不带登录页文件名',
                 helperMaxLines: 2,
               ),
               onSubmitted: (_) => _submit(),

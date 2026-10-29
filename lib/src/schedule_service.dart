@@ -192,7 +192,7 @@ class ScheduleService {
 
   /// 启动调用：有可用快照就返回它（调用方接着 [getSchedule] 试），没有返回 null。
   ///
-  /// 换校后的旧快照会被丢弃（baseUrl 不匹配），并清掉磁盘文件，避免下次再读到。
+  /// 换地址后的旧快照会被丢弃（baseUrl 不匹配），并清掉磁盘文件，避免下次再读到。
   Future<CookieStoreSnapshot?> bootstrap() async {
     final snapshot = await cookieStorage.load();
     if (snapshot == null) return null;
@@ -276,7 +276,10 @@ class ScheduleService {
     }
     if (state is WebLoginState) {
       _restore(client, rollback);
-      throw AcademicError(ErrorCode.webLoginRequired, '学校要求先完成网页统一认证，暂不支持自动登录');
+      throw AcademicError(
+        ErrorCode.webLoginRequired,
+        '教务系统要求先完成网页统一认证，暂不支持自动登录',
+      );
     }
     if (state is! AuthenticatedState) {
       _restore(client, rollback);

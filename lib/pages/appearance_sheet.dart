@@ -135,7 +135,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '只影响课程卡片里的文字与行高，时间列和其他文字不变。',
+                  '只影响课程卡片文字，时间列不变。',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.hintColor,
                   ),
