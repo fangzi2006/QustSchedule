@@ -3000,7 +3000,7 @@ void main() {
         scrollable: find.byType(Scrollable).first,
       );
       // 厂商私有权限读不到真实状态，不能给假绿灯。
-      expect(find.text('需手动确认 · 点「去设置」到应用详情里开'), findsOneWidget);
+      expect(find.text('无法读取状态 · 需自行确认'), findsOneWidget);
 
       final tile = find.ancestor(
         of: find.text('自启动'),
@@ -3013,7 +3013,7 @@ void main() {
       await tester.pump(const Duration(seconds: 3));
 
       expect(rig.gateway.autostartSettingsCount, 1);
-      expect(rig.gateway.toasts, contains('已打开应用详情：在「自启动 / 耗电管理」里允许'));
+      expect(rig.gateway.toasts, contains('请在设置顶部搜索「自启动」，开启本应用开关'));
 
       rig.service.dispose();
       debugDefaultTargetPlatformOverride = null;
@@ -3029,7 +3029,7 @@ void main() {
         wrap(ReminderPage(model: rig.model, service: rig.service)),
       );
       await tester.pumpAndSettle();
-      expect(find.text('未授权'), findsOneWidget);
+      expect(find.text('已禁止 · 无法收到任何提醒'), findsOneWidget);
 
       // 用户在系统设置里授权后回到 App：状态必须自己刷新。
       rig.gateway.statusValue = const ReminderRuntimeStatus(
@@ -3040,7 +3040,7 @@ void main() {
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
 
-      expect(find.text('已授权'), findsOneWidget);
+      expect(find.text('已允许'), findsOneWidget);
 
       rig.service.dispose();
       debugDefaultTargetPlatformOverride = null;

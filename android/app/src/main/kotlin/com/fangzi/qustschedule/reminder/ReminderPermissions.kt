@@ -140,8 +140,8 @@ object ReminderPermissions {
                 return true
             }
         }
-        Log.i(TAG, "no usable autostart page, fall back to app details")
-        tryStart(context, appDetailsIntent(context))
+        Log.i(TAG, "no usable autostart page, fall back to system settings")
+        tryStart(context, Intent(Settings.ACTION_SETTINGS))
         return false
     }
 

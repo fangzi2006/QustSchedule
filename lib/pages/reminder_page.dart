@@ -109,17 +109,17 @@ class _ReminderPageState extends State<ReminderPage>
     final granted = await widget.service.requestNotificationPermission();
     await _refreshStatus();
     if (!mounted) return;
-    _toast(granted ? '通知权限已授权' : '未授权：请到系统设置里允许通知');
+    _toast(granted ? '通知权限已就绪' : '请开启通知权限，否则课前提醒无法发出');
   });
 
   Future<void> _openExactAlarm() => _run(() async {
-    _toast('已打开系统设置，返回后会自动刷新', longDuration: true);
+    _toast('请开启「允许设置闹钟和提醒」以确保准时响铃', longDuration: true);
     await widget.service.openExactAlarmSettings();
     await _refreshStatus();
   });
 
   Future<void> _openBattery() => _run(() async {
-    _toast('已打开应用详情：请在「耗电管理」中允许完全后台行为', longDuration: true);
+    _toast('请在「耗电管理」或「省电策略」中允许后台运行', longDuration: true);
     await widget.service.openBatterySettings();
     await _refreshStatus();
   });
@@ -127,7 +127,7 @@ class _ReminderPageState extends State<ReminderPage>
   Future<void> _openAutostart() => _run(() async {
     final vendor = await widget.service.openAutostartSettings();
     _toast(
-      vendor ? '已打开自启动管理，请允许本应用自启动' : '已打开应用详情：在「自启动 / 耗电管理」里允许',
+      vendor ? '请在列表中找到本应用并允许自启动' : '请在设置顶部搜索「自启动」，开启本应用开关',
       longDuration: true,
     );
     await _refreshStatus();
@@ -417,7 +417,7 @@ class _PermissionsCard extends StatelessWidget {
                 title: '通知权限',
                 value: status == null
                     ? '查询中…'
-                    : (status.canNotify ? '已授权' : '未授权'),
+                    : (status.canNotify ? '已允许' : '已禁止 · 无法收到任何提醒'),
                 ok: status?.canNotify ?? false,
                 actionLabel: '去授权',
                 onAction: onRequestNotification,
@@ -428,7 +428,7 @@ class _PermissionsCard extends StatelessWidget {
                 title: '精确闹钟',
                 value: status == null
                     ? '查询中…'
-                    : (status.exactAlarmAllowed ? '已允许' : '未允许 · 提醒可能延迟'),
+                    : (status.exactAlarmAllowed ? '准时触发' : '未允许 · 息屏时可能推迟数分钟'),
                 ok: status?.exactAlarmAllowed ?? false,
                 actionLabel: '去设置',
                 onAction: onOpenExactAlarm,
@@ -439,9 +439,7 @@ class _PermissionsCard extends StatelessWidget {
                 title: '忽略电池优化',
                 value: status == null
                     ? '查询中…'
-                    : (status.batteryOptOut
-                          ? '已忽略 · 可靠性最好'
-                          : '未忽略 · 打开应用详情里的「耗电管理」'),
+                    : (status.batteryOptOut ? '后台不受限制' : '受省电策略限制 · 后台可能被清理'),
                 ok: status?.batteryOptOut ?? false,
                 actionLabel: '去设置',
                 onAction: onOpenBattery,
@@ -582,9 +580,7 @@ class _DiagnosticsCard extends StatelessWidget {
 String _autostartText(ReminderRuntimeStatus? status) {
   if (status == null) return '查询中…';
   if (!status.autoStartDeclared) return '缺少开机广播权限 · 重启后不会恢复';
-  return status.autoStartVendorPage
-      ? '需手动确认 · 点「去设置」打开自启动管理'
-      : '需手动确认 · 点「去设置」到应用详情里开';
+  return '无法读取状态 · 需自行确认';
 }
 
 String _timeText(int? ms) {
