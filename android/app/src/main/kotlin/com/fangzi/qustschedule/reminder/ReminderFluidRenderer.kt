@@ -89,11 +89,8 @@ object ReminderFluidRenderer {
         val builder = NotificationCompat.Builder(context, CHANNEL_FLUID)
             .setSmallIcon(R.drawable.ic_stat_lesson)
             .setContentTitle(state.name.ifEmpty { "上课提醒" })
+            .setSubText(state.detailText())
             .setContentText(state.detailText())
-            .setStyle(
-                NotificationCompat.BigTextStyle()
-                    .bigText(state.detailText())
-            )
             .setWhen(state.startMs)
             .setShowWhen(true)
             .setUsesChronometer(true)
