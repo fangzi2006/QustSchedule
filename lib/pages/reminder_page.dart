@@ -439,7 +439,7 @@ class _PermissionsCard extends StatelessWidget {
                 title: '精确闹钟',
                 value: status == null
                     ? '查询中…'
-                    : (status.exactAlarmAllowed ? '准时触发' : '未允许 · 息屏时可能推迟数分钟'),
+                    : (status.exactAlarmAllowed ? '已允许' : '未允许 · 息屏时可能推迟数分钟'),
                 ok: status?.exactAlarmAllowed ?? false,
                 actionLabel: '去设置',
                 onAction: onOpenExactAlarm,
@@ -450,7 +450,7 @@ class _PermissionsCard extends StatelessWidget {
                 title: '忽略电池优化',
                 value: status == null
                     ? '查询中…'
-                    : (status.batteryOptOut ? '后台不受限制' : '受省电策略限制 · 后台可能被清理'),
+                    : (status.batteryOptOut ? '已忽略' : '受省电策略限制 · 后台可能被清理'),
                 ok: status?.batteryOptOut ?? false,
                 actionLabel: '去设置',
                 onAction: onOpenBattery,
@@ -589,9 +589,9 @@ class _DiagnosticsCard extends StatelessWidget {
 }
 
 String _autostartText(ReminderRuntimeStatus? status) {
-  if (status == null) return '查询中…';
-  if (!status.autoStartDeclared) return '缺少开机广播权限 · 重启后不会恢复';
-  return '无法读取状态 · 需自行确认';
+//  if (status == null) return '查询中…';
+//  if (!status.autoStartDeclared) return '缺少开机广播权限 · 重启后不会恢复';
+  return '该权限不可检测，需自行确认';
 }
 
 String _timeText(int? ms) {
