@@ -18,10 +18,9 @@ migrate_working_dir/
 *.iws
 .idea/
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
+# .vscode 里是本机 IDE 配置（含绝对路径，如 cmake.sourceDirectory），不入库，
+# 每位开发者按自己机器自行创建。
+.vscode/
 
 # Flutter/Dart/Pub related
 **/doc/api/
