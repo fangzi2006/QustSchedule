@@ -589,8 +589,8 @@ class _DiagnosticsCard extends StatelessWidget {
 }
 
 String _autostartText(ReminderRuntimeStatus? status) {
-//  if (status == null) return '查询中…';
-//  if (!status.autoStartDeclared) return '缺少开机广播权限 · 重启后不会恢复';
+  //  if (status == null) return '查询中…';
+  //  if (!status.autoStartDeclared) return '缺少开机广播权限 · 重启后不会恢复';
   return '该权限不可检测，需自行确认';
 }
 
