@@ -90,7 +90,6 @@ object ReminderFluidRenderer {
             .setSmallIcon(R.drawable.ic_stat_lesson)
             .setContentTitle(state.name.ifEmpty { "上课提醒" })
             .setSubText(state.detailText())
-            .setContentText(state.detailText())
             .setWhen(state.startMs)
             .setShowWhen(true)
             .setUsesChronometer(true)
