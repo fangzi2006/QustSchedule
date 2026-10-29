@@ -230,6 +230,9 @@ abstract class ReminderGateway {
 
   /// 立刻收起流体云卡片（用户手动停止或在页面里关掉形态时用）。
   Future<void> stopFluid();
+
+  /// 显示系统级 Toast 提示（跨进程覆盖在系统设置等页面上方）。
+  Future<void> showToast(String message, {bool longDuration = false});
 }
 
 /// 真实实现：`MethodChannel` + 原生 `ReminderBridge`。
@@ -373,6 +376,20 @@ class MethodChannelReminderGateway implements ReminderGateway {
       // 桌面端：无事可做。
     } on PlatformException catch (error) {
       debugPrint('停止流体云失败：${error.code}');
+    }
+  }
+
+  @override
+  Future<void> showToast(String message, {bool longDuration = false}) async {
+    try {
+      await channel.invokeMethod<void>('toast', <String, Object?>{
+        'message': message,
+        'long': longDuration,
+      });
+    } on MissingPluginException {
+      // 桌面端：无事可做。
+    } on PlatformException catch (error) {
+      debugPrint('显示 Toast 失败：${error.code}');
     }
   }
 }

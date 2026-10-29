@@ -124,4 +124,11 @@ class FakeReminderGateway implements ReminderGateway {
   Future<void> stopFluid() async {
     stopFluidCount++;
   }
+
+  final List<String> toasts = <String>[];
+
+  @override
+  Future<void> showToast(String message, {bool longDuration = false}) async {
+    toasts.add(message);
+  }
 }

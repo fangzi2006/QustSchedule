@@ -198,6 +198,10 @@ class ReminderService {
     await refreshStatus();
   }
 
+  /// 显示系统级 Toast 提示。
+  Future<void> showToast(String message, {bool longDuration = false}) =>
+      _gateway.showToast(message, longDuration: longDuration);
+
   void dispose() {
     _disposed = true;
     _timer?.cancel();

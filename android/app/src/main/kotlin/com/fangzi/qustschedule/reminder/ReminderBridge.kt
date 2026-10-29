@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.widget.Toast
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -109,6 +110,18 @@ class ReminderBridge(
 
             "stopFluid" -> {
                 ReminderFluidService.stop(activity)
+                result.success(null)
+            }
+
+            "toast" -> {
+                val message = call.argument<String>("message") ?: ""
+                val isLong = call.argument<Boolean>("long") ?: false
+                if (message.isNotEmpty()) {
+                    mainHandler.post {
+                        val duration = if (isLong) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
+                        Toast.makeText(activity.applicationContext, message, duration).show()
+                    }
+                }
                 result.success(null)
             }
 

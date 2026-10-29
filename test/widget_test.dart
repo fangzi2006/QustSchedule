@@ -3013,6 +3013,7 @@ void main() {
       await tester.pump(const Duration(seconds: 3));
 
       expect(rig.gateway.autostartSettingsCount, 1);
+      expect(rig.gateway.toasts, contains('已打开应用详情：在「自启动 / 耗电管理」里允许'));
 
       rig.service.dispose();
       debugDefaultTargetPlatformOverride = null;

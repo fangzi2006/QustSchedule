@@ -113,22 +113,24 @@ class _ReminderPageState extends State<ReminderPage>
   });
 
   Future<void> _openExactAlarm() => _run(() async {
+    _toast('已打开系统设置，返回后会自动刷新', longDuration: true);
     await widget.service.openExactAlarmSettings();
     await _refreshStatus();
-    if (!mounted) return;
-    _toast('已打开系统设置，返回后会自动刷新');
   });
 
   Future<void> _openBattery() => _run(() async {
+    _toast('已打开应用详情：请在「耗电管理」中允许完全后台行为', longDuration: true);
     await widget.service.openBatterySettings();
     await _refreshStatus();
   });
 
   Future<void> _openAutostart() => _run(() async {
     final vendor = await widget.service.openAutostartSettings();
+    _toast(
+      vendor ? '已打开自启动管理，请允许本应用自启动' : '已打开应用详情：在「自启动 / 耗电管理」里允许',
+      longDuration: true,
+    );
     await _refreshStatus();
-    if (!mounted) return;
-    _toast(vendor ? '已打开自启动管理，请允许本应用自启动' : '已打开应用详情：在「自启动 / 耗电管理」里允许');
   });
 
   Future<void> _resync() => _run(() async {
@@ -158,12 +160,20 @@ class _ReminderPageState extends State<ReminderPage>
 
   Future<void> _testInOneMinute() => _testReminder(60);
 
-  void _toast(String message) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
-      );
+  void _toast(String message, {bool longDuration = false}) {
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      unawaited(widget.service.showToast(message, longDuration: longDuration));
+    } else {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(message),
+            duration: Duration(seconds: longDuration ? 3 : 2),
+          ),
+        );
+    }
   }
 
   @override
