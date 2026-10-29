@@ -19,11 +19,13 @@ data class ReminderSyncOutcome(
 /**
  * 排程器：把 payload 里的绝对毫秒挂成系统闹钟。
  *
- * 与参考实现（sleepy）保持同一套约定：
- *  - **只有两级 API**：`setExactAndAllowWhileIdle`，无精确闹钟权限时降到
- *    `setAndAllowWhileIdle`（不精确但能穿透 Doze）。不用 `setAlarmClock`
- *    （状态栏常驻闹钟图标），也不用 `setWindow`（10 分钟窗口对 5 分钟提前量
- *    毫无意义）。
+ * 与参考实现（sleepy）的差异：课程事件按"能多准就多准"排。
+ *  - **闹钟 API 分工**：有精确闹钟权限时，课程事件与流体云收起兜底都用 `setAlarmClock`
+ *    （代价是状态栏闹钟图标，但不会被 OEM 拉长投递窗口——ColorOS 16 实测会把
+ *    `setExactAndAllowWhileIdle` 拉成 1 小时窗口）；无权限时统一降级
+ *    `setAndAllowWhileIdle`（不精确但能穿透 Doze）。每日 00:05 自愈链用
+ *    `setExactAndAllowWhileIdle`，晚几分钟无害，也不必占用闹钟图标。
+ *    不用 `setWindow`（10 分钟窗口对 5 分钟提前量毫无意义）。
  *  - **账本差分撤销**：只撤"上次排过但现在不需要"的 code，仍需要的槽位原地
  *    覆盖，不制造"先撤再排"的空窗。
  *  - **每日 00:05 自愈重排**：一次性闹钟链，每次触发后重挂次日，用于修复被
