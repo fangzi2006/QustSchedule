@@ -513,7 +513,7 @@ class Preferences {
     await _flush();
   }
 
-  /// 退出登录时清掉该学校的账号记录（凭据本身也一并删除）。
+  /// 退出登录时清掉本校的账号记录（凭据本身也一并删除）。
   Future<void> clearAccountOf(String url) async {
     final text = url.trim();
     if (text.isEmpty || accountOf(text).isEmpty) return;

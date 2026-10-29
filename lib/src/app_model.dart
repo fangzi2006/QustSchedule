@@ -3,7 +3,7 @@
 /// 与模块错误码一一对应（不允许"其他错误弹个 toast"这种黑洞）：
 ///  - SESSION_EXPIRED    → 引导重新登录（自动重登失败或没有保存密码时）；
 ///  - CAPTCHA_REQUIRED   → 验证码页；
-///  - WEB_LOGIN_REQUIRED → 明确提示"该学校需要网页统一认证，暂不支持"；
+///  - WEB_LOGIN_REQUIRED → 明确提示"教务系统需要网页统一认证，暂不支持"；
 ///  - INVALID_CREDENTIALS→ 账号或密码不正确；
 ///  - NETWORK_RETRYABLE  → 网络问题，可重试；
 ///  - PAGE_CHANGED       → 页面结构变化，建议反馈；
@@ -1048,7 +1048,7 @@ class AppModel extends ChangeNotifier {
       case WebLoginState():
         _setStatus(
           AppStatus.failed,
-          message: '该学校要求先完成网页统一认证，暂不支持自动登录',
+          message: '教务系统要求先完成网页统一认证，暂不支持自动登录',
           code: ErrorCode.webLoginRequired.wire,
         );
     }
@@ -1468,7 +1468,7 @@ class AppModel extends ChangeNotifier {
       case ErrorCode.captchaRequired:
         return '需要输入验证码，请在验证码页输入后重试。';
       case ErrorCode.webLoginRequired:
-        return '该学校要求先完成网页统一认证，暂不支持自动登录。';
+        return '教务系统要求先完成网页统一认证，暂不支持自动登录。';
       case ErrorCode.networkRetryable:
         return '网络不稳定或无法连接教务系统，请检查网络后重试。';
       case ErrorCode.serverError:
