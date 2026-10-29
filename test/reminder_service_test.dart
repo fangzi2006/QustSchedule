@@ -261,13 +261,15 @@ void main() {
     test('权限相关调用会刷新状态', () async {
       final rig = buildRig();
       await rig.service.requestNotificationPermission();
+      await rig.service.openNotificationSettings();
       await rig.service.openExactAlarmSettings();
       await rig.service.openBatterySettings();
 
       expect(rig.gateway.notificationRequests, 1);
+      expect(rig.gateway.notificationSettingsCount, 1);
       expect(rig.gateway.exactAlarmSettingsCount, 1);
       expect(rig.gateway.batterySettingsCount, 1);
-      expect(rig.gateway.statusCount, 3);
+      expect(rig.gateway.statusCount, 4);
       expect(rig.service.lastStatus, isNotNull);
     });
   });

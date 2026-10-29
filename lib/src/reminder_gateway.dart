@@ -205,6 +205,9 @@ abstract class ReminderGateway {
 
   Future<bool> requestNotificationPermission();
 
+  /// 打开通知渠道 / 通知设置页（供用户手动开启横幅与锁屏）。
+  Future<void> openNotificationSettings();
+
   /// 跳到精确闹钟授权页，返回"当前是否已授权"。
   Future<bool> openExactAlarmSettings();
 
@@ -293,6 +296,17 @@ class MethodChannelReminderGateway implements ReminderGateway {
       return false;
     } on PlatformException {
       return false;
+    }
+  }
+
+  @override
+  Future<void> openNotificationSettings() async {
+    try {
+      await channel.invokeMethod<void>('openNotificationSettings');
+    } on MissingPluginException {
+      // 桌面端无通知设置，忽略。
+    } on PlatformException {
+      // 系统限制或跳转失败，忽略。
     }
   }
 

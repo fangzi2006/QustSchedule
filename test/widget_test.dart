@@ -3040,7 +3040,14 @@ void main() {
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
 
-      expect(find.text('已允许'), findsOneWidget);
+      expect(find.text('已允许 · 横幅与锁屏需手动开启'), findsOneWidget);
+
+      // 授权后按钮变为「去设置」，点击跳到渠道设置页（不弹 Toast）
+      final setBtn = find.widgetWithText(TextButton, '去设置').first;
+      await tester.tap(setBtn);
+      await tester.pumpAndSettle();
+      expect(rig.gateway.notificationSettingsCount, 1);
+      expect(rig.gateway.toasts, isEmpty);
 
       rig.service.dispose();
       debugDefaultTargetPlatformOverride = null;

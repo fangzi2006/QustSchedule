@@ -70,6 +70,29 @@ object ReminderPermissions {
         startSafely(context, appDetailsIntent(context))
     }
 
+    /**
+     * 打开通知设置页。
+     *
+     * 优先直达「上课提醒」渠道详情页，方便用户手动开启横幅与锁屏；
+     * 渠道页打不开时回退到应用通知管理页，最后回退到应用详情。
+     */
+    fun openNotificationSettings(context: Context) {
+        ReminderNotifier.ensureChannel(context)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channelIntent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                putExtra(Settings.EXTRA_CHANNEL_ID, ReminderNotifier.CHANNEL_ID)
+            }
+            if (tryStart(context, channelIntent)) return
+
+            val appNotifyIntent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            }
+            if (tryStart(context, appNotifyIntent)) return
+        }
+        startSafely(context, appDetailsIntent(context))
+    }
+
     fun openAppDetails(context: Context) {
         startSafely(context, appDetailsIntent(context))
     }

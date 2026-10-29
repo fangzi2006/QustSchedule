@@ -78,10 +78,17 @@ class FakeReminderGateway implements ReminderGateway {
     return statusValue;
   }
 
+  int notificationSettingsCount = 0;
+
   @override
   Future<bool> requestNotificationPermission() async {
     notificationRequests++;
     return statusValue.notificationPermission;
+  }
+
+  @override
+  Future<void> openNotificationSettings() async {
+    notificationSettingsCount++;
   }
 
   @override

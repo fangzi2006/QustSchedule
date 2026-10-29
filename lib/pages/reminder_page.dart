@@ -112,6 +112,11 @@ class _ReminderPageState extends State<ReminderPage>
     _toast(granted ? '通知权限已就绪' : '请开启通知权限，否则课前提醒无法发出');
   });
 
+  Future<void> _openNotificationSettings() => _run(() async {
+    await widget.service.openNotificationSettings();
+    await _refreshStatus();
+  });
+
   Future<void> _openExactAlarm() => _run(() async {
     _toast('请开启「允许设置闹钟和提醒」以确保准时响铃', longDuration: true);
     await widget.service.openExactAlarmSettings();
@@ -198,6 +203,7 @@ class _ReminderPageState extends State<ReminderPage>
           _PermissionsCard(
             statusNotifier: _statusNotifier,
             onRequestNotification: _requestNotification,
+            onOpenNotificationSettings: _openNotificationSettings,
             onOpenExactAlarm: _openExactAlarm,
             onOpenBattery: _openBattery,
             onOpenAutostart: _openAutostart,
@@ -393,6 +399,7 @@ class _PermissionsCard extends StatelessWidget {
   const _PermissionsCard({
     required this.statusNotifier,
     required this.onRequestNotification,
+    required this.onOpenNotificationSettings,
     required this.onOpenExactAlarm,
     required this.onOpenBattery,
     required this.onOpenAutostart,
@@ -400,6 +407,7 @@ class _PermissionsCard extends StatelessWidget {
 
   final ValueListenable<ReminderRuntimeStatus?> statusNotifier;
   final VoidCallback onRequestNotification;
+  final VoidCallback onOpenNotificationSettings;
   final VoidCallback onOpenExactAlarm;
   final VoidCallback onOpenBattery;
   final VoidCallback onOpenAutostart;
@@ -409,6 +417,7 @@ class _PermissionsCard extends StatelessWidget {
     return ValueListenableBuilder<ReminderRuntimeStatus?>(
       valueListenable: statusNotifier,
       builder: (context, status, _) {
+        final canNotify = status?.canNotify ?? false;
         return Card(
           child: Column(
             children: <Widget>[
@@ -417,10 +426,12 @@ class _PermissionsCard extends StatelessWidget {
                 title: '通知权限',
                 value: status == null
                     ? '查询中…'
-                    : (status.canNotify ? '已允许' : '已禁止 · 无法收到任何提醒'),
-                ok: status?.canNotify ?? false,
-                actionLabel: '去授权',
-                onAction: onRequestNotification,
+                    : (canNotify ? '已允许 · 横幅与锁屏需手动开启' : '已禁止 · 无法收到任何提醒'),
+                ok: canNotify,
+                actionLabel: canNotify ? '去设置' : '去授权',
+                onAction: canNotify
+                    ? onOpenNotificationSettings
+                    : onRequestNotification,
               ),
               const Divider(height: 0, indent: 56),
               _PermissionTile(

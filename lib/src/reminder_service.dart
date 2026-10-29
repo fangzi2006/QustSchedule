@@ -153,6 +153,12 @@ class ReminderService {
     return granted;
   }
 
+  /// 打开通知渠道 / 通知设置页，供用户手动配置横幅与锁屏。
+  Future<void> openNotificationSettings() async {
+    await _gateway.openNotificationSettings();
+    await refreshStatus();
+  }
+
   /// 跳到精确闹钟授权页，返回"当前是否已授权"。
   Future<bool> openExactAlarmSettings() async {
     final allowed = await _gateway.openExactAlarmSettings();

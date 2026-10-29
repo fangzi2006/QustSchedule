@@ -67,6 +67,11 @@ class ReminderBridge(
             "requestNotificationPermission" ->
                 requestNotificationPermission(result)
 
+            "openNotificationSettings" -> {
+                ReminderPermissions.openNotificationSettings(activity)
+                result.success(null)
+            }
+
             "openExactAlarmSettings" -> {
                 ReminderPermissions.openExactAlarmSettings(activity)
                 result.success(ReminderPermissions.canScheduleExactAlarms(activity))
