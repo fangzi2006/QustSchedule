@@ -313,17 +313,25 @@ jobs:
       - name: Build release body
         env:
           REPO: ${{ github.repository }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          TAG: ${{ github.ref_name }}
         run: |
-          if [ -s .github/release_notes.md ]; then
-            CUSTOM_NOTES="$(cat .github/release_notes.md)"
-          else
-            CUSTOM_NOTES=""
-          fi
-          VERSION="${{ steps.ver.outputs.version }}"
-          TAG="${{ github.ref_name }}"
+          # 优先从 CHANGELOG.md 中提取当前版本的更新说明
+          CUSTOM_NOTES=$(python3 -c "
+          import re, os
+          version = os.environ.get('VERSION', '').lstrip('v')
+          if os.path.exists('CHANGELOG.md'):
+              with open('CHANGELOG.md', 'r', encoding='utf-8') as f:
+                  content = f.read()
+              pattern = rf'## \\[?v?{re.escape(version)}\\]?.*?\\n(.*?)(?=\\n## |\\Z)'
+              match = re.search(pattern, content, re.DOTALL)
+              if match:
+                  print(match.group(1).strip())
+          " 2>/dev/null || true)
+
           BASE="https://github.com/${REPO}/releases/download/${TAG}"
 
-          PREV_TAG=$(git tag --sort=-creatordate | grep -vx "$TAG" | head -1)
+          PREV_TAG=$(git tag --sort=-creatordate | grep -vx "$TAG" | head -1 || true)
           if [ -n "$PREV_TAG" ]; then
             CHANGELOG_URL="https://github.com/${REPO}/compare/${PREV_TAG}...${TAG}"
           else
@@ -334,7 +342,7 @@ jobs:
             if [ -n "$CUSTOM_NOTES" ]; then
               printf '%s\n' "$CUSTOM_NOTES"
             else
-              echo "青科课表通 v${VERSION} 发布。青岛科技大学教务系统第三方课表客户端，本版更新内容见下方更新日志。"
+              echo "青科课表通 v${VERSION} 发布。青岛科技大学教务系统第三方课表客户端，本版更新内容见下方变更列表。"
             fi
             echo
             echo "## 📥 根据你的操作系统下载"
