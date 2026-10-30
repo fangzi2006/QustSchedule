@@ -369,7 +369,7 @@ class _WeekBar extends StatelessWidget {
                       ),
                       if (range.isNotEmpty)
                         Text(
-                          model.weekRange,
+                          range,
                           style: theme.textTheme.labelSmall?.copyWith(
                             color: theme.hintColor,
                           ),

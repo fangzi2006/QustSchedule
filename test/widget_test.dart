@@ -237,7 +237,7 @@ void main() {
       expect(previous.onPressed, isNull);
     });
 
-    testWidgets('周次条显示日期范围', (tester) async {
+    testWidgets('周次条显示日期范围并随滑动实时切换', (tester) async {
       final model = buildModel();
       model.hydrateForTest(
         schedule: sparseSchedule(),
@@ -247,6 +247,13 @@ void main() {
       await tester.pumpWidget(wrap(SchedulePage(model: model)));
 
       expect(find.text('3/2 – 3/8'), findsOneWidget);
+
+      // 滑动翻到第 2 周：顶栏周次与日期范围必须同步更新，不滞后
+      await tester.fling(find.byType(PageView), const Offset(-400, 0), 1000);
+      await tester.pumpAndSettle();
+
+      expect(find.text('第 2 周'), findsOneWidget);
+      expect(find.text('3/9 – 3/15'), findsOneWidget);
     });
 
     testWidgets('调课冲突：表头该天可点，点开列出被顶掉的原课', (tester) async {
