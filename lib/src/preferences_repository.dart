@@ -29,7 +29,20 @@ import 'reschedule.dart';
 import 'school.dart';
 import 'timetable.dart';
 
-const int preferencesSchema = 11;
+const int preferencesSchema = 12;
+
+/// 检查更新与安装包下载的默认加速代理。
+const String defaultUpdateProxyUrl = 'https://gh-proxy.com';
+
+/// 常见加速代理预设列表。
+const List<String> presetUpdateProxies = <String>[
+  'https://gh-proxy.com',
+  'https://ghproxy.net',
+  'https://gh.llkk.cc',
+];
+
+/// 启动时是否自动检查更新（默认开启）。
+const bool defaultAutoCheckUpdate = true;
 
 /// 课表格子（一节那一行）的高度，逻辑像素。
 ///
@@ -84,6 +97,9 @@ class Preferences {
     int reminderLeadMinutes = defaultReminderLeadMinutes,
     ReminderStyle reminderStyle = defaultReminderStyle,
     bool reminderFluidUntilEnd = defaultReminderFluidUntilEnd,
+    String updateProxyUrl = defaultUpdateProxyUrl,
+    bool autoCheckUpdate = defaultAutoCheckUpdate,
+    String ignoredUpdateVersion = '',
     File? file,
   }) : _termStarts = termStarts,
        _timetables = timetables,
@@ -110,6 +126,9 @@ class Preferences {
        _reminderLeadMinutes = clampReminderLead(reminderLeadMinutes),
        _reminderStyle = reminderStyle,
        _reminderFluidUntilEnd = reminderFluidUntilEnd,
+       _updateProxyUrl = updateProxyUrl.trim(),
+       _autoCheckUpdate = autoCheckUpdate,
+       _ignoredUpdateVersion = ignoredUpdateVersion.trim(),
        _file = file;
 
   final Map<String, String> _termStarts;
@@ -164,6 +183,9 @@ class Preferences {
 
   /// 流体云是否显示到下课（schema 11，默认 false = 上课即收起）。
   bool _reminderFluidUntilEnd;
+  String _updateProxyUrl;
+  bool _autoCheckUpdate;
+  String _ignoredUpdateVersion;
 
   final File? _file;
 
@@ -188,6 +210,9 @@ class Preferences {
     int reminderLeadMinutes = defaultReminderLeadMinutes,
     ReminderStyle reminderStyle = defaultReminderStyle,
     bool reminderFluidUntilEnd = defaultReminderFluidUntilEnd,
+    String updateProxyUrl = defaultUpdateProxyUrl,
+    bool autoCheckUpdate = defaultAutoCheckUpdate,
+    String ignoredUpdateVersion = '',
   }) => Preferences._(
     termStarts: termStarts ?? <String, String>{},
     timetables: timetables ?? <Timetable>[defaultTimetable()],
@@ -208,6 +233,9 @@ class Preferences {
     reminderLeadMinutes: reminderLeadMinutes,
     reminderStyle: reminderStyle,
     reminderFluidUntilEnd: reminderFluidUntilEnd,
+    updateProxyUrl: updateProxyUrl,
+    autoCheckUpdate: autoCheckUpdate,
+    ignoredUpdateVersion: ignoredUpdateVersion,
     file: null,
   );
 
@@ -257,6 +285,9 @@ class Preferences {
     var reminderLeadMinutes = defaultReminderLeadMinutes;
     var reminderStyle = defaultReminderStyle;
     var reminderFluidUntilEnd = defaultReminderFluidUntilEnd;
+    var updateProxyUrl = defaultUpdateProxyUrl;
+    var autoCheckUpdate = defaultAutoCheckUpdate;
+    var ignoredUpdateVersion = '';
 
     if (text.trim().isNotEmpty) {
       try {
@@ -366,6 +397,13 @@ class Preferences {
           // schema 11：流体云是否显示到下课。缺字段 = 默认（上课即收起）。
           final rawUntilEnd = decoded['reminderFluidUntilEnd'];
           if (rawUntilEnd is bool) reminderFluidUntilEnd = rawUntilEnd;
+          // schema 12：软件更新设置。
+          final rawUpdateProxy = decoded['updateProxyUrl'];
+          if (rawUpdateProxy is String) updateProxyUrl = rawUpdateProxy;
+          final rawAutoCheck = decoded['autoCheckUpdate'];
+          if (rawAutoCheck is bool) autoCheckUpdate = rawAutoCheck;
+          final rawIgnored = decoded['ignoredUpdateVersion'];
+          if (rawIgnored is String) ignoredUpdateVersion = rawIgnored;
         }
       } catch (_) {
         // 文件损坏按空设置处理：不值得因为一份设置让 app 起不来。
@@ -385,6 +423,9 @@ class Preferences {
         reminderLeadMinutes = defaultReminderLeadMinutes;
         reminderStyle = defaultReminderStyle;
         reminderFluidUntilEnd = defaultReminderFluidUntilEnd;
+        updateProxyUrl = defaultUpdateProxyUrl;
+        autoCheckUpdate = defaultAutoCheckUpdate;
+        ignoredUpdateVersion = '';
       }
     }
 
@@ -408,6 +449,9 @@ class Preferences {
       reminderLeadMinutes: reminderLeadMinutes,
       reminderStyle: reminderStyle,
       reminderFluidUntilEnd: reminderFluidUntilEnd,
+      updateProxyUrl: updateProxyUrl,
+      autoCheckUpdate: autoCheckUpdate,
+      ignoredUpdateVersion: ignoredUpdateVersion,
       file: file,
     );
   }
@@ -713,6 +757,37 @@ class Preferences {
   }
 
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // 软件更新设置（加速代理 / 自动检查 / 忽略版本，schema 12）
+  // ---------------------------------------------------------------------------
+
+  String get updateProxyUrl => _updateProxyUrl;
+
+  Future<void> setUpdateProxyUrl(String value) async {
+    final trimmed = value.trim();
+    if (_updateProxyUrl == trimmed) return;
+    _updateProxyUrl = trimmed;
+    await _flush();
+  }
+
+  bool get autoCheckUpdate => _autoCheckUpdate;
+
+  Future<void> setAutoCheckUpdate(bool value) async {
+    if (_autoCheckUpdate == value) return;
+    _autoCheckUpdate = value;
+    await _flush();
+  }
+
+  String get ignoredUpdateVersion => _ignoredUpdateVersion;
+
+  Future<void> setIgnoredUpdateVersion(String value) async {
+    final trimmed = value.trim();
+    if (_ignoredUpdateVersion == trimmed) return;
+    _ignoredUpdateVersion = trimmed;
+    await _flush();
+  }
+
+  // ---------------------------------------------------------------------------
   // 落盘
   // ---------------------------------------------------------------------------
 
@@ -743,6 +818,9 @@ class Preferences {
         'reminderLeadMinutes': _reminderLeadMinutes,
         'reminderStyle': _reminderStyle.wireName,
         'reminderFluidUntilEnd': _reminderFluidUntilEnd,
+        'updateProxyUrl': _updateProxyUrl,
+        'autoCheckUpdate': _autoCheckUpdate,
+        'ignoredUpdateVersion': _ignoredUpdateVersion,
         'timetables': _timetables.map((table) => table.toJson()).toList(),
         if (_quickSetup != null) 'quickSetup': _quickSetup!.toJson(),
       }),

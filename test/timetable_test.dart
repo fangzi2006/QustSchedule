@@ -774,7 +774,7 @@ void main() {
       await prefs.setReminderStyle(ReminderStyle.fluid);
 
       final text = await file.readAsString();
-      expect(text, contains('"schema":11'));
+      expect(text, contains('"schema":$preferencesSchema'));
       final again = Preferences.decode(text);
       expect(again.reminderEnabled, isTrue);
       expect(again.reminderLeadMinutes, 20);

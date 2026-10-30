@@ -33,6 +33,10 @@ import '../widgets/floating_dock.dart';
 import '../widgets/time_wheel_picker.dart';
 import '../widgets/week_pager.dart';
 import 'appearance_sheet.dart';
+import '../src/app_version.dart';
+import '../src/updater/update_models.dart';
+import '../src/updater/update_service.dart';
+import 'update_dialog.dart';
 import 'reschedule_page.dart';
 import 'school_address_page.dart';
 import 'timetable_list_page.dart';
@@ -61,6 +65,8 @@ class _SchedulePageState extends State<SchedulePage> {
   ///    只重建顶栏与右下角按钮这两个小部件；
   ///  - 状态：`model.week` 留到停稳后再写（见 `_WeekPagerState._settleToPage`）。
   final ValueNotifier<int> _shownWeek = ValueNotifier<int>(1);
+  static bool _hasCheckedAutoUpdate = false;
+  Timer? _updateCheckTimer;
 
   @override
   void initState() {
@@ -68,10 +74,47 @@ class _SchedulePageState extends State<SchedulePage> {
     _shownWeek.value = model.week;
     // 只听周次通知：换周不该让整张课表重建（内容没变）。
     model.weekNotifier.addListener(_syncShownWeek);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkUpdateOnLaunch();
+    });
+  }
+
+  void _checkUpdateOnLaunch() {
+    if (_hasCheckedAutoUpdate) return;
+    _hasCheckedAutoUpdate = true;
+
+    if (!model.autoCheckUpdate) return;
+
+    // 延迟 2 秒，待首页课表渲染与冷启动完成后再静默检测，避免抢占启动阶段的网络与 CPU
+    _updateCheckTimer = Timer(const Duration(seconds: 2), () async {
+      if (!mounted) return;
+      try {
+        final service = UpdateService();
+        final result = await service.checkForUpdates(
+          currentVersion: appVersion,
+          proxyPrefix: model.updateProxyUrl,
+        );
+
+        if (!mounted) return;
+        if (result.status == UpdateStatus.hasUpdate) {
+          final release = result.release;
+          if (release != null &&
+              release.version != model.ignoredUpdateVersion) {
+            await showUpdateDialog(
+              context,
+              updateResult: result,
+              proxyPrefix: model.updateProxyUrl,
+              onIgnore: () => model.setIgnoredUpdateVersion(release.version),
+            );
+          }
+        }
+      } catch (_) {}
+    });
   }
 
   @override
   void dispose() {
+    _updateCheckTimer?.cancel();
     model.weekNotifier.removeListener(_syncShownWeek);
     _shownWeek.dispose();
     super.dispose();

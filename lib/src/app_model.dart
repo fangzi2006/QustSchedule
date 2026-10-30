@@ -475,6 +475,35 @@ class AppModel extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // 软件更新设置
+  // ---------------------------------------------------------------------------
+
+  String get updateProxyUrl => _preferences.updateProxyUrl;
+
+  Future<void> setUpdateProxyUrl(String value) async {
+    if (_preferences.updateProxyUrl == value.trim()) return;
+    await _preferences.setUpdateProxyUrl(value);
+    notifyListeners();
+  }
+
+  bool get autoCheckUpdate => _preferences.autoCheckUpdate;
+
+  Future<void> setAutoCheckUpdate(bool value) async {
+    if (_preferences.autoCheckUpdate == value) return;
+    await _preferences.setAutoCheckUpdate(value);
+    notifyListeners();
+  }
+
+  String get ignoredUpdateVersion => _preferences.ignoredUpdateVersion;
+
+  Future<void> setIgnoredUpdateVersion(String value) async {
+    if (_preferences.ignoredUpdateVersion == value.trim()) return;
+    await _preferences.setIgnoredUpdateVersion(value);
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
   // 调课（只影响渲染，不改原始课表）
   // ---------------------------------------------------------------------------
 

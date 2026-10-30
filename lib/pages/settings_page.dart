@@ -27,6 +27,10 @@ import 'reminder_page.dart';
 import 'schedule_page.dart' show showCalibrateSheet;
 import 'school_address_page.dart';
 import 'timetable_list_page.dart';
+import '../src/updater/update_models.dart';
+import '../src/updater/update_service.dart';
+import 'update_dialog.dart';
+import 'update_settings_dialog.dart';
 
 /// 项目主页（源码与发行版都在这里）：写入设置页「项目主页」，满足 GPL 的源码获取告知要求。
 const String kProjectHomeUrl = 'https://github.com/fangzi2006/QustSchedule';
@@ -288,6 +292,19 @@ class SettingsPage extends StatelessWidget {
                       leading: const Icon(Icons.info_outline_rounded, size: 20),
                       title: const Text('版本'),
                       subtitle: Text('青科课表通 $appVersion · 适配青岛科技大学教务'),
+                    ),
+                    const Divider(height: 0, indent: 56),
+                    _CheckUpdateTile(model: model),
+                    const Divider(height: 0, indent: 56),
+                    ListTile(
+                      leading: const Icon(Icons.tune_rounded, size: 20),
+                      title: const Text('更新设置'),
+                      subtitle: Text(
+                        '加速代理：${displayProxyName(model.updateProxyUrl)} · 自动检查：${model.autoCheckUpdate ? '开' : '关'}',
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () =>
+                          showUpdateSettingsDialog(context, model: model),
                     ),
                   ],
                 ),
@@ -605,5 +622,114 @@ class _LicenseTextPageState extends State<LicenseTextPage> {
         .map((p) => p.replaceAll(RegExp(r'\s*\n\s*'), ' ').trim())
         .where((p) => p.isNotEmpty)
         .join('\n\n');
+  }
+}
+
+class _CheckUpdateTile extends StatefulWidget {
+  const _CheckUpdateTile({required this.model});
+
+  final AppModel model;
+
+  @override
+  State<_CheckUpdateTile> createState() => _CheckUpdateTileState();
+}
+
+class _CheckUpdateTileState extends State<_CheckUpdateTile> {
+  bool _checking = false;
+
+  Future<void> _check() async {
+    if (_checking) return;
+    setState(() => _checking = true);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    try {
+      final service = UpdateService();
+      final result = await service.checkForUpdates(
+        currentVersion: appVersion,
+        proxyPrefix: widget.model.updateProxyUrl,
+      );
+
+      if (!mounted) return;
+
+      switch (result.status) {
+        case UpdateStatus.hasUpdate:
+          await showUpdateDialog(
+            context,
+            updateResult: result,
+            proxyPrefix: widget.model.updateProxyUrl,
+          );
+          break;
+        case UpdateStatus.noUpdate:
+          scaffoldMessenger.showSnackBar(
+            SnackBar(
+              content: Text('青科课表通已是最新版本 (v$appVersion)'),
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+          break;
+        case UpdateStatus.rateLimited:
+          scaffoldMessenger.showSnackBar(
+            SnackBar(
+              content: Text(result.errorMessage ?? '检查更新过于频繁，请稍后再试'),
+              behavior: SnackBarBehavior.floating,
+              action: SnackBarAction(
+                label: '更新设置',
+                onPressed: () {
+                  if (mounted) {
+                    showUpdateSettingsDialog(context, model: widget.model);
+                  }
+                },
+              ),
+            ),
+          );
+          break;
+        case UpdateStatus.networkError:
+          scaffoldMessenger.showSnackBar(
+            SnackBar(
+              content: Text(result.errorMessage ?? '网络连接超时，可尝试切换加速节点'),
+              behavior: SnackBarBehavior.floating,
+              action: SnackBarAction(
+                label: '切换代理',
+                onPressed: () {
+                  if (mounted) {
+                    showUpdateSettingsDialog(context, model: widget.model);
+                  }
+                },
+              ),
+            ),
+          );
+          break;
+        case UpdateStatus.unsupportedPlatform:
+        case UpdateStatus.error:
+          scaffoldMessenger.showSnackBar(
+            SnackBar(
+              content: Text(result.errorMessage ?? '检查更新失败，请重试'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+          break;
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _checking = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: const Icon(Icons.system_update_rounded, size: 20),
+      title: const Text('检查更新'),
+      subtitle: Text('当前版本 v$appVersion · 点击检查'),
+      trailing: _checking
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.refresh_rounded, size: 20),
+      onTap: _checking ? null : _check,
+    );
   }
 }
