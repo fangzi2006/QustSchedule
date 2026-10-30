@@ -65,6 +65,46 @@ void main() {
     });
   });
 
+  group('Release 日志清洗 (Release Notes Cleaning)', () {
+    test('过滤 GitHub CI 自动拼接的下载表格与比较链接', () {
+      const raw = '''
+### 新增
+- 增加关于页面与 FlClash 风格检查更新
+- 增加自定义加速代理配置
+
+### 修复
+- 修复下载断流重试问题
+
+## 📥 根据你的操作系统下载
+
+| OS | 下载 | 使用加速代理下载 |
+|:--:|:--|:--|
+| **安卓** | [![APK ARMv8](https://img.shields.io/badge/APK-ARMv8-3DDC84)](https://example.com/app.apk) |
+| **Windows** | [![Setup x64](https://img.shields.io/badge/Setup-x64-0078D6)](https://example.com/setup.exe) |
+
+所有变更列表：[ChangeLog](https://github.com/fangzi2006/QustSchedule/compare/v1.2.2...v1.2.3)
+''';
+
+      final cleaned = ReleaseInfo.cleanReleaseBody(raw);
+      expect(cleaned, contains('### 新增'));
+      expect(cleaned, contains('- 增加关于页面与 FlClash 风格检查更新'));
+      expect(cleaned, contains('### 修复'));
+      expect(cleaned, contains('- 修复下载断流重试问题'));
+
+      // 验证截断并过滤了 CI 自动拼接内容
+      expect(cleaned, isNot(contains('根据你的操作系统下载')));
+      expect(cleaned, isNot(contains('| OS |')));
+      expect(cleaned, isNot(contains('|:--:|')));
+      expect(cleaned, isNot(contains('img.shields.io')));
+      expect(cleaned, isNot(contains('所有变更列表：')));
+    });
+
+    test('空说明或纯空白返回空字符串', () {
+      expect(ReleaseInfo.cleanReleaseBody(''), isEmpty);
+      expect(ReleaseInfo.cleanReleaseBody('   \n  \r\n  '), isEmpty);
+    });
+  });
+
   group('产物格式化与架构匹配 (Asset Matching)', () {
     test('人类可读大小格式化', () {
       const a1 = ReleaseAsset(
@@ -340,6 +380,71 @@ void main() {
       expect(find.text('开源许可'), findsOneWidget);
       expect(find.text('开源协议'), findsOneWidget);
       expect(find.text('项目主页与源码'), findsOneWidget);
+    });
+
+    testWidgets('更新对话框自动过滤 CI 下载表格并美化展示 Markdown 标签', (tester) async {
+      const asset = ReleaseAsset(
+        name: 'QustSchedule_v1.2.3-arm64-v8a.apk',
+        downloadUrl: 'https://example.com/app.apk',
+        size: 19 * 1024 * 1024,
+        contentType: 'application/vnd.android.package-archive',
+      );
+
+      const release = ReleaseInfo(
+        tagName: 'v1.2.3',
+        version: '1.2.3',
+        name: '青科课表通 v1.2.3',
+        body: '''
+### 新增
+- 增加关于页面与**全新**检查更新
+
+### 优化
+- 提升下载速度
+
+## 📥 根据你的操作系统下载
+| OS | 下载 | 使用加速代理下载 |
+|:--:|:--|:--|
+| **安卓** | [下载](https://example.com) |
+''',
+        publishedAt: null,
+        assets: [asset],
+        htmlUrl:
+            'https://github.com/fangzi2006/QustSchedule/releases/tag/v1.2.3',
+      );
+
+      const updateResult = UpdateCheckResult(
+        status: UpdateStatus.hasUpdate,
+        release: release,
+        targetAsset: asset,
+        currentArchName: 'Android (arm64-v8a)',
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () => showUpdateDialog(
+                context,
+                updateResult: updateResult,
+                proxyPrefix: 'https://gh-proxy.com',
+              ),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('新增'), findsOneWidget);
+      expect(find.text('优化'), findsOneWidget);
+      expect(find.textContaining('增加关于页面与全新检查更新'), findsOneWidget);
+      expect(find.textContaining('提升下载速度'), findsOneWidget);
+
+      // 绝不包含 CI 拼接的操作系统下载表格源码
+      expect(find.textContaining('根据你的操作系统下载'), findsNothing);
+      expect(find.textContaining('| OS |'), findsNothing);
     });
 
     testWidgets('更新日志页面能够正常构建', (tester) async {

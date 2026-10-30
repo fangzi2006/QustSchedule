@@ -114,11 +114,9 @@ Future<void> showUpdateDialog(
                     ),
                   ),
                   child: SingleChildScrollView(
-                    child: SelectableText(
-                      release.body.trim().isEmpty
-                          ? '暂无详细更新说明。'
-                          : release.body.trim(),
-                      style: const TextStyle(fontSize: 13, height: 1.45),
+                    child: _ReleaseNotesView(
+                      content: release.cleanBody,
+                      version: release.version,
                     ),
                   ),
                 ),
@@ -145,7 +143,41 @@ Future<void> showUpdateDialog(
             child: const Text('浏览器下载'),
           ),
           FilledButton(
-            onPressed: () {
+            onPressed: () async {
+              if (Platform.isAndroid) {
+                final canInstall =
+                    await AppInstaller.canRequestPackageInstalls();
+                if (!canInstall && dialogContext.mounted) {
+                  final action = await showDialog<String>(
+                    context: dialogContext,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('需要安装权限'),
+                      content: const Text(
+                        '青科课表通需要开启「允许安装未知应用」权限才能覆盖升级安装包。\n\n建议先前往系统设置开启权限，开启后返回即可直接更新。',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(ctx).pop('download'),
+                          child: const Text('直接下载'),
+                        ),
+                        FilledButton(
+                          onPressed: () => Navigator.of(ctx).pop('settings'),
+                          child: const Text('去开启权限'),
+                        ),
+                      ],
+                    ),
+                  );
+
+                  if (action == 'settings') {
+                    await AppInstaller.openInstallSettings();
+                    return;
+                  } else if (action == null) {
+                    return;
+                  }
+                }
+              }
+
+              if (!dialogContext.mounted) return;
               Navigator.of(dialogContext).pop();
               showDownloadProgressDialog(
                 context,
@@ -182,6 +214,8 @@ Future<void> showDownloadProgressDialog(
   );
 }
 
+enum _DownloadStage { downloading, readyToInstall, error }
+
 class _DownloadProgressDialog extends StatefulWidget {
   const _DownloadProgressDialog({
     required this.asset,
@@ -200,7 +234,8 @@ class _DownloadProgressDialog extends StatefulWidget {
       _DownloadProgressDialogState();
 }
 
-class _DownloadProgressDialogState extends State<_DownloadProgressDialog> {
+class _DownloadProgressDialogState extends State<_DownloadProgressDialog>
+    with WidgetsBindingObserver {
   late final UpdateService _service;
   late final CancelToken _cancelToken;
 
@@ -209,20 +244,49 @@ class _DownloadProgressDialogState extends State<_DownloadProgressDialog> {
   late String _currentProxy;
   bool _downloadStarted = false;
 
+  _DownloadStage _stage = _DownloadStage.downloading;
+  File? _downloadedFile;
+  bool _needsPermission = false;
+  bool _isTriggeringInstall = false;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _service = widget.updateService ?? UpdateService();
     _cancelToken = CancelToken();
     _currentProxy = widget.selectedProxy;
-    // 仅在首次 initState 生命周期中触发下载，杜绝重建导致的多次并发下载冲突
     _startDownload();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _cancelToken.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        _stage == _DownloadStage.readyToInstall &&
+        _downloadedFile != null) {
+      _onAppResumedFromSettings();
+    }
+  }
+
+  Future<void> _onAppResumedFromSettings() async {
+    if (!Platform.isAndroid || _downloadedFile == null) return;
+    final canInstall = await AppInstaller.canRequestPackageInstalls();
+    if (!mounted) return;
+    setState(() {
+      _needsPermission = !canInstall;
+    });
+
+    if (canInstall) {
+      // 用户从系统设置切回，且已授权，自动唤起安装！
+      await _executeInstall(_downloadedFile!);
+    }
   }
 
   Future<void> _startDownload() async {
@@ -250,20 +314,92 @@ class _DownloadProgressDialogState extends State<_DownloadProgressDialog> {
       );
 
       if (!mounted) return;
-      Navigator.of(context).pop();
-      await _executeInstall(context, file);
+      setState(() {
+        _stage = _DownloadStage.readyToInstall;
+        _downloadedFile = file;
+      });
+
+      await _executeInstall(file);
     } catch (err) {
       if (_cancelToken.isCancelled) return;
       if (!mounted) return;
       setState(() {
+        _stage = _DownloadStage.error;
         _errorMessage = '下载失败: $err';
       });
+    }
+  }
+
+  Future<void> _executeInstall(File file) async {
+    if (_isTriggeringInstall) return;
+    _isTriggeringInstall = true;
+
+    try {
+      if (Platform.isAndroid) {
+        final canInstall = await AppInstaller.canRequestPackageInstalls();
+        if (!canInstall) {
+          if (!mounted) return;
+          setState(() {
+            _needsPermission = true;
+          });
+          final grant = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('安装权限未开启'),
+              content: const Text(
+                '安装包已下载完成！\n\n青科课表通需要「安装未知应用」权限才能覆盖升级安装包，请前往系统设置开启后返回。',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(ctx).pop(true),
+                  child: const Text('去设置'),
+                ),
+              ],
+            ),
+          );
+
+          if (grant == true) {
+            await AppInstaller.openInstallSettings();
+          }
+          return;
+        }
+
+        if (!mounted) return;
+        setState(() {
+          _needsPermission = false;
+        });
+      }
+
+      await AppInstaller.install(file);
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = '唤起系统安装器失败: $e';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isTriggeringInstall = false;
+        });
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+
+    if (_stage == _DownloadStage.readyToInstall) {
+      return _buildReadyToInstallDialog(theme);
+    }
+
     final progressVal = _currentProgress?.progress;
     final percent = _currentProgress?.percentage ?? 0;
 
@@ -354,46 +490,351 @@ class _DownloadProgressDialogState extends State<_DownloadProgressDialog> {
       ],
     );
   }
-}
 
-/// 执行安装并引导异常提示。
-Future<void> _executeInstall(BuildContext context, File file) async {
-  try {
-    if (Platform.isAndroid) {
-      final canInstall = await AppInstaller.canRequestPackageInstalls();
-      if (!canInstall && context.mounted) {
-        final grant = await showDialog<bool>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('安装权限未开启'),
-            content: const Text('青科课表通需要「安装未知应用」权限才能覆盖升级安装包，是否前往系统设置开启？'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(false),
-                child: const Text('取消'),
+  Widget _buildReadyToInstallDialog(ThemeData theme) {
+    return AlertDialog(
+      title: Row(
+        children: [
+          const Icon(
+            Icons.check_circle_rounded,
+            color: Color(0xFF2E7D32),
+            size: 24,
+          ),
+          const SizedBox(width: 8),
+          const Text('下载完成'),
+        ],
+      ),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 360),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.asset.name,
+              style: TextStyle(
+                fontSize: 12,
+                color: theme.colorScheme.onSurfaceVariant,
               ),
-              FilledButton(
-                onPressed: () => Navigator.of(ctx).pop(true),
-                child: const Text('去设置'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 12),
+            if (_errorMessage != null) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.errorContainer.withValues(
+                    alpha: 0.5,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  _errorMessage!,
+                  style: TextStyle(
+                    color: theme.colorScheme.onErrorContainer,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+            if (_needsPermission) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primaryContainer.withValues(
+                    alpha: 0.4,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.3),
+                  ),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      size: 18,
+                      color: theme.colorScheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '青科课表通尚未开启「安装未知应用」权限。请开启权限后切回应用，将自动唤起安装。',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: theme.colorScheme.onSurface,
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ] else ...[
+              Text(
+                '安装包已下载就绪，点击下方按钮即可覆盖安装。',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
             ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('稍后安装'),
+        ),
+        if (_needsPermission)
+          FilledButton.icon(
+            icon: const Icon(Icons.settings_outlined, size: 18),
+            onPressed: () => AppInstaller.openInstallSettings(),
+            label: const Text('去开启权限'),
+          )
+        else
+          FilledButton.icon(
+            icon: const Icon(Icons.install_mobile_rounded, size: 18),
+            onPressed: _downloadedFile == null
+                ? null
+                : () => _executeInstall(_downloadedFile!),
+            label: const Text('立即安装'),
           ),
-        );
-        if (grant == true) {
-          await AppInstaller.openInstallSettings();
-        }
-      }
-    }
+      ],
+    );
+  }
+}
 
-    await AppInstaller.install(file);
-  } catch (e) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('唤起安装失败 ($e)，安装包已保存在: ${file.path}'),
-          action: SnackBarAction(label: '确定', onPressed: () {}),
+/// 更新日志富文本渲染组件（支持分类徽章、无序列表与行内加粗强调）。
+class _ReleaseNotesView extends StatelessWidget {
+  const _ReleaseNotesView({required this.content, required this.version});
+
+  final String content;
+  final String version;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final trimmed = content.trim();
+
+    if (trimmed.isEmpty) {
+      return SelectableText(
+        '青科课表通 v$version 现已发布，包含性能优化与体验改进。',
+        style: TextStyle(
+          fontSize: 13,
+          color: theme.colorScheme.onSurfaceVariant,
+          height: 1.45,
         ),
       );
     }
+
+    final sections = _parseNotes(trimmed);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (int i = 0; i < sections.length; i++) ...[
+          if (i > 0) const SizedBox(height: 12),
+          _buildSection(context, sections[i]),
+        ],
+      ],
+    );
   }
+
+  Widget _buildSection(BuildContext context, _NoteSection section) {
+    final theme = Theme.of(context);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (section.title != null && section.title!.isNotEmpty) ...[
+          _buildCategoryBadge(context, section.title!),
+          const SizedBox(height: 6),
+        ],
+        for (final item in section.items) ...[
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (item.isBullet)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6, right: 8, left: 2),
+                    child: Container(
+                      width: 5,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primary.withValues(alpha: 0.8),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+                Expanded(
+                  child: SelectableText.rich(
+                    _buildFormattedSpan(context, item.text),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontSize: 13,
+                      height: 1.45,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildCategoryBadge(BuildContext context, String title) {
+    final theme = Theme.of(context);
+    Color color;
+    IconData icon;
+
+    if (title.contains('新增')) {
+      color = const Color(0xFF2E7D32);
+      icon = Icons.add_circle_outline_rounded;
+    } else if (title.contains('优化')) {
+      color = const Color(0xFF1976D2);
+      icon = Icons.auto_awesome_outlined;
+    } else if (title.contains('修复')) {
+      color = const Color(0xFFE65100);
+      icon = Icons.build_circle_outlined;
+    } else if (title.contains('碎碎念')) {
+      color = const Color(0xFF7B1FA2);
+      icon = Icons.chat_bubble_outline_rounded;
+    } else {
+      color = theme.colorScheme.primary;
+      icon = Icons.label_outline_rounded;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 5),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 将带 `**加粗**` 或 `` `代码` `` 的 Markdown 行解析为 TextSpan
+  TextSpan _buildFormattedSpan(BuildContext context, String text) {
+    final spans = <InlineSpan>[];
+    final pattern = RegExp(r'(\*\*.*?\*\*|`.*?`)');
+    int lastIndex = 0;
+
+    for (final match in pattern.allMatches(text)) {
+      if (match.start > lastIndex) {
+        spans.add(TextSpan(text: text.substring(lastIndex, match.start)));
+      }
+      final matched = match.group(0)!;
+      if (matched.startsWith('**') && matched.endsWith('**')) {
+        spans.add(
+          TextSpan(
+            text: matched.substring(2, matched.length - 2),
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        );
+      } else if (matched.startsWith('`') && matched.endsWith('`')) {
+        spans.add(
+          TextSpan(
+            text: matched.substring(1, matched.length - 1),
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        );
+      }
+      lastIndex = match.end;
+    }
+
+    if (lastIndex < text.length) {
+      spans.add(TextSpan(text: text.substring(lastIndex)));
+    }
+
+    return TextSpan(children: spans);
+  }
+
+  List<_NoteSection> _parseNotes(String markdown) {
+    final lines = markdown.split(RegExp(r'\r?\n'));
+    final sections = <_NoteSection>[];
+
+    String? currentTitle;
+    final currentItems = <_NoteItem>[];
+
+    void commitCurrentSection() {
+      if (currentItems.isNotEmpty || currentTitle != null) {
+        sections.add(
+          _NoteSection(
+            title: currentTitle,
+            items: List.unmodifiable(currentItems),
+          ),
+        );
+        currentItems.clear();
+      }
+      currentTitle = null;
+    }
+
+    for (final rawLine in lines) {
+      final line = rawLine.trim();
+      if (line.isEmpty) continue;
+
+      if (line.startsWith('#')) {
+        commitCurrentSection();
+        currentTitle = line.replaceFirst(RegExp(r'^#+\s*'), '').trim();
+        continue;
+      }
+
+      if (line.startsWith('- ') ||
+          line.startsWith('* ') ||
+          line.startsWith('+ ')) {
+        final text = line.substring(2).trim();
+        if (text.isNotEmpty) {
+          currentItems.add(_NoteItem(text: text, isBullet: true));
+        }
+      } else {
+        currentItems.add(_NoteItem(text: line, isBullet: false));
+      }
+    }
+
+    commitCurrentSection();
+    return sections;
+  }
+}
+
+class _NoteSection {
+  const _NoteSection({required this.title, required this.items});
+
+  final String? title;
+  final List<_NoteItem> items;
+}
+
+class _NoteItem {
+  const _NoteItem({required this.text, required this.isBullet});
+
+  final String text;
+  final bool isBullet;
 }

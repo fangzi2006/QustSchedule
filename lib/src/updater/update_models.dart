@@ -92,6 +92,37 @@ class ReleaseInfo {
   final List<ReleaseAsset> assets;
   final String htmlUrl;
 
+  /// 清洗后的更新说明（去除 GitHub CI 自动拼接的下载表格、Shield 徽章与比对链接）。
+  String get cleanBody => cleanReleaseBody(body);
+
+  /// 过滤 GitHub Actions 自动化拼接模板内容。
+  static String cleanReleaseBody(String rawBody) {
+    if (rawBody.trim().isEmpty) return '';
+
+    final lines = rawBody.split(RegExp(r'\r?\n'));
+    final resultLines = <String>[];
+
+    for (final line in lines) {
+      final trimmed = line.trim();
+      // 遇到 CI 自动追加的操作系统下载指引或表格行，直接截断后面的所有冗余内容
+      if (trimmed.startsWith('## 📥') ||
+          trimmed.startsWith('### 📥') ||
+          trimmed.contains('根据你的操作系统下载') ||
+          trimmed.startsWith('| OS |') ||
+          trimmed.startsWith('|:--:')) {
+        break;
+      }
+      // 过滤比对与变更外链行
+      if (trimmed.startsWith('所有变更列表：') ||
+          (trimmed.startsWith('[ChangeLog](') && trimmed.endsWith(')'))) {
+        continue;
+      }
+      resultLines.add(line);
+    }
+
+    return resultLines.join('\n').trim();
+  }
+
   /// 格式化发布日期（如 `2026-10-30`）。
   String get formattedDate {
     final d = publishedAt;

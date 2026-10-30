@@ -309,6 +309,37 @@ class UpdateService {
     final tempDir = await getTemporaryDirectory();
     final file = File('${tempDir.path}/${asset.name}');
 
+    // 1. 本地完整性嗅探与复用：若本地已存在同名且大小完全匹配的文件，直接跳过网络下载
+    if (file.existsSync()) {
+      try {
+        final localLen = file.lengthSync();
+        if (localLen == asset.size && asset.size > 0) {
+          bool valid = true;
+          if (expectedSha256 != null && expectedSha256.isNotEmpty) {
+            final digest = await sha256.bind(file.openRead()).first;
+            valid =
+                digest.toString().toLowerCase() ==
+                expectedSha256.trim().toLowerCase();
+          }
+          if (valid) {
+            onProgress(
+              DownloadProgress(
+                receivedBytes: localLen,
+                totalBytes: localLen,
+                speedBytesPerSec: 0,
+              ),
+            );
+            return file;
+          }
+        }
+      } catch (_) {}
+
+      // 本地文件不完整或校验未通过，清理后重新下载
+      try {
+        await file.delete();
+      } catch (_) {}
+    }
+
     Object? lastError;
 
     for (final candidate in candidates) {
@@ -330,7 +361,16 @@ class UpdateService {
         final request = await _client
             .getUrl(Uri.parse(downloadUrl))
             .timeout(downloadConnectTimeout);
-        request.headers.set('User-Agent', 'QustSchedule-App');
+        // 关键请求头调优：
+        // 1) 声明现代通用浏览器 User-Agent，规避公共反代/CDN 针对非浏览器爬虫的低带宽 QoS 限流队列
+        request.headers.set(
+          'User-Agent',
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 QustSchedule/App',
+        );
+        // 2) 显式声明纯直通二进制流，禁止代理对已压缩包做多余 gzip 转码与中间缓冲
+        request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+        request.headers.set(HttpHeaders.acceptHeader, '*/*');
+        request.headers.set(HttpHeaders.connectionHeader, 'keep-alive');
         final response = await request.close().timeout(downloadConnectTimeout);
 
         if (response.statusCode != 200) {
