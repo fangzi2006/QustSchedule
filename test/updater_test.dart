@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:qustschedule/pages/about_page.dart';
+import 'package:qustschedule/pages/changelog_page.dart';
 import 'package:qustschedule/pages/update_dialog.dart';
-import 'package:qustschedule/pages/update_settings_dialog.dart';
+import 'package:qustschedule/pages/update_proxy_page.dart';
 import 'package:qustschedule/src/app_model.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
 import 'package:qustschedule/src/updater/update_models.dart';
@@ -95,31 +97,57 @@ void main() {
     });
   });
 
-  group('更新偏好设置 (Preferences & AppModel)', () {
-    test('默认配置生效', () {
+  group('更新偏好设置与代理增删 (Preferences & AppModel)', () {
+    test('默认配置生效（仅默认加速地址与直连）', () {
       final prefs = Preferences.inMemory();
-      expect(prefs.updateProxyUrl, equals('https://gh-proxy.com'));
+      expect(prefs.selectedUpdateProxy, equals('https://gh-proxy.com'));
+      expect(prefs.customUpdateProxies, isEmpty);
+      expect(prefs.allUpdateProxies, equals(['https://gh-proxy.com']));
       expect(prefs.autoCheckUpdate, isTrue);
       expect(prefs.ignoredUpdateVersion, isEmpty);
     });
 
-    test('修改偏好并触发通知', () async {
+    test('新增、删除自定义代理并持久化', () async {
       final model = AppModel(preferences: Preferences.inMemory());
-      expect(model.updateProxyUrl, equals('https://gh-proxy.com'));
+      expect(model.customUpdateProxies, isEmpty);
 
-      await model.setUpdateProxyUrl('https://ghproxy.net');
-      expect(model.updateProxyUrl, equals('https://ghproxy.net'));
+      int prefsNotified = 0;
+      model.prefsNotifier.addListener(() => prefsNotified++);
 
+      // 添加自定义代理
+      await model.addCustomUpdateProxy('https://ghproxy.net');
+      expect(model.customUpdateProxies, equals(['https://ghproxy.net']));
+      expect(
+        model.allUpdateProxies,
+        equals(['https://gh-proxy.com', 'https://ghproxy.net']),
+      );
+      expect(prefsNotified, greaterThan(0));
+
+      // 切换当前选中代理
+      await model.setSelectedUpdateProxy('https://ghproxy.net');
+      expect(model.selectedUpdateProxy, equals('https://ghproxy.net'));
+
+      // 删除自定义代理
+      await model.removeCustomUpdateProxy('https://ghproxy.net');
+      expect(model.customUpdateProxies, isEmpty);
+      expect(model.allUpdateProxies, equals(['https://gh-proxy.com']));
+
+      // 其他偏好设置
       await model.setAutoCheckUpdate(false);
       expect(model.autoCheckUpdate, isFalse);
 
       await model.setIgnoredUpdateVersion('1.2.3');
       expect(model.ignoredUpdateVersion, equals('1.2.3'));
     });
+
+    test('直连官方空字符串配置在反序列化后依然保持为空', () {
+      final decoded = Preferences.decode('{"selectedUpdateProxy": ""}');
+      expect(decoded.selectedUpdateProxy, isEmpty);
+    });
   });
 
   group('更新界面交互 (Update UI Widgets)', () {
-    testWidgets('更新对话框渲染版本、大小与日志', (tester) async {
+    testWidgets('更新对话框渲染版本、大小与日志，且不包含历史版本链接', (tester) async {
       const asset = ReleaseAsset(
         name: 'QustSchedule_v1.2.3-arm64-v8a.apk',
         downloadUrl: 'https://example.com/app.apk',
@@ -175,42 +203,113 @@ void main() {
       expect(find.text('浏览器下载'), findsOneWidget);
       expect(find.text('立即更新'), findsOneWidget);
 
+      // 验证未附带「查看全部历史版本」
+      expect(find.textContaining('历史版本'), findsNothing);
+
       await tester.tap(find.text('忽略此版'));
       await tester.pumpAndSettle();
       expect(ignored, isTrue);
     });
 
-    testWidgets('更新设置弹窗支持切换代理', (tester) async {
-      final model = AppModel(preferences: Preferences.inMemory());
+    testWidgets('更新对话框无对应架构产物时展示友好提示', (tester) async {
+      const release = ReleaseInfo(
+        tagName: 'v1.2.3',
+        version: '1.2.3',
+        name: '青科课表通 v1.2.3',
+        body: '更新说明',
+        publishedAt: null,
+        assets: [],
+        htmlUrl: 'https://example.com/release',
+      );
+
+      const updateResult = UpdateCheckResult(
+        status: UpdateStatus.hasUpdate,
+        release: release,
+        targetAsset: null,
+        currentArchName: 'Windows (x64)',
+      );
 
       await tester.pumpWidget(
         MaterialApp(
           home: Builder(
             builder: (context) => ElevatedButton(
-              onPressed: () => showUpdateSettingsDialog(context, model: model),
-              child: const Text('Settings'),
+              onPressed: () => showUpdateDialog(
+                context,
+                updateResult: updateResult,
+                proxyPrefix: '',
+              ),
+              child: const Text('Open'),
             ),
           ),
         ),
       );
 
-      await tester.tap(find.text('Settings'));
+      await tester.tap(find.text('Open'));
       await tester.pumpAndSettle();
 
-      expect(find.text('软件更新设置'), findsOneWidget);
+      expect(find.text('发现新版本 v1.2.3'), findsOneWidget);
+      expect(find.textContaining('暂未匹配到直接升级安装包'), findsOneWidget);
+      expect(find.text('前往 Release 页面'), findsOneWidget);
+      expect(find.text('知道了'), findsOneWidget);
+
+      await tester.tap(find.text('知道了'));
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('更新代理管理页支持选择节点与添加代理', (tester) async {
+      final model = AppModel(preferences: Preferences.inMemory());
+
+      await tester.pumpWidget(MaterialApp(home: UpdateProxyPage(model: model)));
+
+      expect(find.text('更新代理设置'), findsOneWidget);
+      expect(find.text('gh-proxy.com (默认推荐)'), findsOneWidget);
+      expect(find.text('官方直连 (GitHub)'), findsOneWidget);
       expect(find.text('启动时自动检查更新'), findsOneWidget);
-      expect(find.text('gh-proxy.com (推荐)'), findsOneWidget);
-      expect(find.text('直连 (GitHub 官方)'), findsOneWidget);
+      expect(find.text('多层自动回退机制'), findsOneWidget);
 
-      // 滚动并切换到直连
-      await tester.ensureVisible(find.text('直连 (GitHub 官方)'));
-      await tester.tap(find.text('直连 (GitHub 官方)'));
+      // 切换至官方直连
+      await tester.tap(find.text('官方直连 (GitHub)'));
+      await tester.pumpAndSettle();
+      expect(model.selectedUpdateProxy, isEmpty);
+
+      // 打开添加代理弹窗并输入
+      await tester.tap(find.text('新增自定义代理'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('保存'));
+      expect(find.text('新增加速代理'), findsOneWidget);
+      await tester.enterText(
+        find.byType(TextField),
+        'https://mirror.ghproxy.com',
+      );
+      await tester.tap(find.text('添加'));
       await tester.pumpAndSettle();
 
-      expect(model.updateProxyUrl, isEmpty);
+      expect(model.customUpdateProxies, contains('https://mirror.ghproxy.com'));
+      expect(find.text('https://mirror.ghproxy.com'), findsOneWidget);
+    });
+
+    testWidgets('关于页面呈现 FlClash 风格头部与各项入口', (tester) async {
+      final model = AppModel(preferences: Preferences.inMemory());
+
+      await tester.pumpWidget(MaterialApp(home: AboutPage(model: model)));
+
+      expect(find.text('关于青科课表通'), findsOneWidget);
+      expect(find.text('青科课表通'), findsOneWidget);
+      expect(find.text('检查更新'), findsOneWidget);
+
+      // 验证下方各项列表入口
+      expect(find.text('更新日志'), findsOneWidget);
+      expect(find.text('更新代理设置'), findsOneWidget);
+      expect(find.text('调试信息'), findsOneWidget);
+      expect(find.text('开源许可'), findsOneWidget);
+      expect(find.text('开源协议'), findsOneWidget);
+      expect(find.text('项目主页与源码'), findsOneWidget);
+    });
+
+    testWidgets('更新日志页面能够正常构建', (tester) async {
+      await tester.pumpWidget(const MaterialApp(home: ChangelogPage()));
+
+      expect(find.text('更新日志'), findsOneWidget);
     });
   });
 }

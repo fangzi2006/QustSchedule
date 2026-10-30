@@ -75,6 +75,8 @@ flutter:
     - pubspec.yaml
     # 开源协议全文（GPL v3）：设置页「开源协议」展示，满足 GPL 的源码/协议告知要求。
     - LICENSE
+    # 更新日志全文：关于页「更新日志」展示，无需联网离线秒开。
+    - CHANGELOG.md
 
   # To add assets to your application, add an assets section, like this:
   # assets:

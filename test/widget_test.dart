@@ -923,11 +923,14 @@ void main() {
 
       // 关于组在页面底部，懒加载列表要滚到才会构建。
       await tester.scrollUntilVisible(
-        find.text('开源许可'),
+        find.text('关于青科课表通'),
         120,
         scrollable: find.byType(Scrollable).first,
       );
       await tester.pumpAndSettle();
+      await tester.tap(find.text('关于青科课表通'));
+      await tester.pumpAndSettle();
+
       await tester.tap(find.text('开源许可'));
       await tester.pumpAndSettle();
 

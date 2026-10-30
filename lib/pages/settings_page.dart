@@ -12,8 +12,6 @@ library;
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:zf_academic/zf_academic.dart' show AcademicError;
 
 import '../src/app_model.dart';
@@ -22,18 +20,11 @@ import '../src/preferences_repository.dart';
 import '../src/reminder_service.dart';
 import '../src/timetable.dart' show formatMonthDayDate;
 import '../widgets/floating_dock.dart';
-import 'debug_page.dart';
+import 'about_page.dart';
 import 'reminder_page.dart';
 import 'schedule_page.dart' show showCalibrateSheet;
 import 'school_address_page.dart';
 import 'timetable_list_page.dart';
-import '../src/updater/update_models.dart';
-import '../src/updater/update_service.dart';
-import 'update_dialog.dart';
-import 'update_settings_dialog.dart';
-
-/// 项目主页（源码与发行版都在这里）：写入设置页「项目主页」，满足 GPL 的源码获取告知要求。
-const String kProjectHomeUrl = 'https://github.com/fangzi2006/QustSchedule';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key, required this.model, this.reminders});
@@ -245,66 +236,15 @@ class SettingsPage extends StatelessWidget {
                 child: Column(
                   children: <Widget>[
                     ListTile(
-                      leading: const Icon(Icons.bug_report_outlined, size: 20),
-                      title: const Text('调试信息'),
-                      subtitle: const Text('原始响应、解析结果、请求记录'),
-                      trailing: const Icon(Icons.chevron_right_rounded),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => DebugPage(model: model),
-                        ),
-                      ),
-                    ),
-                    const Divider(height: 0, indent: 56),
-                    ListTile(
-                      leading: const Icon(Icons.description_outlined, size: 20),
-                      title: const Text('开源许可'),
-                      subtitle: const Text('第三方组件许可'),
-                      trailing: const Icon(Icons.chevron_right_rounded),
-                      onTap: () => showLicensePage(
-                        context: context,
-                        applicationName: '青科课表通',
-                        applicationVersion: appVersionFull,
-                      ),
-                    ),
-                    const Divider(height: 0, indent: 56),
-                    ListTile(
-                      leading: const Icon(Icons.gavel_outlined, size: 20),
-                      title: const Text('开源协议'),
-                      subtitle: const Text('GNU GPL v3 · 协议全文'),
-                      trailing: const Icon(Icons.chevron_right_rounded),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const LicenseTextPage(),
-                        ),
-                      ),
-                    ),
-                    const Divider(height: 0, indent: 56),
-                    ListTile(
-                      leading: const Icon(Icons.code_rounded, size: 20),
-                      title: const Text('项目主页与源码'),
-                      subtitle: const Text(kProjectHomeUrl),
-                      trailing: const Icon(Icons.open_in_new_rounded, size: 18),
-                      onTap: () => _openProjectLink(context),
-                    ),
-                    const Divider(height: 0, indent: 56),
-                    ListTile(
                       leading: const Icon(Icons.info_outline_rounded, size: 20),
-                      title: const Text('版本'),
-                      subtitle: Text('青科课表通 $appVersion · 适配青岛科技大学教务'),
-                    ),
-                    const Divider(height: 0, indent: 56),
-                    _CheckUpdateTile(model: model),
-                    const Divider(height: 0, indent: 56),
-                    ListTile(
-                      leading: const Icon(Icons.tune_rounded, size: 20),
-                      title: const Text('更新设置'),
-                      subtitle: Text(
-                        '加速代理：${displayProxyName(model.updateProxyUrl)} · 自动检查：${model.autoCheckUpdate ? '开' : '关'}',
-                      ),
+                      title: const Text('关于青科课表通'),
+                      subtitle: Text('v$appVersion · 检查更新、日志、协议'),
                       trailing: const Icon(Icons.chevron_right_rounded),
-                      onTap: () =>
-                          showUpdateSettingsDialog(context, model: model),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => AboutPage(model: model),
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -379,18 +319,6 @@ class SettingsPage extends StatelessWidget {
         ),
       );
     }
-  }
-
-  /// 打开项目主页（外部浏览器）。
-  Future<void> _openProjectLink(BuildContext context) async {
-    final opened = await launchUrl(
-      Uri.parse(kProjectHomeUrl),
-      mode: LaunchMode.externalApplication,
-    );
-    if (!context.mounted || opened) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(content: Text('无法打开链接')));
   }
 
   static String _dateText(DateTime value) =>
@@ -539,197 +467,6 @@ class _IntervalStepper extends StatelessWidget {
               : null,
         ),
       ],
-    );
-  }
-}
-
-/// 本应用开源协议全文（GPL v3）：从 asset 里的 LICENSE 读取展示。
-///
-/// 用 StatefulWidget 在 initState 里加载一次（FutureBuilder 在 build 里创建 future
-/// 会导致每次重建都重新读盘）。样式跟随主题，浅色/暗色都清晰。
-class LicenseTextPage extends StatefulWidget {
-  const LicenseTextPage({super.key});
-
-  @override
-  State<LicenseTextPage> createState() => _LicenseTextPageState();
-}
-
-class _LicenseTextPageState extends State<LicenseTextPage> {
-  String? _text;
-  bool _failed = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final text = await rootBundle.loadString('LICENSE');
-      if (!mounted) return;
-      setState(() => _text = text);
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _failed = true);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(title: const Text('开源协议')),
-      body: SafeArea(child: _buildBody(theme)),
-    );
-  }
-
-  Widget _buildBody(ThemeData theme) {
-    if (_failed) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(
-            '协议文件读取失败',
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: theme.colorScheme.error,
-            ),
-          ),
-        ),
-      );
-    }
-    if (_text == null) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
-      child: SelectableText(
-        _reflow(_text!),
-        textAlign: TextAlign.left,
-        style: theme.textTheme.bodySmall?.copyWith(
-          fontSize: 13,
-          height: 1.6,
-          color: theme.colorScheme.onSurface,
-        ),
-      ),
-    );
-  }
-
-  String _reflow(String raw) {
-    final normalized = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
-    return normalized
-        .split(RegExp(r'\n[ \t]*\n'))
-        .map((p) => p.replaceAll(RegExp(r'\s*\n\s*'), ' ').trim())
-        .where((p) => p.isNotEmpty)
-        .join('\n\n');
-  }
-}
-
-class _CheckUpdateTile extends StatefulWidget {
-  const _CheckUpdateTile({required this.model});
-
-  final AppModel model;
-
-  @override
-  State<_CheckUpdateTile> createState() => _CheckUpdateTileState();
-}
-
-class _CheckUpdateTileState extends State<_CheckUpdateTile> {
-  bool _checking = false;
-
-  Future<void> _check() async {
-    if (_checking) return;
-    setState(() => _checking = true);
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
-    try {
-      final service = UpdateService();
-      final result = await service.checkForUpdates(
-        currentVersion: appVersion,
-        proxyPrefix: widget.model.updateProxyUrl,
-      );
-
-      if (!mounted) return;
-
-      switch (result.status) {
-        case UpdateStatus.hasUpdate:
-          await showUpdateDialog(
-            context,
-            updateResult: result,
-            proxyPrefix: widget.model.updateProxyUrl,
-          );
-          break;
-        case UpdateStatus.noUpdate:
-          scaffoldMessenger.showSnackBar(
-            SnackBar(
-              content: Text('青科课表通已是最新版本 (v$appVersion)'),
-              behavior: SnackBarBehavior.floating,
-              duration: const Duration(seconds: 2),
-            ),
-          );
-          break;
-        case UpdateStatus.rateLimited:
-          scaffoldMessenger.showSnackBar(
-            SnackBar(
-              content: Text(result.errorMessage ?? '检查更新过于频繁，请稍后再试'),
-              behavior: SnackBarBehavior.floating,
-              action: SnackBarAction(
-                label: '更新设置',
-                onPressed: () {
-                  if (mounted) {
-                    showUpdateSettingsDialog(context, model: widget.model);
-                  }
-                },
-              ),
-            ),
-          );
-          break;
-        case UpdateStatus.networkError:
-          scaffoldMessenger.showSnackBar(
-            SnackBar(
-              content: Text(result.errorMessage ?? '网络连接超时，可尝试切换加速节点'),
-              behavior: SnackBarBehavior.floating,
-              action: SnackBarAction(
-                label: '切换代理',
-                onPressed: () {
-                  if (mounted) {
-                    showUpdateSettingsDialog(context, model: widget.model);
-                  }
-                },
-              ),
-            ),
-          );
-          break;
-        case UpdateStatus.unsupportedPlatform:
-        case UpdateStatus.error:
-          scaffoldMessenger.showSnackBar(
-            SnackBar(
-              content: Text(result.errorMessage ?? '检查更新失败，请重试'),
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-          break;
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _checking = false);
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      leading: const Icon(Icons.system_update_rounded, size: 20),
-      title: const Text('检查更新'),
-      subtitle: Text('当前版本 v$appVersion · 点击检查'),
-      trailing: _checking
-          ? const SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
-          : const Icon(Icons.refresh_rounded, size: 20),
-      onTap: _checking ? null : _check,
     );
   }
 }

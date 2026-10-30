@@ -183,3 +183,34 @@ class DownloadProgress {
     return '${(totalBytes / mb).toStringAsFixed(1)} MB';
   }
 }
+
+/// 代理节点连通性测试结果。
+class ProxyTestResult {
+  const ProxyTestResult({
+    required this.proxyUrl,
+    required this.isUsable,
+    required this.latencyMs,
+    required this.supportsApi,
+    this.errorMessage,
+  });
+
+  final String proxyUrl;
+  final bool isUsable;
+  final int latencyMs;
+  final bool supportsApi;
+  final String? errorMessage;
+
+  String get summary {
+    if (!isUsable) return '超时或不可用';
+    final apiTag = supportsApi ? '支持 API' : '仅下载加速';
+    return '$latencyMs ms · $apiTag';
+  }
+}
+
+/// 辅助函数：根据代理地址展示简洁名称。
+String displayProxyName(String proxyUrl) {
+  final trimmed = proxyUrl.trim();
+  if (trimmed.isEmpty) return '官方直连 (GitHub)';
+  if (trimmed.contains('gh-proxy.com')) return 'gh-proxy.com (默认推荐)';
+  return trimmed;
+}

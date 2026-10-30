@@ -90,9 +90,10 @@ class _SchedulePageState extends State<SchedulePage> {
       if (!mounted) return;
       try {
         final service = UpdateService();
-        final result = await service.checkForUpdates(
+        final result = await service.checkForUpdatesWithFallback(
           currentVersion: appVersion,
-          proxyPrefix: model.updateProxyUrl,
+          selectedProxy: model.selectedUpdateProxy,
+          backupProxies: model.allUpdateProxies,
         );
 
         if (!mounted) return;
@@ -103,7 +104,8 @@ class _SchedulePageState extends State<SchedulePage> {
             await showUpdateDialog(
               context,
               updateResult: result,
-              proxyPrefix: model.updateProxyUrl,
+              proxyPrefix: model.selectedUpdateProxy,
+              backupProxies: model.allUpdateProxies,
               onIgnore: () => model.setIgnoredUpdateVersion(release.version),
             );
           }

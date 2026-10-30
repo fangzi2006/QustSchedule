@@ -15,11 +15,44 @@ Future<void> showUpdateDialog(
   BuildContext context, {
   required UpdateCheckResult updateResult,
   required String proxyPrefix,
+  List<String> backupProxies = const <String>[],
   VoidCallback? onIgnore,
 }) async {
   final release = updateResult.release;
   final asset = updateResult.targetAsset;
-  if (release == null || asset == null) return;
+  if (release == null) return;
+
+  if (asset == null) {
+    // 发现新版本但未匹配到当前架构安装包时给出友好提示
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('发现新版本 v${release.version}'),
+        content: Text(
+          '检测到新版本，但当前平台与架构 (${updateResult.currentArchName.isNotEmpty ? updateResult.currentArchName : '当前环境'}) 暂未匹配到直接升级安装包。\n\n您可以前往 GitHub Releases 页面查看与下载。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('知道了'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              if (release.htmlUrl.isNotEmpty) {
+                launchUrl(
+                  Uri.parse(release.htmlUrl),
+                  mode: LaunchMode.externalApplication,
+                );
+              }
+            },
+            child: const Text('前往 Release 页面'),
+          ),
+        ],
+      ),
+    );
+    return;
+  }
 
   final finalDownloadUrl = UpdateService.buildProxiedUrl(
     asset.downloadUrl,
@@ -117,7 +150,8 @@ Future<void> showUpdateDialog(
               showDownloadProgressDialog(
                 context,
                 asset: asset,
-                proxyPrefix: proxyPrefix,
+                selectedProxy: proxyPrefix,
+                backupProxies: backupProxies,
               );
             },
             child: const Text('立即更新'),
@@ -132,13 +166,15 @@ Future<void> showUpdateDialog(
 Future<void> showDownloadProgressDialog(
   BuildContext context, {
   required ReleaseAsset asset,
-  required String proxyPrefix,
+  required String selectedProxy,
+  List<String> backupProxies = const <String>[],
   UpdateService? updateService,
 }) async {
   final service = updateService ?? UpdateService();
   final cancelToken = CancelToken();
 
   String? errorMessage;
+  String? currentProxy = selectedProxy;
   bool isCompleted = false;
 
   await showDialog<void>(
@@ -152,10 +188,18 @@ Future<void> showDownloadProgressDialog(
           // 仅在首次构建时启动下载
           void startDownloadOnce() {
             service
-                .downloadAsset(
+                .downloadAssetWithFallback(
                   asset: asset,
-                  proxyPrefix: proxyPrefix,
+                  selectedProxy: selectedProxy,
+                  backupProxies: backupProxies,
                   cancelToken: cancelToken,
+                  onProxySwitched: (proxy) {
+                    if (dialogContext.mounted) {
+                      setState(() {
+                        currentProxy = proxy;
+                      });
+                    }
+                  },
                   onProgress: (progress) {
                     if (dialogContext.mounted) {
                       setState(() {
@@ -208,6 +252,17 @@ Future<void> showDownloadProgressDialog(
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
+                  if (currentProxy != null &&
+                      currentProxy!.trim() != selectedProxy.trim()) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      '已自动回退至: ${displayProxyName(currentProxy!)}',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 14),
                   if (errorMessage != null)
                     Text(
@@ -260,7 +315,7 @@ Future<void> showDownloadProgressDialog(
                   onPressed: () {
                     final finalUrl = UpdateService.buildProxiedUrl(
                       asset.downloadUrl,
-                      proxyPrefix,
+                      currentProxy ?? selectedProxy,
                     );
                     launchUrl(
                       Uri.parse(finalUrl),

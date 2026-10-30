@@ -34,12 +34,8 @@ const int preferencesSchema = 12;
 /// 检查更新与安装包下载的默认加速代理。
 const String defaultUpdateProxyUrl = 'https://gh-proxy.com';
 
-/// 常见加速代理预设列表。
-const List<String> presetUpdateProxies = <String>[
-  'https://gh-proxy.com',
-  'https://ghproxy.net',
-  'https://gh.llkk.cc',
-];
+/// 默认唯一加速代理预设列表。
+const List<String> presetUpdateProxies = <String>[defaultUpdateProxyUrl];
 
 /// 启动时是否自动检查更新（默认开启）。
 const bool defaultAutoCheckUpdate = true;
@@ -98,6 +94,7 @@ class Preferences {
     ReminderStyle reminderStyle = defaultReminderStyle,
     bool reminderFluidUntilEnd = defaultReminderFluidUntilEnd,
     String updateProxyUrl = defaultUpdateProxyUrl,
+    List<String>? customUpdateProxies,
     bool autoCheckUpdate = defaultAutoCheckUpdate,
     String ignoredUpdateVersion = '',
     File? file,
@@ -126,7 +123,10 @@ class Preferences {
        _reminderLeadMinutes = clampReminderLead(reminderLeadMinutes),
        _reminderStyle = reminderStyle,
        _reminderFluidUntilEnd = reminderFluidUntilEnd,
-       _updateProxyUrl = updateProxyUrl.trim(),
+       _selectedUpdateProxy = updateProxyUrl.trim(),
+       _customUpdateProxies = customUpdateProxies != null
+           ? List<String>.from(customUpdateProxies)
+           : <String>[],
        _autoCheckUpdate = autoCheckUpdate,
        _ignoredUpdateVersion = ignoredUpdateVersion.trim(),
        _file = file;
@@ -183,7 +183,8 @@ class Preferences {
 
   /// 流体云是否显示到下课（schema 11，默认 false = 上课即收起）。
   bool _reminderFluidUntilEnd;
-  String _updateProxyUrl;
+  String _selectedUpdateProxy;
+  List<String> _customUpdateProxies;
   bool _autoCheckUpdate;
   String _ignoredUpdateVersion;
 
@@ -211,6 +212,7 @@ class Preferences {
     ReminderStyle reminderStyle = defaultReminderStyle,
     bool reminderFluidUntilEnd = defaultReminderFluidUntilEnd,
     String updateProxyUrl = defaultUpdateProxyUrl,
+    List<String>? customUpdateProxies,
     bool autoCheckUpdate = defaultAutoCheckUpdate,
     String ignoredUpdateVersion = '',
   }) => Preferences._(
@@ -234,6 +236,7 @@ class Preferences {
     reminderStyle: reminderStyle,
     reminderFluidUntilEnd: reminderFluidUntilEnd,
     updateProxyUrl: updateProxyUrl,
+    customUpdateProxies: customUpdateProxies,
     autoCheckUpdate: autoCheckUpdate,
     ignoredUpdateVersion: ignoredUpdateVersion,
     file: null,
@@ -286,6 +289,7 @@ class Preferences {
     var reminderStyle = defaultReminderStyle;
     var reminderFluidUntilEnd = defaultReminderFluidUntilEnd;
     var updateProxyUrl = defaultUpdateProxyUrl;
+    var customUpdateProxies = <String>[];
     var autoCheckUpdate = defaultAutoCheckUpdate;
     var ignoredUpdateVersion = '';
 
@@ -398,8 +402,19 @@ class Preferences {
           final rawUntilEnd = decoded['reminderFluidUntilEnd'];
           if (rawUntilEnd is bool) reminderFluidUntilEnd = rawUntilEnd;
           // schema 12：软件更新设置。
-          final rawUpdateProxy = decoded['updateProxyUrl'];
-          if (rawUpdateProxy is String) updateProxyUrl = rawUpdateProxy;
+          final rawUpdateProxy =
+              decoded['selectedUpdateProxy'] ?? decoded['updateProxyUrl'];
+          if (rawUpdateProxy is String) {
+            updateProxyUrl = rawUpdateProxy.trim();
+          }
+          final rawCustomList = decoded['customUpdateProxies'];
+          if (rawCustomList is List<dynamic>) {
+            customUpdateProxies = rawCustomList
+                .whereType<String>()
+                .map((s) => s.trim())
+                .where((s) => s.isNotEmpty && s != defaultUpdateProxyUrl)
+                .toList();
+          }
           final rawAutoCheck = decoded['autoCheckUpdate'];
           if (rawAutoCheck is bool) autoCheckUpdate = rawAutoCheck;
           final rawIgnored = decoded['ignoredUpdateVersion'];
@@ -424,6 +439,7 @@ class Preferences {
         reminderStyle = defaultReminderStyle;
         reminderFluidUntilEnd = defaultReminderFluidUntilEnd;
         updateProxyUrl = defaultUpdateProxyUrl;
+        customUpdateProxies = <String>[];
         autoCheckUpdate = defaultAutoCheckUpdate;
         ignoredUpdateVersion = '';
       }
@@ -450,6 +466,7 @@ class Preferences {
       reminderStyle: reminderStyle,
       reminderFluidUntilEnd: reminderFluidUntilEnd,
       updateProxyUrl: updateProxyUrl,
+      customUpdateProxies: customUpdateProxies,
       autoCheckUpdate: autoCheckUpdate,
       ignoredUpdateVersion: ignoredUpdateVersion,
       file: file,
@@ -761,13 +778,47 @@ class Preferences {
   // 软件更新设置（加速代理 / 自动检查 / 忽略版本，schema 12）
   // ---------------------------------------------------------------------------
 
-  String get updateProxyUrl => _updateProxyUrl;
+  String get selectedUpdateProxy => _selectedUpdateProxy;
 
-  Future<void> setUpdateProxyUrl(String value) async {
+  Future<void> setSelectedUpdateProxy(String value) async {
     final trimmed = value.trim();
-    if (_updateProxyUrl == trimmed) return;
-    _updateProxyUrl = trimmed;
+    if (_selectedUpdateProxy == trimmed) return;
+    _selectedUpdateProxy = trimmed;
     await _flush();
+  }
+
+  // 兼容旧接口
+  String get updateProxyUrl => _selectedUpdateProxy;
+  Future<void> setUpdateProxyUrl(String value) => setSelectedUpdateProxy(value);
+
+  List<String> get customUpdateProxies =>
+      List<String>.unmodifiable(_customUpdateProxies);
+
+  /// 包含默认代理与自定义代理的所有可用代理列表。
+  List<String> get allUpdateProxies {
+    final list = <String>[defaultUpdateProxyUrl];
+    for (final p in _customUpdateProxies) {
+      if (!list.contains(p)) list.add(p);
+    }
+    return list;
+  }
+
+  Future<void> addCustomUpdateProxy(String url) async {
+    final trimmed = url.trim();
+    if (trimmed.isEmpty || trimmed == defaultUpdateProxyUrl) return;
+    if (_customUpdateProxies.contains(trimmed)) return;
+    _customUpdateProxies.add(trimmed);
+    await _flush();
+  }
+
+  Future<void> removeCustomUpdateProxy(String url) async {
+    final trimmed = url.trim();
+    if (_customUpdateProxies.remove(trimmed)) {
+      if (_selectedUpdateProxy == trimmed) {
+        _selectedUpdateProxy = defaultUpdateProxyUrl;
+      }
+      await _flush();
+    }
   }
 
   bool get autoCheckUpdate => _autoCheckUpdate;
@@ -818,7 +869,8 @@ class Preferences {
         'reminderLeadMinutes': _reminderLeadMinutes,
         'reminderStyle': _reminderStyle.wireName,
         'reminderFluidUntilEnd': _reminderFluidUntilEnd,
-        'updateProxyUrl': _updateProxyUrl,
+        'selectedUpdateProxy': _selectedUpdateProxy,
+        'customUpdateProxies': _customUpdateProxies,
         'autoCheckUpdate': _autoCheckUpdate,
         'ignoredUpdateVersion': _ignoredUpdateVersion,
         'timetables': _timetables.map((table) => table.toJson()).toList(),

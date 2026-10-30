@@ -479,11 +479,37 @@ class AppModel extends ChangeNotifier {
   // 软件更新设置
   // ---------------------------------------------------------------------------
 
+  String get selectedUpdateProxy => _preferences.selectedUpdateProxy;
+
+  Future<void> setSelectedUpdateProxy(String value) async {
+    if (_preferences.selectedUpdateProxy == value.trim()) return;
+    await _preferences.setSelectedUpdateProxy(value);
+    _notifyPrefs();
+    notifyListeners();
+  }
+
   String get updateProxyUrl => _preferences.updateProxyUrl;
 
   Future<void> setUpdateProxyUrl(String value) async {
     if (_preferences.updateProxyUrl == value.trim()) return;
     await _preferences.setUpdateProxyUrl(value);
+    _notifyPrefs();
+    notifyListeners();
+  }
+
+  List<String> get customUpdateProxies => _preferences.customUpdateProxies;
+
+  List<String> get allUpdateProxies => _preferences.allUpdateProxies;
+
+  Future<void> addCustomUpdateProxy(String url) async {
+    await _preferences.addCustomUpdateProxy(url);
+    _notifyPrefs();
+    notifyListeners();
+  }
+
+  Future<void> removeCustomUpdateProxy(String url) async {
+    await _preferences.removeCustomUpdateProxy(url);
+    _notifyPrefs();
     notifyListeners();
   }
 
@@ -492,6 +518,7 @@ class AppModel extends ChangeNotifier {
   Future<void> setAutoCheckUpdate(bool value) async {
     if (_preferences.autoCheckUpdate == value) return;
     await _preferences.setAutoCheckUpdate(value);
+    _notifyPrefs();
     notifyListeners();
   }
 
@@ -500,6 +527,7 @@ class AppModel extends ChangeNotifier {
   Future<void> setIgnoredUpdateVersion(String value) async {
     if (_preferences.ignoredUpdateVersion == value.trim()) return;
     await _preferences.setIgnoredUpdateVersion(value);
+    _notifyPrefs();
     notifyListeners();
   }
 
