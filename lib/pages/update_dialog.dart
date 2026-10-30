@@ -170,167 +170,190 @@ Future<void> showDownloadProgressDialog(
   List<String> backupProxies = const <String>[],
   UpdateService? updateService,
 }) async {
-  final service = updateService ?? UpdateService();
-  final cancelToken = CancelToken();
-
-  String? errorMessage;
-  String? currentProxy = selectedProxy;
-  bool isCompleted = false;
-
   await showDialog<void>(
     context: context,
     barrierDismissible: false,
-    builder: (dialogContext) {
-      DownloadProgress? currentProgress;
+    builder: (dialogContext) => _DownloadProgressDialog(
+      asset: asset,
+      selectedProxy: selectedProxy,
+      backupProxies: backupProxies,
+      updateService: updateService,
+    ),
+  );
+}
 
-      return StatefulBuilder(
-        builder: (context, setState) {
-          // 仅在首次构建时启动下载
-          void startDownloadOnce() {
-            service
-                .downloadAssetWithFallback(
-                  asset: asset,
-                  selectedProxy: selectedProxy,
-                  backupProxies: backupProxies,
-                  cancelToken: cancelToken,
-                  onProxySwitched: (proxy) {
-                    if (dialogContext.mounted) {
-                      setState(() {
-                        currentProxy = proxy;
-                      });
-                    }
-                  },
-                  onProgress: (progress) {
-                    if (dialogContext.mounted) {
-                      setState(() {
-                        currentProgress = progress;
-                      });
-                    }
-                  },
-                )
-                .then((file) async {
-                  isCompleted = true;
-                  if (dialogContext.mounted) {
-                    Navigator.of(dialogContext).pop();
-                    await _executeInstall(context, file);
-                  }
-                })
-                .catchError((Object err) {
-                  if (cancelToken.isCancelled) return;
-                  if (dialogContext.mounted) {
-                    setState(() {
-                      errorMessage = '下载失败: $err';
-                    });
-                  }
-                });
-          }
+class _DownloadProgressDialog extends StatefulWidget {
+  const _DownloadProgressDialog({
+    required this.asset,
+    required this.selectedProxy,
+    this.backupProxies = const <String>[],
+    this.updateService,
+  });
 
-          if (currentProgress == null && errorMessage == null && !isCompleted) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              startDownloadOnce();
-            });
-          }
+  final ReleaseAsset asset;
+  final String selectedProxy;
+  final List<String> backupProxies;
+  final UpdateService? updateService;
 
-          final theme = Theme.of(context);
-          final progressVal = currentProgress?.progress ?? 0.0;
-          final percent = currentProgress?.percentage ?? 0;
+  @override
+  State<_DownloadProgressDialog> createState() =>
+      _DownloadProgressDialogState();
+}
 
-          return AlertDialog(
-            title: Text(errorMessage != null ? '下载出错' : '正在下载更新'),
-            content: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 360),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
+class _DownloadProgressDialogState extends State<_DownloadProgressDialog> {
+  late final UpdateService _service;
+  late final CancelToken _cancelToken;
+
+  DownloadProgress? _currentProgress;
+  String? _errorMessage;
+  late String _currentProxy;
+  bool _downloadStarted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _service = widget.updateService ?? UpdateService();
+    _cancelToken = CancelToken();
+    _currentProxy = widget.selectedProxy;
+    // 仅在首次 initState 生命周期中触发下载，杜绝重建导致的多次并发下载冲突
+    _startDownload();
+  }
+
+  @override
+  void dispose() {
+    _cancelToken.cancel();
+    super.dispose();
+  }
+
+  Future<void> _startDownload() async {
+    if (_downloadStarted) return;
+    _downloadStarted = true;
+
+    try {
+      final file = await _service.downloadAssetWithFallback(
+        asset: widget.asset,
+        selectedProxy: widget.selectedProxy,
+        backupProxies: widget.backupProxies,
+        cancelToken: _cancelToken,
+        onProxySwitched: (proxy) {
+          if (!mounted) return;
+          setState(() {
+            _currentProxy = proxy;
+          });
+        },
+        onProgress: (progress) {
+          if (!mounted) return;
+          setState(() {
+            _currentProgress = progress;
+          });
+        },
+      );
+
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      await _executeInstall(context, file);
+    } catch (err) {
+      if (_cancelToken.isCancelled) return;
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = '下载失败: $err';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final progressVal = _currentProgress?.progress;
+    final percent = _currentProgress?.percentage ?? 0;
+
+    return AlertDialog(
+      title: Text(_errorMessage != null ? '下载出错' : '正在下载更新'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 360),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.asset.name,
+              style: TextStyle(
+                fontSize: 12,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (_currentProxy.trim() != widget.selectedProxy.trim()) ...[
+              const SizedBox(height: 4),
+              Text(
+                '已自动回退至: ${displayProxyName(_currentProxy)}',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+            ],
+            const SizedBox(height: 14),
+            if (_errorMessage != null)
+              Text(
+                _errorMessage!,
+                style: TextStyle(color: theme.colorScheme.error, fontSize: 13),
+              )
+            else ...[
+              LinearProgressIndicator(value: progressVal),
+              const SizedBox(height: 10),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    asset.name,
+                    _currentProgress == null ? '连接中…' : '$percent%',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Text(
+                    _currentProgress == null
+                        ? ''
+                        : '${_currentProgress!.formattedReceived} / ${_currentProgress!.formattedTotal} (${_currentProgress!.formattedSpeed})',
                     style: TextStyle(
                       fontSize: 12,
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                   ),
-                  if (currentProxy != null &&
-                      currentProxy!.trim() != selectedProxy.trim()) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      '已自动回退至: ${displayProxyName(currentProxy!)}',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: theme.colorScheme.primary,
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 14),
-                  if (errorMessage != null)
-                    Text(
-                      errorMessage!,
-                      style: TextStyle(
-                        color: theme.colorScheme.error,
-                        fontSize: 13,
-                      ),
-                    )
-                  else ...[
-                    LinearProgressIndicator(
-                      value: currentProgress == null ? null : progressVal,
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          currentProgress == null ? '准备中…' : '$percent%',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Text(
-                          currentProgress == null
-                              ? ''
-                              : '${currentProgress!.formattedReceived} / ${currentProgress!.formattedTotal} (${currentProgress!.formattedSpeed})',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
                 ],
               ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  cancelToken.cancel();
-                  Navigator.of(dialogContext).pop();
-                },
-                child: Text(errorMessage != null ? '关闭' : '取消'),
-              ),
-              if (errorMessage != null)
-                FilledButton(
-                  onPressed: () {
-                    final finalUrl = UpdateService.buildProxiedUrl(
-                      asset.downloadUrl,
-                      currentProxy ?? selectedProxy,
-                    );
-                    launchUrl(
-                      Uri.parse(finalUrl),
-                      mode: LaunchMode.externalApplication,
-                    );
-                    Navigator.of(dialogContext).pop();
-                  },
-                  child: const Text('改用浏览器下载'),
-                ),
             ],
-          );
-        },
-      );
-    },
-  );
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            _cancelToken.cancel();
+            Navigator.of(context).pop();
+          },
+          child: Text(_errorMessage != null ? '关闭' : '取消'),
+        ),
+        if (_errorMessage != null)
+          FilledButton(
+            onPressed: () {
+              final finalUrl = UpdateService.buildProxiedUrl(
+                widget.asset.downloadUrl,
+                _currentProxy,
+              );
+              launchUrl(
+                Uri.parse(finalUrl),
+                mode: LaunchMode.externalApplication,
+              );
+              Navigator.of(context).pop();
+            },
+            child: const Text('改用浏览器下载'),
+          ),
+      ],
+    );
+  }
 }
 
 /// 执行安装并引导异常提示。

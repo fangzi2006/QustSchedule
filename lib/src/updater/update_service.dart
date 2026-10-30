@@ -34,7 +34,7 @@ class UpdateService {
   static const Duration probeTimeout = Duration(seconds: 5);
   static const Duration apiTimeout = Duration(seconds: 6);
   static const Duration downloadConnectTimeout = Duration(seconds: 15);
-  static const Duration downloadIdleTimeout = Duration(seconds: 10);
+  static const Duration downloadIdleTimeout = Duration(seconds: 30);
 
   /// 根据加速代理前缀拼装最终请求/下载链接。
   static String buildProxiedUrl(String rawUrl, String proxyPrefix) {
@@ -351,7 +351,7 @@ class UpdateService {
 
         final sink = file.openWrite();
         try {
-          // 使用 timeout 限制每片数据块之间的空闲等待（防断流）
+          // 使用 timeout 限制每片数据块之间的空闲等待（防断流，充足 30s 缓冲时间）
           await for (final chunk in response.timeout(downloadIdleTimeout)) {
             if (cancelToken?.isCancelled == true) {
               throw Exception('下载已取消');
@@ -361,10 +361,14 @@ class UpdateService {
 
             final now = DateTime.now();
             final elapsedMs = now.difference(lastTime).inMilliseconds;
-            if (elapsedMs >= 300 || receivedBytes == totalBytes) {
+            if (elapsedMs >= 350 || receivedBytes == totalBytes) {
               if (elapsedMs > 0) {
-                currentSpeed =
+                final instantSpeed =
                     (receivedBytes - lastBytes) / (elapsedMs / 1000.0);
+                // 平滑速度指数移动平均，避免瞬时跳变引发界面抽搐
+                currentSpeed = currentSpeed == 0.0
+                    ? instantSpeed
+                    : 0.7 * instantSpeed + 0.3 * currentSpeed;
               }
               lastTime = now;
               lastBytes = receivedBytes;
@@ -379,12 +383,13 @@ class UpdateService {
           }
           await sink.flush();
         } catch (e) {
-          await sink.close();
           if (cancelToken?.isCancelled == true) rethrow;
           lastError = e;
           continue; // 断流时切换下一节点重试
         } finally {
-          await sink.close();
+          try {
+            await sink.close();
+          } catch (_) {}
         }
 
         // SHA256 校验

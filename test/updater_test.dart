@@ -256,6 +256,42 @@ void main() {
       await tester.pumpAndSettle();
     });
 
+    testWidgets('下载进度弹窗生命周期安全，取消后关闭弹窗', (tester) async {
+      const asset = ReleaseAsset(
+        name: 'test_app.apk',
+        downloadUrl: 'https://example.com/test_app.apk',
+        size: 10 * 1024 * 1024,
+        contentType: '',
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () => showDownloadProgressDialog(
+                context,
+                asset: asset,
+                selectedProxy: 'https://gh-proxy.com',
+              ),
+              child: const Text('Download'),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Download'));
+      await tester.pump(); // 构建首帧，启动下载
+
+      expect(find.text('正在下载更新'), findsOneWidget);
+      expect(find.text('test_app.apk'), findsOneWidget);
+      expect(find.text('取消'), findsOneWidget);
+
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('正在下载更新'), findsNothing);
+    });
+
     testWidgets('更新代理管理页支持选择节点与添加代理', (tester) async {
       final model = AppModel(preferences: Preferences.inMemory());
 
