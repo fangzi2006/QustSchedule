@@ -75,6 +75,12 @@ class AppInstaller {
       if (scriptFile.existsSync()) {
         scriptFile.deleteSync();
       }
+      final vbsFile = File(
+        '${appDir.path}${Platform.pathSeparator}qustschedule_launcher.vbs',
+      );
+      if (vbsFile.existsSync()) {
+        vbsFile.deleteSync();
+      }
       final stagingDir = Directory(
         '${appDir.path}${Platform.pathSeparator}.update_staging',
       );
@@ -162,14 +168,15 @@ class AppInstaller {
       zipFile.deleteSync();
     } catch (_) {}
 
-    // 5. 生成位于应用同目录下的极简、纯相对路径的原子替换脚本
+    // 5. 生成位于应用同目录下的极简、纯相对路径的原子替换脚本与静默启动器
     // 架构与防御性设计：
     // - 全脚本使用纯 ASCII 字符（无中文字符与中文注释），彻底杜绝 Windows CMD OEM 代码页（如 GBK 936）将 UTF-8 多字节解析为乱码而语法报错中断；
     // - 使用纯相对路径（.update_staging、.、$exeName），彻底消除路径空格与中文乱码；
     // - 采用 ping 127.0.0.1 稳定等待 1~2 秒，在无控制台/脱钩（DETACHED_PROCESS）环境下绝不报错且等待主进程彻底退出；
     // - 采用 Windows 原生自带、微软官方签名的 robocopy 进行原子搬运（/MOVE），完美规避杀毒软件（卡巴斯基/Defender）误拦截；
     // - 显式配置 /R:5 /W:1，在杀毒软件短暂占用句柄时最多重试 5 次、每次 1 秒，杜绝死锁与默认超长重试；
-    // - 迁移完成后清理暂存目录、通过 start 重新启动新版主程序并自删脚本。
+    // - 迁移完成后清理暂存目录、通过 start 重新启动新版主程序并自删脚本；
+    // - 采用系统内置 GUI 子系统程序 wscript.exe 静默启动，彻底杜绝黑框与 ping 窗口闪烁。
     final scriptFile = File(
       '${appDir.path}${Platform.pathSeparator}qustschedule_updater.cmd',
     );
@@ -188,18 +195,42 @@ if exist ".update_staging" (
 
 start "" "$exeName"
 
+if exist "qustschedule_launcher.vbs" (
+    del /f /q "qustschedule_launcher.vbs" >nul 2>nul
+)
+
 del /f /q "%~f0" >nul 2>nul
 ''';
 
     await scriptFile.writeAsString(scriptContent);
 
-    // 6. 启动更新脚本并立即退出当前主程序
-    await Process.start(
-      'cmd.exe',
-      <String>['/c', scriptFile.path],
-      mode: ProcessStartMode.detached,
-      workingDirectory: appDir.path,
+    final vbsFile = File(
+      '${appDir.path}${Platform.pathSeparator}qustschedule_launcher.vbs',
     );
+    final vbsContent =
+        'CreateObject("WScript.Shell").Run "cmd.exe /c """ & '
+        'CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName) & '
+        r'"\qustschedule_updater.cmd""", 0, False';
+    await vbsFile.writeAsString(vbsContent);
+
+    // 6. 启动静默启动器并立即退出当前主程序
+    // wscript.exe 属于 Windows GUI 进程，以 0 (隐藏窗口) 调度 cmd，绝不产生控制台黑框或 ping 标题闪烁；
+    // 若系统策略限制 wscript 则安全降级为直接调用 cmd.exe
+    try {
+      await Process.start(
+        'wscript.exe',
+        <String>[vbsFile.path],
+        mode: ProcessStartMode.detached,
+        workingDirectory: appDir.path,
+      );
+    } catch (_) {
+      await Process.start(
+        'cmd.exe',
+        <String>['/c', scriptFile.path],
+        mode: ProcessStartMode.detached,
+        workingDirectory: appDir.path,
+      );
+    }
     exit(0);
   }
 }
