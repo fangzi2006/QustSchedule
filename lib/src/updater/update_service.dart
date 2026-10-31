@@ -150,8 +150,12 @@ class UpdateService {
   static ReleaseAsset? findTargetAsset(
     List<ReleaseAsset> assets, {
     bool? isPortable,
+    bool? isWindows,
+    bool? isAndroid,
+    String? androidArch,
   }) {
-    if (Platform.isWindows) {
+    final onWindows = isWindows ?? (isPortable != null ? true : Platform.isWindows);
+    if (onWindows) {
       final portable = isPortable ?? isWindowsPortable();
       if (portable) {
         // 便携版优先匹配 x64 的 .zip 绿色压缩包
@@ -180,8 +184,9 @@ class UpdateService {
       return null;
     }
 
-    if (Platform.isAndroid) {
-      final (archKey, _) = currentArchitecture();
+    final onAndroid = isAndroid ?? Platform.isAndroid;
+    if (onAndroid) {
+      final archKey = androidArch ?? currentArchitecture().$1;
       for (final a in assets) {
         final name = a.name.toLowerCase();
         if (name.endsWith('.apk') && name.contains(archKey.toLowerCase())) {
