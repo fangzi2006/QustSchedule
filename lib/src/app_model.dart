@@ -522,15 +522,6 @@ class AppModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  String get ignoredUpdateVersion => _preferences.ignoredUpdateVersion;
-
-  Future<void> setIgnoredUpdateVersion(String value) async {
-    if (_preferences.ignoredUpdateVersion == value.trim()) return;
-    await _preferences.setIgnoredUpdateVersion(value);
-    _notifyPrefs();
-    notifyListeners();
-  }
-
   // ---------------------------------------------------------------------------
   // 调课（只影响渲染，不改原始课表）
   // ---------------------------------------------------------------------------

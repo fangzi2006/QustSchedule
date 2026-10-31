@@ -230,7 +230,6 @@ void main() {
         ]),
       );
       expect(prefs.autoCheckUpdate, isTrue);
-      expect(prefs.ignoredUpdateVersion, isEmpty);
     });
 
     test('新增、删除自定义代理并持久化', () async {
@@ -273,9 +272,11 @@ void main() {
       // 其他偏好设置
       await model.setAutoCheckUpdate(false);
       expect(model.autoCheckUpdate, isFalse);
+    });
 
-      await model.setIgnoredUpdateVersion('1.2.3');
-      expect(model.ignoredUpdateVersion, equals('1.2.3'));
+    test('历史旧配置中的 ignoredUpdateVersion 字段在反序列化时被安全忽略与丢弃', () {
+      final decoded = Preferences.decode('{"ignoredUpdateVersion": "1.3.0"}');
+      expect(decoded.autoCheckUpdate, isTrue);
     });
 
     test('直连官方空字符串配置在反序列化后依然保持为空', () {
@@ -311,8 +312,6 @@ void main() {
         currentArchName: 'Android (arm64-v8a)',
       );
 
-      bool ignored = false;
-
       await tester.pumpWidget(
         MaterialApp(
           home: Builder(
@@ -321,7 +320,6 @@ void main() {
                 context,
                 updateResult: updateResult,
                 proxyPrefix: 'https://gh-proxy.com',
-                onIgnore: () => ignored = true,
               ),
               child: const Text('Open'),
             ),
@@ -337,16 +335,17 @@ void main() {
       expect(find.textContaining('Android (arm64-v8a)'), findsOneWidget);
       expect(find.textContaining('测试更新日志项'), findsOneWidget);
 
-      expect(find.text('忽略此版'), findsOneWidget);
+      expect(find.text('稍后再说'), findsOneWidget);
       expect(find.text('浏览器下载'), findsOneWidget);
       expect(find.text('立即更新'), findsOneWidget);
 
-      // 验证未附带「查看全部历史版本」
+      // 验证未附带「查看全部历史版本」与已废弃的「忽略此版」
       expect(find.textContaining('历史版本'), findsNothing);
+      expect(find.text('忽略此版'), findsNothing);
 
-      await tester.tap(find.text('忽略此版'));
+      await tester.tap(find.text('稍后再说'));
       await tester.pumpAndSettle();
-      expect(ignored, isTrue);
+      expect(find.text('发现新版本 v1.2.3'), findsNothing);
     });
 
     testWidgets('更新对话框无对应架构产物时展示友好提示', (tester) async {

@@ -16,7 +16,6 @@ Future<void> showUpdateDialog(
   required UpdateCheckResult updateResult,
   required String proxyPrefix,
   List<String> backupProxies = const <String>[],
-  VoidCallback? onIgnore,
 }) async {
   final release = updateResult.release;
   final asset = updateResult.targetAsset;
@@ -125,14 +124,10 @@ Future<void> showUpdateDialog(
           ),
         ),
         actions: [
-          if (onIgnore != null)
-            TextButton(
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-                onIgnore();
-              },
-              child: const Text('忽略此版'),
-            ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('稍后再说'),
+          ),
           OutlinedButton(
             onPressed: () async {
               final uri = Uri.parse(finalDownloadUrl);

@@ -66,6 +66,7 @@ class _SchedulePageState extends State<SchedulePage> {
   ///  - 状态：`model.week` 留到停稳后再写（见 `_WeekPagerState._settleToPage`）。
   final ValueNotifier<int> _shownWeek = ValueNotifier<int>(1);
   static bool _hasCheckedAutoUpdate = false;
+  int _updateRetryCount = 0;
   Timer? _updateCheckTimer;
 
   @override
@@ -75,19 +76,17 @@ class _SchedulePageState extends State<SchedulePage> {
     // 只听周次通知：换周不该让整张课表重建（内容没变）。
     model.weekNotifier.addListener(_syncShownWeek);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkUpdateOnLaunch();
+      _scheduleAutoUpdateCheck(delay: const Duration(seconds: 1));
     });
   }
 
-  void _checkUpdateOnLaunch() {
+  void _scheduleAutoUpdateCheck({required Duration delay}) {
     if (_hasCheckedAutoUpdate) return;
-    _hasCheckedAutoUpdate = true;
-
     if (!model.autoCheckUpdate) return;
 
-    // 延迟 2 秒，待首页课表渲染与冷启动完成后再静默检测，避免抢占启动阶段的网络与 CPU
-    _updateCheckTimer = Timer(const Duration(seconds: 2), () async {
-      if (!mounted) return;
+    _updateCheckTimer?.cancel();
+    _updateCheckTimer = Timer(delay, () async {
+      if (!mounted || _hasCheckedAutoUpdate) return;
       try {
         final service = UpdateService();
         final result = await service.checkForUpdatesWithFallback(
@@ -96,21 +95,42 @@ class _SchedulePageState extends State<SchedulePage> {
           backupProxies: model.allUpdateProxies,
         );
 
-        if (!mounted) return;
+        if (!mounted || _hasCheckedAutoUpdate) return;
+
         if (result.status == UpdateStatus.hasUpdate) {
+          _hasCheckedAutoUpdate = true;
           final release = result.release;
-          if (release != null &&
-              release.version != model.ignoredUpdateVersion) {
+          if (release != null) {
             await showUpdateDialog(
               context,
               updateResult: result,
               proxyPrefix: model.selectedUpdateProxy,
               backupProxies: model.allUpdateProxies,
-              onIgnore: () => model.setIgnoredUpdateVersion(release.version),
             );
           }
+        } else if (result.status == UpdateStatus.noUpdate) {
+          _hasCheckedAutoUpdate = true;
+        } else if (result.status == UpdateStatus.networkError) {
+          // 断网或网络超时：每隔 2 秒重试一次，最多重试 2 次
+          if (_updateRetryCount < 2) {
+            _updateRetryCount++;
+            _scheduleAutoUpdateCheck(delay: const Duration(seconds: 2));
+          } else {
+            _hasCheckedAutoUpdate = true;
+          }
+        } else {
+          // rateLimited 等其他终态
+          _hasCheckedAutoUpdate = true;
         }
-      } catch (_) {}
+      } catch (_) {
+        if (!mounted || _hasCheckedAutoUpdate) return;
+        if (_updateRetryCount < 2) {
+          _updateRetryCount++;
+          _scheduleAutoUpdateCheck(delay: const Duration(seconds: 2));
+        } else {
+          _hasCheckedAutoUpdate = true;
+        }
+      }
     });
   }
 

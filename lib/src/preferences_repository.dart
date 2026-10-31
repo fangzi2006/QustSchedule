@@ -100,7 +100,6 @@ class Preferences {
     String updateProxyUrl = defaultUpdateProxyUrl,
     List<String>? customUpdateProxies,
     bool autoCheckUpdate = defaultAutoCheckUpdate,
-    String ignoredUpdateVersion = '',
     File? file,
   }) : _termStarts = termStarts,
        _timetables = timetables,
@@ -132,7 +131,6 @@ class Preferences {
            ? List<String>.from(customUpdateProxies)
            : <String>[],
        _autoCheckUpdate = autoCheckUpdate,
-       _ignoredUpdateVersion = ignoredUpdateVersion.trim(),
        _file = file;
 
   final Map<String, String> _termStarts;
@@ -190,7 +188,6 @@ class Preferences {
   String _selectedUpdateProxy;
   List<String> _customUpdateProxies;
   bool _autoCheckUpdate;
-  String _ignoredUpdateVersion;
 
   final File? _file;
 
@@ -218,7 +215,6 @@ class Preferences {
     String updateProxyUrl = defaultUpdateProxyUrl,
     List<String>? customUpdateProxies,
     bool autoCheckUpdate = defaultAutoCheckUpdate,
-    String ignoredUpdateVersion = '',
   }) => Preferences._(
     termStarts: termStarts ?? <String, String>{},
     timetables: timetables ?? <Timetable>[defaultTimetable()],
@@ -242,7 +238,6 @@ class Preferences {
     updateProxyUrl: updateProxyUrl,
     customUpdateProxies: customUpdateProxies,
     autoCheckUpdate: autoCheckUpdate,
-    ignoredUpdateVersion: ignoredUpdateVersion,
     file: null,
   );
 
@@ -295,7 +290,6 @@ class Preferences {
     var updateProxyUrl = defaultUpdateProxyUrl;
     var customUpdateProxies = <String>[];
     var autoCheckUpdate = defaultAutoCheckUpdate;
-    var ignoredUpdateVersion = '';
 
     if (text.trim().isNotEmpty) {
       try {
@@ -421,8 +415,6 @@ class Preferences {
           }
           final rawAutoCheck = decoded['autoCheckUpdate'];
           if (rawAutoCheck is bool) autoCheckUpdate = rawAutoCheck;
-          final rawIgnored = decoded['ignoredUpdateVersion'];
-          if (rawIgnored is String) ignoredUpdateVersion = rawIgnored;
         }
       } catch (_) {
         // 文件损坏按空设置处理：不值得因为一份设置让 app 起不来。
@@ -445,7 +437,6 @@ class Preferences {
         updateProxyUrl = defaultUpdateProxyUrl;
         customUpdateProxies = <String>[];
         autoCheckUpdate = defaultAutoCheckUpdate;
-        ignoredUpdateVersion = '';
       }
     }
 
@@ -472,7 +463,6 @@ class Preferences {
       updateProxyUrl: updateProxyUrl,
       customUpdateProxies: customUpdateProxies,
       autoCheckUpdate: autoCheckUpdate,
-      ignoredUpdateVersion: ignoredUpdateVersion,
       file: file,
     );
   }
@@ -833,15 +823,6 @@ class Preferences {
     await _flush();
   }
 
-  String get ignoredUpdateVersion => _ignoredUpdateVersion;
-
-  Future<void> setIgnoredUpdateVersion(String value) async {
-    final trimmed = value.trim();
-    if (_ignoredUpdateVersion == trimmed) return;
-    _ignoredUpdateVersion = trimmed;
-    await _flush();
-  }
-
   // ---------------------------------------------------------------------------
   // 落盘
   // ---------------------------------------------------------------------------
@@ -876,7 +857,6 @@ class Preferences {
         'selectedUpdateProxy': _selectedUpdateProxy,
         'customUpdateProxies': _customUpdateProxies,
         'autoCheckUpdate': _autoCheckUpdate,
-        'ignoredUpdateVersion': _ignoredUpdateVersion,
         'timetables': _timetables.map((table) => table.toJson()).toList(),
         if (_quickSetup != null) 'quickSetup': _quickSetup!.toJson(),
       }),
