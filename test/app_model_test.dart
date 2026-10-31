@@ -368,7 +368,8 @@ void main() {
       final scheduleCompleter = Completer<Schedule>();
       final hints = <String>[];
       rig.model.addListener(() {
-        if (rig.model.hint.isNotEmpty && (hints.isEmpty || hints.last != rig.model.hint)) {
+        if (rig.model.hint.isNotEmpty &&
+            (hints.isEmpty || hints.last != rig.model.hint)) {
           hints.add(rig.model.hint);
         }
       });
@@ -383,7 +384,9 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(hints, contains('正在重新登录…'));
 
-      loginCompleter.complete(const AuthenticatedState(studentId: '2407720102', studentName: '张三'));
+      loginCompleter.complete(
+        const AuthenticatedState(studentId: '2407720102', studentName: '张三'),
+      );
       await Future<void>.delayed(Duration.zero);
       expect(hints.last, '更新中…');
 
