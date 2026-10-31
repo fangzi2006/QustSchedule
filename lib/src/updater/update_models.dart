@@ -241,9 +241,9 @@ class ProxyTestResult {
 /// 辅助函数：根据代理地址展示简洁名称。
 String displayProxyName(String proxyUrl) {
   final trimmed = proxyUrl.trim();
-  if (trimmed.isEmpty) return '官方直连 (GitHub)';
-  if (trimmed.contains('axisnow.gh-proxy.org')) return 'axisnow.gh-proxy.org';
-  if (trimmed.contains('gh-proxy.org')) return 'gh-proxy.org (默认推荐)';
-  if (trimmed.contains('gh-proxy.com')) return 'gh-proxy.com';
+  if (trimmed.isEmpty) return '直连';
+  if (trimmed.contains('axisnow.gh-proxy.org')) return '副加速节点';
+  if (trimmed.contains('gh-proxy.org')) return '主加速节点(默认推荐)';
+  if (trimmed.contains('gh-proxy.com')) return '加速主站（最稳定但是部分网络环境下速度较慢）';
   return trimmed;
 }

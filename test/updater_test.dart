@@ -412,15 +412,15 @@ void main() {
       await tester.pumpWidget(MaterialApp(home: UpdateProxyPage(model: model)));
 
       expect(find.text('更新代理设置'), findsOneWidget);
-      expect(find.text('gh-proxy.org (默认推荐)'), findsOneWidget);
-      expect(find.text('axisnow.gh-proxy.org'), findsOneWidget);
-      expect(find.text('gh-proxy.com'), findsOneWidget);
-      expect(find.text('官方直连 (GitHub)'), findsOneWidget);
+      expect(find.text('主加速节点(默认推荐)'), findsOneWidget);
+      expect(find.text('副加速节点'), findsOneWidget);
+      expect(find.text('加速主站（最稳定但是部分网络环境下速度较慢）'), findsOneWidget);
+      expect(find.text('直连'), findsOneWidget);
       expect(find.text('启动时自动检查更新'), findsOneWidget);
       expect(find.text('多层自动回退机制'), findsOneWidget);
 
-      // 切换至官方直连
-      await tester.tap(find.text('官方直连 (GitHub)'));
+      // 切换至直连
+      await tester.tap(find.text('直连'));
       await tester.pumpAndSettle();
       expect(model.selectedUpdateProxy, isEmpty);
 
