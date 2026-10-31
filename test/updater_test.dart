@@ -189,9 +189,16 @@ void main() {
   group('更新偏好设置与代理增删 (Preferences & AppModel)', () {
     test('默认配置生效（仅默认加速地址与直连）', () {
       final prefs = Preferences.inMemory();
-      expect(prefs.selectedUpdateProxy, equals('https://gh-proxy.com'));
+      expect(prefs.selectedUpdateProxy, equals('https://gh-proxy.org'));
       expect(prefs.customUpdateProxies, isEmpty);
-      expect(prefs.allUpdateProxies, equals(['https://gh-proxy.com']));
+      expect(
+        prefs.allUpdateProxies,
+        equals([
+          'https://gh-proxy.org',
+          'https://axisnow.gh-proxy.org',
+          'https://gh-proxy.com',
+        ]),
+      );
       expect(prefs.autoCheckUpdate, isTrue);
       expect(prefs.ignoredUpdateVersion, isEmpty);
     });
@@ -208,7 +215,12 @@ void main() {
       expect(model.customUpdateProxies, equals(['https://ghproxy.net']));
       expect(
         model.allUpdateProxies,
-        equals(['https://gh-proxy.com', 'https://ghproxy.net']),
+        equals([
+          'https://gh-proxy.org',
+          'https://axisnow.gh-proxy.org',
+          'https://gh-proxy.com',
+          'https://ghproxy.net',
+        ]),
       );
       expect(prefsNotified, greaterThan(0));
 
@@ -219,7 +231,14 @@ void main() {
       // 删除自定义代理
       await model.removeCustomUpdateProxy('https://ghproxy.net');
       expect(model.customUpdateProxies, isEmpty);
-      expect(model.allUpdateProxies, equals(['https://gh-proxy.com']));
+      expect(
+        model.allUpdateProxies,
+        equals([
+          'https://gh-proxy.org',
+          'https://axisnow.gh-proxy.org',
+          'https://gh-proxy.com',
+        ]),
+      );
 
       // 其他偏好设置
       await model.setAutoCheckUpdate(false);
@@ -382,12 +401,20 @@ void main() {
     });
 
     testWidgets('更新代理管理页支持选择节点与添加代理', (tester) async {
+      tester.view.physicalSize = const Size(800, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
       final model = AppModel(preferences: Preferences.inMemory());
 
       await tester.pumpWidget(MaterialApp(home: UpdateProxyPage(model: model)));
 
       expect(find.text('更新代理设置'), findsOneWidget);
-      expect(find.text('gh-proxy.com (默认推荐)'), findsOneWidget);
+      expect(find.text('gh-proxy.org (默认推荐)'), findsOneWidget);
+      expect(find.text('axisnow.gh-proxy.org'), findsOneWidget);
+      expect(find.text('gh-proxy.com'), findsOneWidget);
       expect(find.text('官方直连 (GitHub)'), findsOneWidget);
       expect(find.text('启动时自动检查更新'), findsOneWidget);
       expect(find.text('多层自动回退机制'), findsOneWidget);

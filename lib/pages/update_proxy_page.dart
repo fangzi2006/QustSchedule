@@ -45,7 +45,7 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
 
   Future<void> _testAll() async {
     final proxies = <String>[
-      defaultUpdateProxyUrl,
+      ...presetUpdateProxies,
       ...widget.model.customUpdateProxies,
       '',
     ];
@@ -113,7 +113,7 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
       builder: (context, _) {
         final selectedProxy = widget.model.selectedUpdateProxy;
         final proxies = <String>[
-          defaultUpdateProxyUrl,
+          ...presetUpdateProxies,
           ...widget.model.customUpdateProxies,
           '',
         ];
@@ -230,7 +230,7 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
     final isSelected = proxy.trim() == selectedProxy.trim();
     final isTesting = _testingUrls.contains(proxy);
     final testResult = _testResults[proxy];
-    final isCustom = proxy.isNotEmpty && proxy != defaultUpdateProxyUrl;
+    final isCustom = proxy.isNotEmpty && !presetUpdateProxies.contains(proxy);
 
     return Card(
       elevation: isSelected ? 1.5 : 0.5,

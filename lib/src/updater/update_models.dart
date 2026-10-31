@@ -242,6 +242,8 @@ class ProxyTestResult {
 String displayProxyName(String proxyUrl) {
   final trimmed = proxyUrl.trim();
   if (trimmed.isEmpty) return '官方直连 (GitHub)';
-  if (trimmed.contains('gh-proxy.com')) return 'gh-proxy.com (默认推荐)';
+  if (trimmed.contains('axisnow.gh-proxy.org')) return 'axisnow.gh-proxy.org';
+  if (trimmed.contains('gh-proxy.org')) return 'gh-proxy.org (默认推荐)';
+  if (trimmed.contains('gh-proxy.com')) return 'gh-proxy.com';
   return trimmed;
 }

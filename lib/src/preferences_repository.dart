@@ -32,10 +32,14 @@ import 'timetable.dart';
 const int preferencesSchema = 12;
 
 /// 检查更新与安装包下载的默认加速代理。
-const String defaultUpdateProxyUrl = 'https://gh-proxy.com';
+const String defaultUpdateProxyUrl = 'https://gh-proxy.org';
 
-/// 默认唯一加速代理预设列表。
-const List<String> presetUpdateProxies = <String>[defaultUpdateProxyUrl];
+/// 预设加速代理列表：默认首选、备选及旧节点。
+const List<String> presetUpdateProxies = <String>[
+  'https://gh-proxy.org',
+  'https://axisnow.gh-proxy.org',
+  'https://gh-proxy.com',
+];
 
 /// 启动时是否自动检查更新（默认开启）。
 const bool defaultAutoCheckUpdate = true;
@@ -412,7 +416,7 @@ class Preferences {
             customUpdateProxies = rawCustomList
                 .whereType<String>()
                 .map((s) => s.trim())
-                .where((s) => s.isNotEmpty && s != defaultUpdateProxyUrl)
+                .where((s) => s.isNotEmpty && !presetUpdateProxies.contains(s))
                 .toList();
           }
           final rawAutoCheck = decoded['autoCheckUpdate'];
@@ -794,9 +798,9 @@ class Preferences {
   List<String> get customUpdateProxies =>
       List<String>.unmodifiable(_customUpdateProxies);
 
-  /// 包含默认代理与自定义代理的所有可用代理列表。
+  /// 包含预设代理与自定义代理的所有可用代理列表。
   List<String> get allUpdateProxies {
-    final list = <String>[defaultUpdateProxyUrl];
+    final list = <String>[...presetUpdateProxies];
     for (final p in _customUpdateProxies) {
       if (!list.contains(p)) list.add(p);
     }
@@ -805,7 +809,7 @@ class Preferences {
 
   Future<void> addCustomUpdateProxy(String url) async {
     final trimmed = url.trim();
-    if (trimmed.isEmpty || trimmed == defaultUpdateProxyUrl) return;
+    if (trimmed.isEmpty || presetUpdateProxies.contains(trimmed)) return;
     if (_customUpdateProxies.contains(trimmed)) return;
     _customUpdateProxies.add(trimmed);
     await _flush();
