@@ -231,14 +231,22 @@ class SettingsPage extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 18),
-              _SectionTitle('关于'),
+              _SectionTitle('关于与更新'),
               Card(
                 child: Column(
                   children: <Widget>[
+                    SwitchListTile(
+                      secondary: const Icon(Icons.autorenew_rounded, size: 20),
+                      title: const Text('自动检查更新'),
+                      subtitle: const Text('启动应用时静默检测新版本'),
+                      value: model.autoCheckUpdate,
+                      onChanged: model.setAutoCheckUpdate,
+                    ),
+                    const Divider(height: 0, indent: 56),
                     ListTile(
                       leading: const Icon(Icons.info_outline_rounded, size: 20),
-                      title: const Text('关于青科课表通'),
-                      subtitle: Text('v$appVersion · 检查更新、日志、协议'),
+                      title: const Text('关于'),
+                      subtitle: Text('v$appVersion · 检查更新、代理、协议'),
                       trailing: const Icon(Icons.chevron_right_rounded),
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute<void>(

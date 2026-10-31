@@ -922,13 +922,14 @@ void main() {
       await tester.pumpWidget(wrap(SettingsPage(model: model)));
 
       // 关于组在页面底部，懒加载列表要滚到才会构建。
+      final aboutTile = find.widgetWithText(ListTile, '关于');
       await tester.scrollUntilVisible(
-        find.text('关于青科课表通'),
+        aboutTile,
         120,
         scrollable: find.byType(Scrollable).first,
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('关于青科课表通'));
+      await tester.tap(aboutTile);
       await tester.pumpAndSettle();
 
       await tester.tap(find.text('开源许可'));

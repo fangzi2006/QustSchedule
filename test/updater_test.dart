@@ -416,7 +416,6 @@ void main() {
       expect(find.text('副加速节点'), findsOneWidget);
       expect(find.text('加速主站（最稳定但是部分网络环境下速度较慢）'), findsOneWidget);
       expect(find.text('直连'), findsOneWidget);
-      expect(find.text('启动时自动检查更新'), findsOneWidget);
       expect(find.text('多层自动回退机制'), findsOneWidget);
 
       // 切换至直连

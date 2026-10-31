@@ -156,17 +156,7 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
                 icon: const Icon(Icons.add_rounded, size: 18),
                 label: const Text('新增自定义代理'),
               ),
-              const SizedBox(height: 20),
-              _buildSectionTitle('通用更新选项'),
-              Card(
-                child: SwitchListTile(
-                  secondary: const Icon(Icons.autorenew_rounded, size: 20),
-                  title: const Text('启动时自动检查更新'),
-                  subtitle: const Text('打开课表页时静默检测新版本并弹窗'),
-                  value: widget.model.autoCheckUpdate,
-                  onChanged: widget.model.setAutoCheckUpdate,
-                ),
-              ),
+
               const SizedBox(height: 20),
               _buildSectionTitle('多层自动回退机制'),
               Card(
@@ -304,7 +294,7 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
                     )
                   else
                     IconButton(
-                      icon: const Icon(Icons.network_ping_rounded, size: 20),
+                      icon: const Icon(Icons.speed_rounded, size: 20),
                       tooltip: '测速',
                       visualDensity: VisualDensity.compact,
                       onPressed: () => _testProxy(proxy),

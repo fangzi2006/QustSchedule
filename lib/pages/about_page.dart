@@ -186,27 +186,30 @@ class _AboutPageState extends State<AboutPage> {
                   ),
                   child: Column(
                     children: [
-                      // App 图标容器
+                      // App 官方图标
                       Container(
                         width: 72,
                         height: 72,
                         decoration: BoxDecoration(
-                          color: theme.colorScheme.primaryContainer,
-                          borderRadius: BorderRadius.circular(20),
+                          borderRadius: BorderRadius.circular(18),
                           boxShadow: [
                             BoxShadow(
                               color: theme.colorScheme.primary.withValues(
-                                alpha: 0.15,
+                                alpha: 0.18,
                               ),
-                              blurRadius: 10,
+                              blurRadius: 12,
                               offset: const Offset(0, 4),
                             ),
                           ],
                         ),
-                        child: Icon(
-                          Icons.calendar_month_rounded,
-                          size: 40,
-                          color: theme.colorScheme.primary,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(18),
+                          child: Image.asset(
+                            'assets/logo.png',
+                            width: 72,
+                            height: 72,
+                            fit: BoxFit.contain,
+                          ),
                         ),
                       ),
                       const SizedBox(height: 14),
@@ -261,18 +264,6 @@ class _AboutPageState extends State<AboutPage> {
                 child: Column(
                   children: [
                     ListTile(
-                      leading: const Icon(Icons.history_rounded, size: 20),
-                      title: const Text('更新日志'),
-                      subtitle: const Text('各版本详细说明与改进记录'),
-                      trailing: const Icon(Icons.chevron_right_rounded),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const ChangelogPage(),
-                        ),
-                      ),
-                    ),
-                    const Divider(height: 0, indent: 56),
-                    ListTile(
                       leading: const Icon(Icons.tune_rounded, size: 20),
                       title: const Text('更新代理设置'),
                       subtitle: Text(
@@ -287,15 +278,23 @@ class _AboutPageState extends State<AboutPage> {
                     ),
                     const Divider(height: 0, indent: 56),
                     ListTile(
-                      leading: const Icon(Icons.bug_report_outlined, size: 20),
-                      title: const Text('调试信息'),
-                      subtitle: const Text('原始响应、解析结果、请求记录'),
+                      leading: const Icon(Icons.history_rounded, size: 20),
+                      title: const Text('更新日志'),
+                      subtitle: const Text('各版本详细说明与改进记录'),
                       trailing: const Icon(Icons.chevron_right_rounded),
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute<void>(
-                          builder: (_) => DebugPage(model: widget.model),
+                          builder: (_) => const ChangelogPage(),
                         ),
                       ),
+                    ),
+                    const Divider(height: 0, indent: 56),
+                    ListTile(
+                      leading: const Icon(Icons.code_rounded, size: 20),
+                      title: const Text('项目主页与源码'),
+                      subtitle: const Text(kProjectHomeUrl),
+                      trailing: const Icon(Icons.open_in_new_rounded, size: 18),
+                      onTap: () => _openProjectLink(context),
                     ),
                     const Divider(height: 0, indent: 56),
                     ListTile(
@@ -323,11 +322,15 @@ class _AboutPageState extends State<AboutPage> {
                     ),
                     const Divider(height: 0, indent: 56),
                     ListTile(
-                      leading: const Icon(Icons.code_rounded, size: 20),
-                      title: const Text('项目主页与源码'),
-                      subtitle: const Text(kProjectHomeUrl),
-                      trailing: const Icon(Icons.open_in_new_rounded, size: 18),
-                      onTap: () => _openProjectLink(context),
+                      leading: const Icon(Icons.bug_report_outlined, size: 20),
+                      title: const Text('调试信息'),
+                      subtitle: const Text('原始响应、解析结果、请求记录'),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => DebugPage(model: widget.model),
+                        ),
+                      ),
                     ),
                   ],
                 ),
