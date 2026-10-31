@@ -111,13 +111,38 @@ void main() {
       expect(model.studentId, '2407720102');
     });
 
-    test('登录成功后记住账号', () async {
+    test('登录成功后记住账号与姓名', () async {
       final prefs = Preferences.inMemory();
       final rig = buildRig(preferences: prefs);
       await rig.model.signIn('2407720102', 'pw');
 
       expect(prefs.accountOf(_baseUrl), '2407720102');
+      expect(prefs.studentNameOf(_baseUrl), '房子洋');
       expect(rig.model.studentId, '2407720102');
+      expect(rig.model.studentName, '房子洋');
+    });
+
+    test('冷启动直接从本地缓存恢复学号与姓名，不发起网络请求', () async {
+      final prefs = Preferences.inMemory(
+        lastAccounts: <String, String>{_baseUrl: '2407720102'},
+        lastStudentNames: <String, String>{_baseUrl: '张三'},
+      );
+      final cache = FakeScheduleCache(
+        CachedSchedule(
+          baseUrl: _baseUrl,
+          schedule: sampleSchedule(),
+          fetchedAt: DateTime.now(),
+        ),
+      );
+      final backend = FakeBackend(studentId: '', studentName: '');
+      final model = bootRig(preferences: prefs, cache: cache, backend: backend);
+
+      await model.boot();
+
+      expect(model.studentId, '2407720102');
+      expect(model.studentName, '张三');
+      expect(backend.checkSessionCount, 0, reason: '已有完整缓存身份，冷启动无需打网络');
+      model.dispose();
     });
 
     test('冷启动遇到会话过期：用本地记住的账号 + 保存的密码自动重登', () async {
@@ -158,15 +183,18 @@ void main() {
       expect(model.studentId, isNotEmpty);
     });
 
-    test('退出登录清掉记住的账号', () async {
+    test('退出登录清掉记住的账号与姓名', () async {
       final prefs = Preferences.inMemory(
         lastAccounts: <String, String>{_baseUrl: '2407720102'},
+        lastStudentNames: <String, String>{_baseUrl: '房子洋'},
       );
       final rig = buildRig(preferences: prefs);
       await rig.model.signOut();
 
       expect(prefs.accountOf(_baseUrl), isEmpty);
+      expect(prefs.studentNameOf(_baseUrl), isEmpty);
       expect(rig.model.studentId, isEmpty);
+      expect(rig.model.studentName, isEmpty);
     });
   });
 

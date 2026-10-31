@@ -29,7 +29,7 @@ import 'reschedule.dart';
 import 'school.dart';
 import 'timetable.dart';
 
-const int preferencesSchema = 12;
+const int preferencesSchema = 13;
 
 /// 检查更新与安装包下载的默认加速代理。
 const String defaultUpdateProxyUrl = 'https://gh-proxy.org';
@@ -85,6 +85,7 @@ class Preferences {
     List<String>? schools,
     String currentSchool = '',
     Map<String, String>? lastAccounts,
+    Map<String, String>? lastStudentNames,
     bool showTeacher = true,
     bool showLocation = true,
     double cellHeight = defaultCellHeight,
@@ -107,6 +108,7 @@ class Preferences {
        _sectionCounts = clampCounts(sectionCounts ?? defaultSectionCounts),
        _schools = schools ?? <String>[...presetSchoolUrls],
        _lastAccounts = lastAccounts ?? <String, String>{},
+       _lastStudentNames = lastStudentNames ?? <String, String>{},
        _currentSchool = currentSchool.isEmpty
            ? (schools == null || schools.isEmpty
                  ? defaultSchool.baseUrl
@@ -151,6 +153,11 @@ class Preferences {
   /// Cookie 失效后也就无法自动重登。不能指望从 Cookie 里读身份——
   /// 免登冷启动时协议层拿不到用户名。
   Map<String, String> _lastAccounts;
+
+  /// 每个学校上次登录记录的学生姓名（`baseUrl → 姓名`）。
+  ///
+  /// 本地持久化：冷启动时与学号一同直接展示在设置页与调试页，避免阻塞主课表流程。
+  Map<String, String> _lastStudentNames;
 
   /// 课表格子里是否显示教师 / 上课地点。
   ///
@@ -200,6 +207,7 @@ class Preferences {
     List<String>? schools,
     String currentSchool = '',
     Map<String, String>? lastAccounts,
+    Map<String, String>? lastStudentNames,
     bool showTeacher = true,
     bool showLocation = true,
     double cellHeight = defaultCellHeight,
@@ -223,6 +231,7 @@ class Preferences {
     schools: schools,
     currentSchool: currentSchool,
     lastAccounts: lastAccounts,
+    lastStudentNames: lastStudentNames,
     showTeacher: showTeacher,
     showLocation: showLocation,
     cellHeight: cellHeight,
@@ -275,6 +284,7 @@ class Preferences {
     var schools = <String>[...presetSchoolUrls];
     var currentSchool = defaultSchool.baseUrl;
     var lastAccounts = <String, String>{};
+    var lastStudentNames = <String, String>{};
     var showTeacher = true;
     var showLocation = true;
     var cellHeight = defaultCellHeight;
@@ -352,6 +362,15 @@ class Preferences {
           if (rawAccounts is Map<String, dynamic>) {
             lastAccounts = <String, String>{
               for (final entry in rawAccounts.entries)
+                if (entry.value is String && (entry.value as String).isNotEmpty)
+                  entry.key: entry.value as String,
+            };
+          }
+          // schema 13：每个学校上次登录记录的学生姓名（冷启动免等网络）。
+          final rawStudentNames = decoded['lastStudentNames'];
+          if (rawStudentNames is Map<String, dynamic>) {
+            lastStudentNames = <String, String>{
+              for (final entry in rawStudentNames.entries)
                 if (entry.value is String && (entry.value as String).isNotEmpty)
                   entry.key: entry.value as String,
             };
@@ -448,6 +467,7 @@ class Preferences {
       schools: schools,
       currentSchool: currentSchool,
       lastAccounts: lastAccounts,
+      lastStudentNames: lastStudentNames,
       showTeacher: showTeacher,
       showLocation: showLocation,
       cellHeight: cellHeight,
@@ -545,7 +565,7 @@ class Preferences {
   }
 
   // ---------------------------------------------------------------------------
-  // 上次登录的账号（每个学校各记一个）
+  // 上次登录的账号与身份（每个学校各记一份）
   // ---------------------------------------------------------------------------
 
   /// 某个学校上次登录用的账号；没登录过返回空串。
@@ -559,27 +579,63 @@ class Preferences {
     return '';
   }
 
-  Future<void> setAccountOf(String url, String account) async {
+  /// 某个学校上次登录记录的学生姓名；没记录返回空串。
+  ///
+  /// 冷启动直接恢复并展示在设置页与调试页，避免阻塞主课表流程。
+  String studentNameOf(String url) {
+    for (final entry in _lastStudentNames.entries) {
+      if (sameSchool(entry.key, url)) return entry.value;
+    }
+    return '';
+  }
+
+  /// 记录某个学校上次登录的身份信息（学号与姓名）。
+  Future<void> setIdentityOf(
+    String url, {
+    String studentId = '',
+    String studentName = '',
+  }) async {
     final text = url.trim();
-    final name = account.trim();
-    if (text.isEmpty || name.isEmpty) return;
-    if (accountOf(text) == name) return;
-    _lastAccounts = _accountsExcept(text)..[text] = name;
+    final id = studentId.trim();
+    final name = studentName.trim();
+    if (text.isEmpty) return;
+
+    var changed = false;
+    if (id.isNotEmpty && accountOf(text) != id) {
+      _lastAccounts = _mapExcept(_lastAccounts, text)..[text] = id;
+      changed = true;
+    }
+    if (name.isNotEmpty && studentNameOf(text) != name) {
+      _lastStudentNames = _mapExcept(_lastStudentNames, text)..[text] = name;
+      changed = true;
+    }
+    if (changed) {
+      await _flush();
+    }
+  }
+
+  Future<void> setAccountOf(String url, String account) =>
+      setIdentityOf(url, studentId: account);
+
+  /// 退出登录时清掉本校的账号与姓名记录（凭据本身也一并删除）。
+  Future<void> clearIdentityOf(String url) async {
+    final text = url.trim();
+    if (text.isEmpty) return;
+    final hadAccount = accountOf(text).isNotEmpty;
+    final hadName = studentNameOf(text).isNotEmpty;
+    if (!hadAccount && !hadName) return;
+    _lastAccounts = _mapExcept(_lastAccounts, text);
+    _lastStudentNames = _mapExcept(_lastStudentNames, text);
     await _flush();
   }
 
-  /// 退出登录时清掉本校的账号记录（凭据本身也一并删除）。
-  Future<void> clearAccountOf(String url) async {
-    final text = url.trim();
-    if (text.isEmpty || accountOf(text).isEmpty) return;
-    _lastAccounts = _accountsExcept(text);
-    await _flush();
-  }
+  /// 退出登录时清掉本校的账号记录（兼容旧接口）。
+  Future<void> clearAccountOf(String url) => clearIdentityOf(url);
 
-  /// 复制一份"去掉某个学校"的账号表（Map 没有 where，用循环重建）。
-  Map<String, String> _accountsExcept(String url) {
+  /// 复制一份"去掉某个学校"的映射表（Map 没有 where，用循环重建）。
+  Map<String, String> _mapExcept(Map<String, String> source, String url) {
     final next = <String, String>{};
-    for (final entry in _lastAccounts.entries) {
+    for (final entry in source.entries) {
       if (!sameSchool(entry.key, url)) next[entry.key] = entry.value;
     }
     return next;
@@ -842,6 +898,7 @@ class Preferences {
         'schools': _schools,
         'currentSchool': _currentSchool,
         'lastAccounts': _lastAccounts,
+        'lastStudentNames': _lastStudentNames,
         'showTeacher': _showTeacher,
         'showLocation': _showLocation,
         'cellHeight': _cellHeight,

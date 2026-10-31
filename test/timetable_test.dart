@@ -742,6 +742,45 @@ void main() {
     expect(restored.accountOf('https://a.edu.cn/jwglxt'), '333');
   });
 
+  test('上次登录的学生姓名按学校分别记，冷启动免等网络（schema 13）', () async {
+    final prefs = Preferences.inMemory();
+    await prefs.setIdentityOf(
+      'https://a.edu.cn/jwglxt',
+      studentId: '111',
+      studentName: '张三',
+    );
+    await prefs.setIdentityOf(
+      'https://b.edu.cn/jwglxt',
+      studentId: '222',
+      studentName: '李四',
+    );
+
+    expect(prefs.accountOf('https://a.edu.cn/jwglxt'), '111');
+    expect(prefs.studentNameOf('https://a.edu.cn/jwglxt'), '张三');
+    expect(prefs.accountOf('https://b.edu.cn/jwglxt'), '222');
+    expect(prefs.studentNameOf('https://b.edu.cn/jwglxt'), '李四');
+
+    await prefs.clearIdentityOf('https://a.edu.cn/jwglxt');
+    expect(prefs.accountOf('https://a.edu.cn/jwglxt'), isEmpty);
+    expect(prefs.studentNameOf('https://a.edu.cn/jwglxt'), isEmpty);
+    expect(prefs.accountOf('https://b.edu.cn/jwglxt'), '222', reason: '别清错学校');
+    expect(prefs.studentNameOf('https://b.edu.cn/jwglxt'), '李四');
+
+    // 旧文件没有 lastStudentNames 字段：读出来是空，不崩溃。
+    final legacy = Preferences.decode(
+      '{"schema":7,"lastAccounts":{"https://a.edu.cn/jwglxt":"111"}}',
+    );
+    expect(legacy.accountOf('https://a.edu.cn/jwglxt'), '111');
+    expect(legacy.studentNameOf('https://a.edu.cn/jwglxt'), isEmpty);
+
+    // 新格式能读回姓名
+    final restored = Preferences.decode(
+      '{"schema":13,"lastAccounts":{"https://a.edu.cn/jwglxt/":"333"},"lastStudentNames":{"https://a.edu.cn/jwglxt/":"王五"}}',
+    );
+    expect(restored.accountOf('https://a.edu.cn/jwglxt'), '333');
+    expect(restored.studentNameOf('https://a.edu.cn/jwglxt'), '王五');
+  });
+
   group('课前提醒设置（schema 11）', () {
     test('默认关闭，提前量默认 10 分钟，横幅形态', () {
       final prefs = Preferences.inMemory();

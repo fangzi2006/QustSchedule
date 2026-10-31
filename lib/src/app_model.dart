@@ -715,6 +715,10 @@ class AppModel extends ChangeNotifier {
       if (cached != null && sameSchool(cached.baseUrl, _schoolBaseUrl)) {
         // 先拿缓存把课表立起来：打开就能看，不卡网络。
         _restoreCachedSchedule(cached);
+        // 有 Cookie 可用且身份未全（老版本升级无姓名缓存），在后台静默补齐，不阻塞冷启动。
+        if (snapshot != null && (_studentName.isEmpty || _studentId.isEmpty)) {
+          _identitySync = _syncIdentityQuietly();
+        }
         // 有 Cookie 可用、且用户开了静默更新、且距上次抓取过了最小间隔，
         // 才后台静默刷一次；否则先让用户看缓存，手动刷新再说。
         if (snapshot != null &&
@@ -793,7 +797,6 @@ class AppModel extends ChangeNotifier {
       if (_disposed) return;
       _schedule = schedule;
       _termId = schedule.termId;
-      await _readIdentity();
       _applyCalendar(schedule);
       // 抓到就落缓存：下次冷启动直接展示，不再干等网络。
       unawaited(_saveScheduleCache(schedule));
@@ -807,6 +810,7 @@ class AppModel extends ChangeNotifier {
         clearHint();
       }
       _loadTermsQuietly();
+      _identitySync = _syncIdentityQuietly();
     } on AcademicError catch (error) {
       _refreshing = false;
       if (silent) {
@@ -1056,10 +1060,10 @@ class AppModel extends ChangeNotifier {
           if (_disposed) return;
           _schedule = schedule;
           _termId = schedule.termId;
-          await _readIdentity();
           _captcha = null;
           _setStatus(AppStatus.ready);
           _loadTermsQuietly();
+          _identitySync = _syncIdentityQuietly();
         } on AcademicError catch (error) {
           _fail(error);
         } catch (error) {
@@ -1085,10 +1089,15 @@ class AppModel extends ChangeNotifier {
     switch (state) {
       case AuthenticatedState():
         _captcha = null;
+        if (state.studentName.isNotEmpty) _studentName = state.studentName;
+        if (state.studentId.isNotEmpty) _studentId = state.studentId;
         // 登录成功才把地址收进地址簿：只记"能用的"地址，避免手滑打错也留着。
         await _preferences.setCurrentSchool(_schoolBaseUrl);
-        // 同时记住账号：下次冷启动要用它算凭据的 key。
-        await _rememberAccount(_username);
+        // 同时记住账号与姓名：下次冷启动直接展示并用于计算凭据 key。
+        await _rememberIdentity(
+          studentId: _studentId.isNotEmpty ? _studentId : _username,
+          studentName: _studentName,
+        );
         await _loadSchedule();
       case CaptchaState():
         _captcha = state;
@@ -1241,56 +1250,99 @@ class AppModel extends ChangeNotifier {
     _notifyPrefs();
   }
 
-  /// 冷启动恢复"上次在这个学校登录的账号"（不联网）。
+  /// 冷启动恢复"上次在这个学校登录的账号与姓名"（不联网）。
   ///
   /// 作用有两个：
-  ///  1. 调试页 / 设置页立刻能显示学号，不必等网络把身份读回来；
+  ///  1. 调试页 / 设置页立刻能显示学号与姓名，不必等网络把身份读回来；
   ///  2. 凭据按「地址|账号」存，账号算不出来就取不到密码——Cookie 失效后
   ///     会变成"明明存了密码却无法自动重登"。
   void _restoreAccount() {
-    if (_username.isNotEmpty) return;
-    final saved = _preferences.accountOf(_schoolBaseUrl);
-    if (saved.isEmpty) return;
-    _username = saved;
-    service.accountHint = saved;
-    if (_studentId.isEmpty) _studentId = saved;
+    final savedAccount = _preferences.accountOf(_schoolBaseUrl);
+    final savedName = _preferences.studentNameOf(_schoolBaseUrl);
+    if (_username.isEmpty && savedAccount.isNotEmpty) {
+      _username = savedAccount;
+      service.accountHint = savedAccount;
+    }
+    if (_studentId.isEmpty && savedAccount.isNotEmpty) {
+      _studentId = savedAccount;
+    }
+    if (_studentName.isEmpty && savedName.isNotEmpty) {
+      _studentName = savedName;
+    }
   }
 
-  /// 记住"这台设备上次登录的账号"（按学校区分），供下次冷启动使用。
-  Future<void> _rememberAccount(String account) async {
-    final text = account.trim();
-    if (text.isEmpty) return;
-    _username = text;
-    service.accountHint = text;
-    if (_studentId.isEmpty) _studentId = text;
-    await _preferences.setAccountOf(_schoolBaseUrl, text);
+  /// 记住这台设备在这所学校的身份（学号与姓名），供下次冷启动使用。
+  Future<void> _rememberIdentity({
+    required String studentId,
+    String studentName = '',
+  }) async {
+    final id = studentId.trim();
+    final name = studentName.trim();
+    if (id.isEmpty && name.isEmpty) return;
+    if (id.isNotEmpty) {
+      _username = id;
+      service.accountHint = id;
+      _studentId = id;
+    }
+    if (name.isNotEmpty) {
+      _studentName = name;
+    }
+    await _preferences.setIdentityOf(
+      _schoolBaseUrl,
+      studentId: id,
+      studentName: name,
+    );
     if (_disposed) return;
     notifyListeners();
     _notifyPrefs();
   }
 
-  /// 读一次身份（姓名 / 学号）。
+  Future<void>? _identitySync;
+
+  @visibleForTesting
+  Future<void>? get identitySyncForTest => _identitySync;
+
+  /// 静默同步身份信息（姓名 / 学号），不阻塞课表更新与主界面。
   ///
-  /// 课表接口不返回"我是谁"：Cookie 免登冷启动时 `sessionInfo` 的姓名是空的，
-  /// 于是出现了"能看课表但设置页显示未登录"。这里补一次 `checkSession`。
-  Future<void> _readIdentity() async {
-    var info = service.sessionInfo;
-    if (info == null || info.studentName.isEmpty || info.studentId.isEmpty) {
-      await service.ensureIdentity();
-      info = service.sessionInfo;
-    }
-    if (info != null) {
-      if (info.studentName.isNotEmpty) _studentName = info.studentName;
-      if (info.studentId.isNotEmpty) _studentId = info.studentId;
-    }
-    // 还是读不到：至少用工号/学号顶上，别让界面显示"未登录"。
-    if (_studentName.isEmpty && _studentId.isEmpty && username.isNotEmpty) {
-      _studentId = username;
-    }
-    // 老安装升级上来的情况：以前没存账号，这次联网读到了学号，顺手补记，
-    // 下次 Cookie 失效就能直接自动重登。
-    if (_username.isEmpty && _studentId.isNotEmpty) {
-      unawaited(_rememberAccount(_studentId));
+  /// 绝大多数情况下冷启动已从本地 Preferences 恢复姓名与学号，此时直接跳过（0 额外网络开销）。
+  /// 仅在姓名或学号为空（如升级迁移、初次免登导入）时在后台静默补齐并持久化。
+  Future<void> _syncIdentityQuietly() async {
+    if (_disposed) return;
+    // 如果内存中已具备完整的学号与姓名，无需发起额外的网络探测。
+    if (_studentId.isNotEmpty && _studentName.isNotEmpty) return;
+
+    try {
+      var info = service.sessionInfo;
+      if (info == null || info.studentName.isEmpty || info.studentId.isEmpty) {
+        await service.ensureIdentity();
+        if (_disposed) return;
+        info = service.sessionInfo;
+      }
+      var updated = false;
+      if (info != null) {
+        if (info.studentName.isNotEmpty && _studentName != info.studentName) {
+          _studentName = info.studentName;
+          updated = true;
+        }
+        if (info.studentId.isNotEmpty && _studentId != info.studentId) {
+          _studentId = info.studentId;
+          updated = true;
+        }
+      }
+      if (_studentName.isEmpty && _studentId.isEmpty && username.isNotEmpty) {
+        _studentId = username;
+        updated = true;
+      }
+      if (updated ||
+          (_studentName.isNotEmpty &&
+              _preferences.studentNameOf(_schoolBaseUrl).isEmpty)) {
+        await _rememberIdentity(
+          studentId: _studentId.isNotEmpty ? _studentId : username,
+          studentName: _studentName,
+        );
+      }
+    } catch (_) {
+      // 身份拉取失败不影响课表展示，静默吞掉
     }
   }
 
@@ -1317,6 +1369,12 @@ class AppModel extends ChangeNotifier {
     // 学校偶尔不返回姓名，别把已经读到的名字擦成空串。
     if (state.studentName.isNotEmpty) _studentName = state.studentName;
     if (state.studentId.isNotEmpty) _studentId = state.studentId;
+    unawaited(
+      _rememberIdentity(
+        studentId: _studentId.isNotEmpty ? _studentId : account,
+        studentName: _studentName,
+      ),
+    );
     notifyListeners();
     _notifyPrefs();
     await _loadSchedule(background: true);
@@ -1363,7 +1421,10 @@ class AppModel extends ChangeNotifier {
 
   /// 仅测试用：按"首次加载"路径取一次课表（不经过 boot 的目录/凭据初始化）。
   @visibleForTesting
-  Future<void> loadScheduleForTest() => _loadSchedule();
+  Future<void> loadScheduleForTest() async {
+    await _loadSchedule();
+    await _identitySync;
+  }
 
   /// 仅测试用：把状态设为指定值（覆盖 loading / failed 的界面断言）。
   @visibleForTesting
@@ -1375,14 +1436,15 @@ class AppModel extends ChangeNotifier {
     _setStatus(status, message: message, code: code);
   }
 
-  /// 退出登录。只有一个入口，且**必定清掉保存的账号密码**——
+  /// 退出登录。只有一个入口，且**必定清掉保存的账号密码与身份缓存**——
   /// 这个 app 的密码只为自动重登存在，用户点退出就是要它别再自动登。
   Future<void> signOut() async {
     await service.signOut(forgetCredentials: true);
     if (_disposed) return;
-    await _preferences.clearAccountOf(_schoolBaseUrl);
+    await _preferences.clearIdentityOf(_schoolBaseUrl);
     _username = '';
     _studentId = '';
+    _studentName = '';
     _studentName = '';
     _schedule = null;
     _terms = null;
