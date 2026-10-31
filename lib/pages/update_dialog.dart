@@ -319,7 +319,11 @@ class _DownloadProgressDialogState extends State<_DownloadProgressDialog>
         _downloadedFile = file;
       });
 
-      await _executeInstall(file);
+      // Android 端若已具备安装权限可自动唤起系统安装器；
+      // Windows 端必须等待用户明确确认点击「立即重启更新」，切忌直接退出主程序导致弹窗闪退。
+      if (Platform.isAndroid) {
+        await _executeInstall(file);
+      }
     } catch (err) {
       if (_cancelToken.isCancelled) return;
       if (!mounted) return;
@@ -577,7 +581,9 @@ class _DownloadProgressDialogState extends State<_DownloadProgressDialog>
               ),
             ] else ...[
               Text(
-                '安装包已下载就绪，点击下方按钮即可覆盖安装。',
+                Platform.isWindows
+                    ? '新版本已下载就绪，点击下方按钮将自动应用更新并重新启动青科课表通。'
+                    : '安装包已下载就绪，点击下方按钮即可覆盖安装。',
                 style: TextStyle(
                   fontSize: 13,
                   color: theme.colorScheme.onSurfaceVariant,
@@ -600,11 +606,29 @@ class _DownloadProgressDialogState extends State<_DownloadProgressDialog>
           )
         else
           FilledButton.icon(
-            icon: const Icon(Icons.install_mobile_rounded, size: 18),
-            onPressed: _downloadedFile == null
+            icon: _isTriggeringInstall
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : Icon(
+                    Platform.isWindows
+                        ? Icons.restart_alt_rounded
+                        : Icons.install_mobile_rounded,
+                    size: 18,
+                  ),
+            onPressed: (_downloadedFile == null || _isTriggeringInstall)
                 ? null
                 : () => _executeInstall(_downloadedFile!),
-            label: const Text('立即安装'),
+            label: Text(
+              _isTriggeringInstall
+                  ? '正在准备更新…'
+                  : (Platform.isWindows ? '立即重启更新' : '立即安装'),
+            ),
           ),
       ],
     );

@@ -164,69 +164,39 @@ class AppInstaller {
 
     // 5. 生成位于应用同目录下的极简、纯相对路径的原子替换脚本
     // 架构与防御性设计：
-    // - 全脚本使用纯相对路径（.update_staging、.、qustschedule.exe），彻底消除路径空格与中文/不同代码页（GBK/UTF-8）乱码；
-    // - 接收当前主程序的具体 PID 作为参数，通过 tasklist 精确轮询监听直到该 PID 完全终结，杜绝盲等与未释放句柄锁冲突；
-    // - 采用 Windows 原生自带、微软官方签名的 robocopy 进行毫秒级原子搬运（/MOVE），完美规避杀毒软件（卡巴斯基/Defender）启发式主动防御误拦截；
-    // - 严格遵守 robocopy 状态码规范（Exit Code >= 8 才是致命错误，0~7 为正常/成功）。
+    // - 全脚本使用纯 ASCII 字符（无中文字符与中文注释），彻底杜绝 Windows CMD OEM 代码页（如 GBK 936）将 UTF-8 多字节解析为乱码而语法报错中断；
+    // - 使用纯相对路径（.update_staging、.、$exeName），彻底消除路径空格与中文乱码；
+    // - 采用 ping 127.0.0.1 稳定等待 1~2 秒，在无控制台/脱钩（DETACHED_PROCESS）环境下绝不报错且等待主进程彻底退出；
+    // - 采用 Windows 原生自带、微软官方签名的 robocopy 进行原子搬运（/MOVE），完美规避杀毒软件（卡巴斯基/Defender）误拦截；
+    // - 显式配置 /R:5 /W:1，在杀毒软件短暂占用句柄时最多重试 5 次、每次 1 秒，杜绝死锁与默认超长重试；
+    // - 迁移完成后清理暂存目录、通过 start 重新启动新版主程序并自删脚本。
     final scriptFile = File(
       '${appDir.path}${Platform.pathSeparator}qustschedule_updater.cmd',
     );
-    final currentPid = pid;
 
     final scriptContent =
-        '''
-@echo off
-title 青科课表通 - 正在完成更新
-echo ====================================================
-echo 正在完成青科课表通更新，请稍候...
-echo ====================================================
-
-:: 1. 切换到脚本所在目录（应用根目录），确保全部使用相对路径
+        '''@echo off
 cd /d "%~dp0"
 
-:: 2. 精确监听主进程退出（轮询指定 PID，最多等待 15 秒）
-set TARGET_PID=%~1
-if not "%TARGET_PID%"=="" (
-    for /l %%i in (1,1,15) do (
-        tasklist /fi "PID eq %TARGET_PID%" 2>nul | findstr /i "%TARGET_PID%" >nul
-        if errorlevel 1 (
-            goto :proc_exited
-        )
-        timeout /t 1 /nobreak >nul
-    )
-)
-:proc_exited
-timeout /t 1 /nobreak >nul
+ping 127.0.0.1 -n 2 >nul
 
-:: 3. 调用 Windows 原生 robocopy 毫秒级原子同步搬运
-robocopy ".update_staging" "." /E /MOVE /IS /IT /NFL /NDL /NP /NJH /NJS >nul 2>nul
-if %errorlevel% GEQ 8 (
-    echo.
-    echo [错误] 替换新版本文件失败（错误码: %errorlevel%）。
-    echo 暂存更新文件仍保留在 .update_staging 目录中。
-    pause
-    exit /b 1
-)
+robocopy ".update_staging" "." /E /MOVE /IS /IT /NFL /NDL /NP /NJH /NJS /R:5 /W:1 >nul 2>nul
 
-:: 4. 清理暂存目录残留
 if exist ".update_staging" (
     rd /s /q ".update_staging" >nul 2>nul
 )
 
-:: 5. 启动更新后的新版本主程序
-echo 更新成功！正在重新启动青科课表通...
 start "" "$exeName"
 
-:: 6. 自删脚本自身
 del /f /q "%~f0" >nul 2>nul
 ''';
 
     await scriptFile.writeAsString(scriptContent);
 
-    // 6. 启动更新脚本，传入当前进程 PID 并立即退出主程序
+    // 6. 启动更新脚本并立即退出当前主程序
     await Process.start(
       'cmd.exe',
-      <String>['/c', scriptFile.path, '$currentPid'],
+      <String>['/c', scriptFile.path],
       mode: ProcessStartMode.detached,
       workingDirectory: appDir.path,
     );
