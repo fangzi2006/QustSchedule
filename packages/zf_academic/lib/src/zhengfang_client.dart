@@ -565,6 +565,10 @@ class ZhengfangClient {
           items.add(current);
           selected.add(current);
         }
+        // 当前页面已取到学期列表与当前活跃学期，不再请求备用页面（如成绩页）。
+        if (items.isNotEmpty && selected.isNotEmpty) {
+          break;
+        }
       } catch (error) {
         // 会话过期、取消、权限类错误不能被吞掉，否则会把"读不到"当成"没有学期"。
         final academic =
@@ -1040,8 +1044,9 @@ class ZhengfangClient {
     var route = _route ??
         ZfRoute(
           page: _endpoints.schedulePath,
-          query: _endpoints.schedulePath,
+          query: _endpoints.scheduleQueryPath ?? _endpoints.schedulePath,
           code: _endpoints.scheduleGnmkdm,
+          personal: _endpoints.personal,
         );
 
     Future<HttpResponse> run() async {
@@ -1103,7 +1108,7 @@ class ZhengfangClient {
       if (match.group(2) == '/kbcx/xskbcx_cxXskbcxIndex.html') {
         routes.add(ZfRoute(
           page: match.group(2)!,
-          query: 'kbcx/xskbcx_cxXsgrkb.html',
+          query: '/kbcx/xskbcx_cxXsgrkb.html',
           code: match.group(1)!,
           personal: true,
         ));

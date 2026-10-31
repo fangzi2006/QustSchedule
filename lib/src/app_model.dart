@@ -942,7 +942,7 @@ class AppModel extends ChangeNotifier {
     _notifyPrefs();
   }
 
-  Future<void> refresh() => _loadSchedule(termId: _termId, background: true);
+  Future<void> refresh() => _loadSchedule(background: true);
 
   // -------------------------------------------------------------------------
   // 回到前台

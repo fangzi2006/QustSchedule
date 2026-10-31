@@ -355,6 +355,27 @@ void main() {
       rig.model.dispose();
     });
 
+    test('旧学期缓存刷新时能自适应升级到新学期', () async {
+      final rig = buildRig();
+      // 本地缓存是旧学期
+      rig.model.hydrateForTest(schedule: sampleSchedule('2025-2026-2'));
+      expect(rig.model.termId, '2025-2026-2');
+
+      // 教务系统已进入新学期，返回 2026-2027-1
+      rig.backend.fetchBehavior = (call, termId) async {
+        // 验证传入的 termId 是 null（允许教务自决当前活跃学期）
+        expect(termId, isNull);
+        return sampleSchedule('2026-2027-1');
+      };
+
+      await rig.model.refresh();
+
+      expect(rig.model.termId, '2026-2027-1');
+      expect(rig.model.schedule?.termId, '2026-2027-1');
+      expect(rig.model.hint, '已更新');
+      rig.model.dispose();
+    });
+
     test('重登刷新时提示先切到正在重新登录，登录完切回更新中，取回后已更新', () async {
       final rig = buildRig();
       rig.model.hydrateForTest(schedule: sampleSchedule());

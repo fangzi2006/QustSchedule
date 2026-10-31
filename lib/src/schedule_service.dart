@@ -403,6 +403,7 @@ class ScheduleService {
     final client = backendFactory(
       ZfClientConfig(
         baseUrl: _baseUrl,
+        endpoints: qustZfEndpoints,
         cookies: snapshot,
         onRequest: _recordRequest,
       ),

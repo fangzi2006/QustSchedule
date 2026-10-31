@@ -219,7 +219,9 @@ final class ZfEndpoints {
   final String captchaPath;
   final String studentInfoPath;
   final String schedulePath;
+  final String? scheduleQueryPath;
   final String scheduleGnmkdm;
+  final bool personal;
   final String gradesPath;
   final String gradeGnmkdm;
 
@@ -229,7 +231,9 @@ final class ZfEndpoints {
     this.captchaPath = '/kaptcha',
     this.studentInfoPath = '/xtgl/index_cxYhxxIndex.html',
     this.schedulePath = '/kbcx/xskbcx_cxXsKb.html',
+    this.scheduleQueryPath,
     this.scheduleGnmkdm = 'N253508',
+    this.personal = false,
     this.gradesPath = '/cjcx/cjcx_cxDgXscj.html',
     this.gradeGnmkdm = 'N305005',
   });
@@ -240,7 +244,9 @@ final class ZfEndpoints {
     String? captchaPath,
     String? studentInfoPath,
     String? schedulePath,
+    String? scheduleQueryPath,
     String? scheduleGnmkdm,
+    bool? personal,
     String? gradesPath,
     String? gradeGnmkdm,
   }) {
@@ -250,12 +256,22 @@ final class ZfEndpoints {
       captchaPath: captchaPath ?? this.captchaPath,
       studentInfoPath: studentInfoPath ?? this.studentInfoPath,
       schedulePath: schedulePath ?? this.schedulePath,
+      scheduleQueryPath: scheduleQueryPath ?? this.scheduleQueryPath,
       scheduleGnmkdm: scheduleGnmkdm ?? this.scheduleGnmkdm,
+      personal: personal ?? this.personal,
       gradesPath: gradesPath ?? this.gradesPath,
       gradeGnmkdm: gradeGnmkdm ?? this.gradeGnmkdm,
     );
   }
 }
+
+/// 青岛科技大学等使用个人课表（N2151）的端点预设。
+const ZfEndpoints qustZfEndpoints = ZfEndpoints(
+  schedulePath: '/kbcx/xskbcx_cxXskbcxIndex.html',
+  scheduleQueryPath: '/kbcx/xskbcx_cxXsgrkb.html',
+  scheduleGnmkdm: 'N2151',
+  personal: true,
+);
 
 enum RequestPurpose { auth, query }
 

@@ -132,7 +132,8 @@ export 'src/types.dart'
         ZfClientConfig,
         ZfEndpoints,
         ZfHttpTransport,
-        ZfProbeReport;
+        ZfProbeReport,
+        qustZfEndpoints;
 export 'src/urls.dart'
     show
         calendarTerm,
