@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/pages/about_page.dart';
@@ -102,6 +104,53 @@ void main() {
     test('空说明或纯空白返回空字符串', () {
       expect(ReleaseInfo.cleanReleaseBody(''), isEmpty);
       expect(ReleaseInfo.cleanReleaseBody('   \n  \r\n  '), isEmpty);
+    });
+  });
+
+  group('安装包历史文件自动清理 (Clean Old Update Files)', () {
+    test('自动静默清理历史旧版本安装包与未完成的临时分片文件', () async {
+      final tempDir = Directory.systemTemp.createTempSync('qust_update_test_');
+      try {
+        final oldApk = File(
+          '${tempDir.path}/QustSchedule_v1.0.0-arm64-v8a.apk',
+        );
+        await oldApk.writeAsString('test-old-content');
+
+        final sameApk = File(
+          '${tempDir.path}/QustSchedule_v1.2.2-arm64-v8a.apk',
+        );
+        await sameApk.writeAsString('test-same-content');
+
+        final newerApk = File(
+          '${tempDir.path}/QustSchedule_v9.9.9-arm64-v8a.apk',
+        );
+        await newerApk.writeAsString('test-newer-content');
+
+        final partFile = File('${tempDir.path}/QustSchedule_v1.2.3.apk.part0');
+        await partFile.writeAsString('test-part');
+
+        final unrelated = File('${tempDir.path}/other_app.apk');
+        await unrelated.writeAsString('unrelated');
+
+        // 当前运行版本为 1.2.2
+        final deleted = await UpdateService.cleanOldUpdateFiles(
+          currentVersion: '1.2.2',
+          targetDirectory: tempDir,
+        );
+        expect(deleted, equals(3));
+
+        // 1.0.0 与 1.2.2 均应当被删除
+        expect(await oldApk.exists(), isFalse);
+        expect(await sameApk.exists(), isFalse);
+        // .part 切片临时文件应当被删除
+        expect(await partFile.exists(), isFalse);
+        // 比当前版本新的安装包应当保留
+        expect(await newerApk.exists(), isTrue);
+        // 与更新无关的其他文件保留
+        expect(await unrelated.exists(), isTrue);
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
     });
   });
 

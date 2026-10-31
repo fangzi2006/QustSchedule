@@ -1,6 +1,8 @@
 /// 关于页面：应用图标、版本号、内联检查更新操作，以及更新日志、代理设置、调试信息、开源协议与项目主页入口。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -30,6 +32,12 @@ class _AboutPageState extends State<AboutPage> {
   bool _checkingUpdate = false;
   String? _updateStatusText;
   bool _lastCheckHadError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(UpdateService.cleanOldUpdateFiles(currentVersion: appVersion));
+  }
 
   Future<void> _checkUpdate() async {
     if (_checkingUpdate) return;

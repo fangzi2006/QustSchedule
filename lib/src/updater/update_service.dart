@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'update_models.dart';
 import 'version_comparator.dart';
+import '../app_version.dart';
 
 /// 下载取消令牌。
 class CancelToken {
@@ -35,6 +36,60 @@ class UpdateService {
   static const Duration apiTimeout = Duration(seconds: 6);
   static const Duration downloadConnectTimeout = Duration(seconds: 15);
   static const Duration downloadIdleTimeout = Duration(seconds: 30);
+
+  /// 伪装现代浏览器 User-Agent，规避公共反代与 CDN 针对非浏览器爬虫施加的低带宽 QoS 限流队列（防 500KB~1MB/s 限制）
+  static const String browserUserAgent =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 QustSchedule/App';
+
+  /// 多线程分块并发切片数（3 个并发切片为最佳吞吐与反爬平衡点）
+  static const int maxConcurrentChunks = 3;
+
+  /// 启用多线程并发分块的最小体积阈值（小于 4MB 的小文件单线程开销更小）
+  static const int minChunkingBytes = 4 * 1024 * 1024;
+
+  /// 静默清理临时目录中残留的历史安装包（版本号 <= 当前应用运行版本）以及未完成的临时切片文件。
+  static Future<int> cleanOldUpdateFiles({
+    String? currentVersion,
+    Directory? targetDirectory,
+  }) async {
+    try {
+      final curVer = currentVersion ?? appVersion;
+      if (curVer.isEmpty || curVer == '-') return 0;
+      final tempDir = targetDirectory ?? await getTemporaryDirectory();
+      final entities = tempDir.listSync();
+      final verRegex = RegExp(r'^QustSchedule_v?([0-9A-Za-z\.\+\-]+?)(?:-|\.)');
+
+      int deletedCount = 0;
+      for (final entity in entities) {
+        if (entity is! File) continue;
+        final filename = entity.uri.pathSegments.last;
+        if (!filename.startsWith('QustSchedule_')) continue;
+
+        // 清理切片碎片
+        if (filename.contains('.part')) {
+          try {
+            entity.deleteSync();
+            deletedCount++;
+          } catch (_) {}
+          continue;
+        }
+
+        final match = verRegex.firstMatch(filename);
+        if (match != null) {
+          final fileVer = match.group(1)!;
+          if (compareSemanticVersions(fileVer, curVer) <= 0) {
+            try {
+              entity.deleteSync();
+              deletedCount++;
+            } catch (_) {}
+          }
+        }
+      }
+      return deletedCount;
+    } catch (_) {
+      return 0;
+    }
+  }
 
   /// 根据加速代理前缀拼装最终请求/下载链接。
   static String buildProxiedUrl(String rawUrl, String proxyPrefix) {
@@ -190,6 +245,8 @@ class UpdateService {
     required String selectedProxy,
     List<String> backupProxies = const <String>[],
   }) async {
+    // 异步清理历史旧版安装包与碎片，不阻塞检查流程
+    unawaited(cleanOldUpdateFiles(currentVersion: currentVersion));
     if (!Platform.isAndroid && !Platform.isWindows) {
       return const UpdateCheckResult(
         status: UpdateStatus.unsupportedPlatform,
@@ -286,7 +343,7 @@ class UpdateService {
     );
   }
 
-  /// 带多节点轮询回退的流式下载安装包。
+  /// 带多节点轮询回退与 3 线程并发分块加速的安装包下载方法。
   Future<File> downloadAssetWithFallback({
     required ReleaseAsset asset,
     required String selectedProxy,
@@ -309,7 +366,7 @@ class UpdateService {
     final tempDir = await getTemporaryDirectory();
     final file = File('${tempDir.path}/${asset.name}');
 
-    // 1. 本地完整性嗅探与复用：若本地已存在同名且大小完全匹配的文件，直接跳过网络下载
+    // 1. 本地完整性嗅探与复用：若本地已存在同名且大小完全匹配的文件，直接跳过网络下载（0秒秒进安装）
     if (file.existsSync()) {
       try {
         final localLen = file.lengthSync();
@@ -358,78 +415,105 @@ class UpdateService {
       final downloadUrl = buildProxiedUrl(asset.downloadUrl, candidate);
 
       try {
-        final request = await _client
+        // 先发送 Range 探测请求：检查服务端是否支持 206 Partial Content，并读取精准文件总长
+        final probeReq = await _client
             .getUrl(Uri.parse(downloadUrl))
             .timeout(downloadConnectTimeout);
-        // 关键请求头调优：
-        // 1) 声明现代通用浏览器 User-Agent，规避公共反代/CDN 针对非浏览器爬虫的低带宽 QoS 限流队列
-        request.headers.set(
-          'User-Agent',
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 QustSchedule/App',
-        );
-        // 2) 显式声明纯直通二进制流，禁止代理对已压缩包做多余 gzip 转码与中间缓冲
-        request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
-        request.headers.set(HttpHeaders.acceptHeader, '*/*');
-        request.headers.set(HttpHeaders.connectionHeader, 'keep-alive');
-        final response = await request.close().timeout(downloadConnectTimeout);
 
-        if (response.statusCode != 200) {
+        probeReq.headers.set('User-Agent', browserUserAgent);
+        probeReq.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+        probeReq.headers.set(HttpHeaders.rangeHeader, 'bytes=0-0');
+        probeReq.headers.set(HttpHeaders.acceptHeader, '*/*');
+        probeReq.headers.set(HttpHeaders.connectionHeader, 'keep-alive');
+
+        final probeRes = await probeReq.close().timeout(downloadConnectTimeout);
+
+        if (probeRes.statusCode == HttpStatus.partialContent) {
+          // 服务端支持 Range (206)
+          int totalBytes = asset.size;
+          final cr = probeRes.headers.value(HttpHeaders.contentRangeHeader);
+          if (cr != null && cr.contains('/')) {
+            final parsedTotal = int.tryParse(cr.split('/').last.trim());
+            if (parsedTotal != null && parsedTotal > 0) {
+              totalBytes = parsedTotal;
+            }
+          }
+          await probeRes.drain<void>();
+
+          if (totalBytes >= minChunkingBytes) {
+            try {
+              // 文件大于 4MB 且支持 Range：优先开启 3 线程并发分块极速下载
+              await _downloadMultiChunk(
+                downloadUrl: downloadUrl,
+                targetFile: file,
+                totalBytes: totalBytes,
+                onProgress: onProgress,
+                cancelToken: cancelToken,
+              );
+            } catch (chunkError) {
+              if (cancelToken?.isCancelled == true) rethrow;
+              // 若该节点对并发切片限流或连接中断，立即在该节点内平滑回退单线程直通流
+              final singleReq = await _client
+                  .getUrl(Uri.parse(downloadUrl))
+                  .timeout(downloadConnectTimeout);
+              singleReq.headers.set('User-Agent', browserUserAgent);
+              singleReq.headers.set(
+                HttpHeaders.acceptEncodingHeader,
+                'identity',
+              );
+              singleReq.headers.set(HttpHeaders.acceptHeader, '*/*');
+              singleReq.headers.set(HttpHeaders.connectionHeader, 'keep-alive');
+              final singleRes = await singleReq.close().timeout(
+                downloadConnectTimeout,
+              );
+              await _downloadSingleStream(
+                response: singleRes,
+                targetFile: file,
+                totalBytes: totalBytes,
+                onProgress: onProgress,
+                cancelToken: cancelToken,
+              );
+            }
+          } else {
+            // 小文件开销不大，走单连接直通
+            final singleReq = await _client
+                .getUrl(Uri.parse(downloadUrl))
+                .timeout(downloadConnectTimeout);
+            singleReq.headers.set('User-Agent', browserUserAgent);
+            singleReq.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+            singleReq.headers.set(HttpHeaders.acceptHeader, '*/*');
+            singleReq.headers.set(HttpHeaders.connectionHeader, 'keep-alive');
+            final singleRes = await singleReq.close().timeout(
+              downloadConnectTimeout,
+            );
+            await _downloadSingleStream(
+              response: singleRes,
+              targetFile: file,
+              totalBytes: totalBytes,
+              onProgress: onProgress,
+              cancelToken: cancelToken,
+            );
+          }
+        } else if (probeRes.statusCode == HttpStatus.ok) {
+          // 服务端忽略了 Range 返回了 200，说明不支持 Range，但此时流已就绪！
+          // 零额外网络握手，直接复用当前响应流作为单线程下载
+          final totalBytes = probeRes.contentLength > 0
+              ? probeRes.contentLength
+              : asset.size;
+          await _downloadSingleStream(
+            response: probeRes,
+            targetFile: file,
+            totalBytes: totalBytes,
+            onProgress: onProgress,
+            cancelToken: cancelToken,
+          );
+        } else {
+          await probeRes.drain<void>();
           lastError = HttpException(
-            'HTTP ${response.statusCode}',
+            'HTTP ${probeRes.statusCode}',
             uri: Uri.parse(downloadUrl),
           );
           continue;
-        }
-
-        final totalBytes = response.contentLength > 0
-            ? response.contentLength
-            : asset.size;
-        var receivedBytes = 0;
-        var lastTime = DateTime.now();
-        var lastBytes = 0;
-        var currentSpeed = 0.0;
-
-        final sink = file.openWrite();
-        try {
-          // 使用 timeout 限制每片数据块之间的空闲等待（防断流，充足 30s 缓冲时间）
-          await for (final chunk in response.timeout(downloadIdleTimeout)) {
-            if (cancelToken?.isCancelled == true) {
-              throw Exception('下载已取消');
-            }
-            sink.add(chunk);
-            receivedBytes += chunk.length;
-
-            final now = DateTime.now();
-            final elapsedMs = now.difference(lastTime).inMilliseconds;
-            if (elapsedMs >= 350 || receivedBytes == totalBytes) {
-              if (elapsedMs > 0) {
-                final instantSpeed =
-                    (receivedBytes - lastBytes) / (elapsedMs / 1000.0);
-                // 平滑速度指数移动平均，避免瞬时跳变引发界面抽搐
-                currentSpeed = currentSpeed == 0.0
-                    ? instantSpeed
-                    : 0.7 * instantSpeed + 0.3 * currentSpeed;
-              }
-              lastTime = now;
-              lastBytes = receivedBytes;
-              onProgress(
-                DownloadProgress(
-                  receivedBytes: receivedBytes,
-                  totalBytes: totalBytes,
-                  speedBytesPerSec: currentSpeed,
-                ),
-              );
-            }
-          }
-          await sink.flush();
-        } catch (e) {
-          if (cancelToken?.isCancelled == true) rethrow;
-          lastError = e;
-          continue; // 断流时切换下一节点重试
-        } finally {
-          try {
-            await sink.close();
-          } catch (_) {}
         }
 
         // SHA256 校验
@@ -451,6 +535,227 @@ class UpdateService {
     }
 
     throw Exception('所有加速节点与直连下载均尝试失败: $lastError');
+  }
+
+  /// 3 线程并发分块下载并在完成后自动组装。
+  Future<void> _downloadMultiChunk({
+    required String downloadUrl,
+    required File targetFile,
+    required int totalBytes,
+    required void Function(DownloadProgress progress) onProgress,
+    CancelToken? cancelToken,
+  }) async {
+    const numChunks = maxConcurrentChunks;
+    final chunkSize = totalBytes ~/ numChunks;
+
+    final workerReceived = List<int>.filled(numChunks, 0);
+    var lastReportTime = DateTime.now();
+    var lastTotalBytes = 0;
+    var currentSpeed = 0.0;
+
+    void reportProgress() {
+      final now = DateTime.now();
+      final elapsedMs = now.difference(lastReportTime).inMilliseconds;
+      final currentTotal = workerReceived.fold<int>(0, (sum, val) => sum + val);
+
+      if (elapsedMs >= 350 || currentTotal >= totalBytes) {
+        if (elapsedMs > 0) {
+          final instantSpeed =
+              (currentTotal - lastTotalBytes) / (elapsedMs / 1000.0);
+          currentSpeed = currentSpeed == 0.0
+              ? instantSpeed
+              : 0.7 * instantSpeed + 0.3 * currentSpeed;
+        }
+        lastReportTime = now;
+        lastTotalBytes = currentTotal;
+
+        onProgress(
+          DownloadProgress(
+            receivedBytes: currentTotal.clamp(0, totalBytes),
+            totalBytes: totalBytes,
+            speedBytesPerSec: currentSpeed,
+          ),
+        );
+      }
+    }
+
+    final futures = <Future<void>>[];
+    final partFiles = <File>[];
+
+    for (int i = 0; i < numChunks; i++) {
+      final start = i * chunkSize;
+      final end = (i == numChunks - 1)
+          ? (totalBytes - 1)
+          : ((i + 1) * chunkSize - 1);
+      final partFile = File('${targetFile.path}.part$i');
+      partFiles.add(partFile);
+
+      futures.add(
+        _downloadSingleChunk(
+          downloadUrl: downloadUrl,
+          partFile: partFile,
+          start: start,
+          end: end,
+          workerIndex: i,
+          onBytes: (receivedInChunk) {
+            workerReceived[i] = receivedInChunk;
+            reportProgress();
+          },
+          cancelToken: cancelToken,
+        ),
+      );
+    }
+
+    try {
+      await Future.wait(futures);
+
+      if (cancelToken?.isCancelled == true) {
+        throw Exception('下载已取消');
+      }
+
+      // 所有切片下载成功，合并分片文件
+      final outSink = targetFile.openWrite();
+      try {
+        for (final part in partFiles) {
+          await outSink.addStream(part.openRead());
+          try {
+            await part.delete();
+          } catch (_) {}
+        }
+        await outSink.flush();
+      } finally {
+        try {
+          await outSink.close();
+        } catch (_) {}
+      }
+    } catch (e) {
+      // 发生异常或取消时清理碎片
+      for (final part in partFiles) {
+        try {
+          if (part.existsSync()) await part.delete();
+        } catch (_) {}
+      }
+      rethrow;
+    }
+  }
+
+  /// 单个切片的工作线程下载流。
+  Future<void> _downloadSingleChunk({
+    required String downloadUrl,
+    required File partFile,
+    required int start,
+    required int end,
+    required int workerIndex,
+    required void Function(int receivedInChunk) onBytes,
+    CancelToken? cancelToken,
+  }) async {
+    if (partFile.existsSync()) {
+      try {
+        await partFile.delete();
+      } catch (_) {}
+    }
+
+    final request = await _client
+        .getUrl(Uri.parse(downloadUrl))
+        .timeout(downloadConnectTimeout);
+
+    request.headers.set('User-Agent', browserUserAgent);
+    request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+    request.headers.set(HttpHeaders.rangeHeader, 'bytes=$start-$end');
+    request.headers.set(HttpHeaders.acceptHeader, '*/*');
+    request.headers.set(HttpHeaders.connectionHeader, 'keep-alive');
+
+    final response = await request.close().timeout(downloadConnectTimeout);
+
+    if (response.statusCode != HttpStatus.partialContent &&
+        response.statusCode != HttpStatus.ok) {
+      throw HttpException(
+        'Chunk $workerIndex HTTP ${response.statusCode}',
+        uri: Uri.parse(downloadUrl),
+      );
+    }
+
+    final sink = partFile.openWrite();
+    var received = 0;
+
+    try {
+      await for (final chunk in response.timeout(downloadIdleTimeout)) {
+        if (cancelToken?.isCancelled == true) {
+          throw Exception('下载已取消');
+        }
+        sink.add(chunk);
+        received += chunk.length;
+        onBytes(received);
+      }
+      await sink.flush();
+      final expectedBytes = end - start + 1;
+      if (received < expectedBytes) {
+        throw HttpException(
+          'Chunk $workerIndex 传输未完成: 接收 $received 字节，预期 $expectedBytes 字节',
+          uri: Uri.parse(downloadUrl),
+        );
+      }
+    } finally {
+      try {
+        await sink.close();
+      } catch (_) {}
+    }
+  }
+
+  /// 单线程直通下载流处理（带零额外网络握手与平滑限频更新）。
+  Future<void> _downloadSingleStream({
+    required HttpClientResponse response,
+    required File targetFile,
+    required int totalBytes,
+    required void Function(DownloadProgress progress) onProgress,
+    CancelToken? cancelToken,
+  }) async {
+    final sink = targetFile.openWrite();
+    var receivedBytes = 0;
+    var lastTime = DateTime.now();
+    var lastBytes = 0;
+    var currentSpeed = 0.0;
+
+    try {
+      await for (final chunk in response.timeout(downloadIdleTimeout)) {
+        if (cancelToken?.isCancelled == true) {
+          throw Exception('下载已取消');
+        }
+        sink.add(chunk);
+        receivedBytes += chunk.length;
+
+        final now = DateTime.now();
+        final elapsedMs = now.difference(lastTime).inMilliseconds;
+        if (elapsedMs >= 350 || receivedBytes == totalBytes) {
+          if (elapsedMs > 0) {
+            final instantSpeed =
+                (receivedBytes - lastBytes) / (elapsedMs / 1000.0);
+            currentSpeed = currentSpeed == 0.0
+                ? instantSpeed
+                : 0.7 * instantSpeed + 0.3 * currentSpeed;
+          }
+          lastTime = now;
+          lastBytes = receivedBytes;
+          onProgress(
+            DownloadProgress(
+              receivedBytes: receivedBytes,
+              totalBytes: totalBytes,
+              speedBytesPerSec: currentSpeed,
+            ),
+          );
+        }
+      }
+      await sink.flush();
+      if (totalBytes > 0 && receivedBytes < totalBytes) {
+        throw HttpException(
+          '下载流传输未完成: 实际接收 $receivedBytes 字节，预期 $totalBytes 字节',
+        );
+      }
+    } finally {
+      try {
+        await sink.close();
+      } catch (_) {}
+    }
   }
 
   /// 兼容单节点调用的下载方法。
