@@ -146,6 +146,7 @@ List<(int, int)> periods(String value) {
 
 /// `1-4周(单)`、`第3-5周`、`1,3,5周`、`[1-16周]` → 周次数组。上限 25 周，超出视为页面结构变化。
 List<int> weeks(String value) {
+  if (value.trim().isEmpty) return const <int>[];
   final normalized = value
       .replaceAll('（', '(')
       .replaceAll('）', ')')
@@ -207,8 +208,9 @@ List<ScheduleEntry> jsonSchedule(List<Map<String, dynamic>> rows) {
     if (name.isEmpty) continue;
     final day = number(row, const ['xqj', 'XQJ']);
     final spans = periods(field(row, const ['jcs', 'JCS', 'jcor', 'JCOR']));
-    if (day == null || day > 7 || spans.isEmpty) {
-      changed('课表缺少可识别的星期或节次');
+    if (day == null || day < 1 || day > 7 || spans.isEmpty) {
+      // 容错：跳过缺少星期或节次的无规律课程项（如网课、实践阶段），避免整份课表解析崩溃。
+      continue;
     }
     final details = _scheduleDetails(row);
     final teacher = field(row, const ['xm', 'XM', 'jsxm']);
@@ -216,7 +218,12 @@ List<ScheduleEntry> jsonSchedule(List<Map<String, dynamic>> rows) {
     final room = field(row, const ['cdmc', 'CDMC', 'jxcdmc']);
     final location = [campus, room].where((part) => part.isNotEmpty).join(' ');
     final rawWeeks = field(row, const ['zcd', 'ZCD', 'weeks']);
-    final weekList = weeks(rawWeeks);
+    List<int> weekList;
+    try {
+      weekList = rawWeeks.isEmpty ? const <int>[] : weeks(rawWeeks);
+    } catch (_) {
+      weekList = const <int>[];
+    }
     final courseKey = field(row, const [
       'schedule_source_id',
       'kcb_id',

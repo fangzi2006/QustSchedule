@@ -393,6 +393,25 @@ class SyntheticZfServer {
           _options.identityStatus, 'text/html; charset=utf-8', _identityHtml());
       return;
     }
+    if (relative == '/kbcx/xskbcx_cxXskbcxIndex.html') {
+      send(200, 'text/html; charset=utf-8',
+          _options.scheduleIndexBody ?? defaultScheduleIndexBody());
+      return;
+    }
+    if (relative == '/kbcx/xskbcx_cxXsgrkb.html') {
+      if (_options.scheduleDenied) {
+        send(200, 'text/html; charset=utf-8', '"没有访问权限"');
+        return;
+      }
+      if (request.method == 'POST') {
+        send(200, 'application/json; charset=utf-8',
+            _options.scheduleBody ?? defaultScheduleBody());
+        return;
+      }
+      send(200, 'text/html; charset=utf-8',
+          _options.scheduleIndexBody ?? defaultScheduleIndexBody());
+      return;
+    }
     if (relative == '/kbcx/xskbcx_cxXsKb.html') {
       if (_options.scheduleDenied) {
         send(200, 'text/html; charset=utf-8', '"没有访问权限"');

@@ -441,6 +441,39 @@ void main() {
       }, const SyntheticZfOptions(scheduleDenied: true));
     });
 
+    test('qustZfEndpoints 个人课表查询：直连 cxXsgrkb 且带 kzlx/ajax/referer', () async {
+      await withServer((server) async {
+        final client = vmZhengfangClient(ZfClientConfig(
+          baseUrl: server.baseUrl,
+          endpoints: qustZfEndpoints,
+        ));
+        await client.login(Credentials(server.username, server.password));
+
+        // 1. 指定学期查询
+        final schedule = await client.fetchSchedule('2026-2027-1');
+        expect(schedule.entries.length, 2);
+        expect(schedule.termId, '2026-2027-1');
+
+        final post = server.requests.last;
+        expect(post.path, endsWith('/kbcx/xskbcx_cxXsgrkb.html'));
+        expect(post.query['gnmkdm'], 'N2151');
+        expect(post.form['xnm'], '2026');
+        expect(post.form['xqm'], '3');
+        expect(post.form['kzlx'], 'ck');
+        expect(
+          post.referer,
+          contains('/kbcx/xskbcx_cxXskbcxIndex.html?gnmkdm=N2151'),
+        );
+
+        // 2. 自决当前学期查询 (termId == null)
+        final autoSchedule = await client.fetchSchedule();
+        expect(autoSchedule.entries.length, 2);
+        expect(autoSchedule.termId, '2026-2027-1');
+
+        client.dispose();
+      });
+    });
+
     test('会话失效时查课表报 SESSION_EXPIRED（而不是空课表）', () async {
       await withServer((server) async {
         final client =
@@ -512,6 +545,50 @@ void main() {
         identity('<span class="media-heading">张三  学生</span>').studentName,
         '张三',
       );
+    });
+
+    test('normalizeEndpoints 保留 scheduleQueryPath 与 personal 属性', () {
+      final normalized = normalizeEndpoints(qustZfEndpoints);
+      expect(normalized.schedulePath, '/kbcx/xskbcx_cxXskbcxIndex.html');
+      expect(normalized.scheduleQueryPath, '/kbcx/xskbcx_cxXsgrkb.html');
+      expect(normalized.scheduleGnmkdm, 'N2151');
+      expect(normalized.personal, isTrue);
+    });
+
+    test('listRows 容忍空课表与 null 响应，不误报 PAGE_CHANGED', () {
+      expect(listRows('null', ['kbList']), isEmpty);
+      expect(listRows('[]', ['kbList']), isEmpty);
+      expect(listRows('{"kbList": null}', ['kbList']), isEmpty);
+      expect(listRows('{"kbList": []}', ['kbList']), isEmpty);
+    });
+
+    test('jsonSchedule 跳过缺星期/节次的无规律课程，周次异常时安全兜底', () {
+      final rows = <Map<String, dynamic>>[
+        <String, dynamic>{
+          'kcmc': '离散数学',
+          'xqj': '1',
+          'jcs': '1-2',
+          'zcd': '1-4周',
+        },
+        <String, dynamic>{
+          'kcmc': '无时间安排讲座',
+          'xqj': '',
+          'jcs': '',
+          'zcd': '',
+        },
+        <String, dynamic>{
+          'kcmc': '非常规周次课程',
+          'xqj': '2',
+          'jcs': '3-4',
+          'zcd': '非标准说明文本',
+        },
+      ];
+      final entries = jsonSchedule(rows);
+      expect(entries.length, 2);
+      expect(entries[0].name, '离散数学');
+      expect(entries[0].weeks, [1, 2, 3, 4]);
+      expect(entries[1].name, '非常规周次课程');
+      expect(entries[1].weeks, isEmpty);
     });
   });
 }

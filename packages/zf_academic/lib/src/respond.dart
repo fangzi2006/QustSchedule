@@ -202,6 +202,9 @@ List<Map<String, dynamic>> listRows(String body, List<String> keys) {
   if (isLoginPage(text)) {
     throw AcademicError(ErrorCode.sessionExpired, '登录已失效，请重新登录');
   }
+  if (text == 'null' || text == '[]') {
+    return const <Map<String, dynamic>>[];
+  }
   final root = _tryParseJson(text);
   if (root == null) {
     if (looksLikeAccessForbidden(text)) {
@@ -255,10 +258,16 @@ List<Map<String, dynamic>> listRows(String body, List<String> keys) {
     for (final container in containers) {
       if (container == null) continue;
       for (final key in searchKeys) {
-        final candidate = container[key];
-        if (candidate is List) {
-          found = candidate;
-          break;
+        if (container.containsKey(key)) {
+          final candidate = container[key];
+          if (candidate == null) {
+            found = const <dynamic>[];
+            break;
+          }
+          if (candidate is List) {
+            found = candidate;
+            break;
+          }
         }
       }
       if (found != null) break;

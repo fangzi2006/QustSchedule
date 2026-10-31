@@ -177,9 +177,13 @@ ZfEndpoints normalizeEndpoints(ZfEndpoints? endpoints) {
     schedulePath: merged.schedulePath.isEmpty
         ? const ZfEndpoints().schedulePath
         : merged.schedulePath,
+    scheduleQueryPath: (merged.scheduleQueryPath?.isEmpty ?? false)
+        ? null
+        : (merged.scheduleQueryPath ?? const ZfEndpoints().scheduleQueryPath),
     scheduleGnmkdm: merged.scheduleGnmkdm.isEmpty
         ? const ZfEndpoints().scheduleGnmkdm
         : merged.scheduleGnmkdm,
+    personal: merged.personal,
     gradesPath: merged.gradesPath.isEmpty
         ? const ZfEndpoints().gradesPath
         : merged.gradesPath,
