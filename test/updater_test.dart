@@ -184,6 +184,36 @@ void main() {
       expect(p.formattedReceived, equals('5.0 MB'));
       expect(p.formattedTotal, equals('10.0 MB'));
     });
+
+    test('Windows 架构产物智能匹配（安装版 vs 便携版）', () {
+      const setupAsset = ReleaseAsset(
+        name: 'QustSchedule_v1.3.0-windows-x64-setup.exe',
+        downloadUrl: 'https://example.com/setup.exe',
+        size: 20 * 1024 * 1024,
+        contentType: '',
+      );
+      const zipAsset = ReleaseAsset(
+        name: 'QustSchedule_v1.3.0-windows-x64.zip',
+        downloadUrl: 'https://example.com/portable.zip',
+        size: 22 * 1024 * 1024,
+        contentType: '',
+      );
+      final assets = [setupAsset, zipAsset];
+
+      // 便携版应优先匹配 .zip 绿色包
+      final portableTarget = UpdateService.findTargetAsset(
+        assets,
+        isPortable: true,
+      );
+      expect(portableTarget, equals(zipAsset));
+
+      // 安装版应优先匹配 setup.exe 安装向导
+      final installerTarget = UpdateService.findTargetAsset(
+        assets,
+        isPortable: false,
+      );
+      expect(installerTarget, equals(setupAsset));
+    });
   });
 
   group('更新偏好设置与代理增删 (Preferences & AppModel)', () {

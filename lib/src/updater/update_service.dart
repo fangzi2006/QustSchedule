@@ -9,6 +9,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'app_installer.dart';
 import 'update_models.dart';
 import 'version_comparator.dart';
 import '../app_version.dart';
@@ -55,6 +56,7 @@ class UpdateService {
     try {
       final curVer = currentVersion ?? appVersion;
       if (curVer.isEmpty || curVer == '-') return 0;
+      AppInstaller.cleanLegacyUpdaterScript();
       final tempDir = targetDirectory ?? await getTemporaryDirectory();
       final entities = tempDir.listSync();
       final verRegex = RegExp(r'^QustSchedule_v?([0-9A-Za-z\.\+\-]+?)(?:-|\.)');
@@ -127,18 +129,53 @@ class UpdateService {
     return ('unknown', '未知平台');
   }
 
-  /// 匹配适合当前软件自身架构的 Release 安装包文件。
-  static ReleaseAsset? findTargetAsset(List<ReleaseAsset> assets) {
+  /// 判定当前 Windows 客户端是否为便携版（绿色免安装解压版）。
+  ///
+  /// 原理：Inno Setup 安装版在安装时必然于可执行文件同级目录生成 `unins000.exe` 卸载程序；
+  /// CI 生成的便携版 zip 解压目录则不存在该文件。
+  static bool isWindowsPortable() {
+    if (!Platform.isWindows) return false;
+    try {
+      final exeFile = File(Platform.resolvedExecutable);
+      final uninstaller = File(
+        '${exeFile.parent.path}${Platform.pathSeparator}unins000.exe',
+      );
+      return !uninstaller.existsSync();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 匹配适合当前软件自身架构与形态（安装版 / 便携版）的 Release 安装包文件。
+  static ReleaseAsset? findTargetAsset(
+    List<ReleaseAsset> assets, {
+    bool? isPortable,
+  }) {
     if (Platform.isWindows) {
+      final portable = isPortable ?? isWindowsPortable();
+      if (portable) {
+        // 便携版优先匹配 x64 的 .zip 绿色压缩包
+        for (final a in assets) {
+          final name = a.name.toLowerCase();
+          if (name.endsWith('.zip') && name.contains('windows-x64')) return a;
+        }
+        for (final a in assets) {
+          if (a.name.toLowerCase().endsWith('.zip')) return a;
+        }
+      } else {
+        // 安装版优先匹配 setup.exe 安装向导
+        for (final a in assets) {
+          final name = a.name.toLowerCase();
+          if (name.endsWith('.exe') && name.contains('setup')) return a;
+        }
+        for (final a in assets) {
+          if (a.name.toLowerCase().endsWith('.exe')) return a;
+        }
+      }
+      // 容错兜底：若线上 Release 缺失对应形态，回退匹配另一种 Windows 产物
       for (final a in assets) {
         final name = a.name.toLowerCase();
-        if (name.endsWith('.exe') && name.contains('setup')) return a;
-      }
-      for (final a in assets) {
-        if (a.name.toLowerCase().endsWith('.exe')) return a;
-      }
-      for (final a in assets) {
-        if (a.name.toLowerCase().endsWith('.zip')) return a;
+        if (name.endsWith('.exe') || name.endsWith('.zip')) return a;
       }
       return null;
     }
