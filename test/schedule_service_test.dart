@@ -405,7 +405,7 @@ void main() {
   });
 
   group('阶段回调（供 UI 显示"正在重新登录"）', () {
-    test('自动重登会触发 relogin 阶段', () async {
+    test('自动重登会按序触发 relogin 与 fetching_schedule 阶段', () async {
       final h = _Harness();
       final stages = <String>[];
       h.service.onStage = stages.add;
@@ -420,7 +420,10 @@ void main() {
 
       await h.service.getSchedule();
 
-      expect(stages, contains(ScheduleService.stageRelogin));
+      expect(stages, [
+        ScheduleService.stageRelogin,
+        ScheduleService.stageFetchingSchedule,
+      ]);
     });
 
     test('Cookie 有效时不触发 relogin 阶段', () async {

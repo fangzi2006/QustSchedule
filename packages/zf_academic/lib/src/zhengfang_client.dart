@@ -164,6 +164,14 @@ class ZhengfangClient {
   String? _csrfTokenLogout;
   bool _closed = false;
 
+  /// CAS 入口探测缓存（同实例同主机只需探测一次）
+  String? _cachedCasLoginUrl;
+  bool _casDiscoveryDone = false;
+
+  /// RSA 公钥缓存（正方系统服务端公钥静态稳定，同实例登录可复用）
+  String? _cachedModulus;
+  String? _cachedExponent;
+
   ZhengfangClient._(
     this._config,
     this._endpoints,
@@ -746,41 +754,47 @@ class ZhengfangClient {
     final fields = <String, String>{...hidden, ...extra};
     var mm = password;
     if (fields['mmsfjm'] == '1') {
-      final keyUrl =
-          _app('${_endpoints.publicKeyPath}?time=${_nowMs()}&_=${_nowMs()}');
-      final response = await _http.get(
-          keyUrl, const HttpRequestOptions(purpose: RequestPurpose.auth));
-      if (response.status < 200 || response.status >= 300) {
-        throw AcademicError(
-          ErrorCode.networkRetryable,
-          '学校公钥获取失败（HTTP ${response.status}）',
-          httpStatus: response.status,
-        );
-      }
-      Map<String, dynamic> key;
-      try {
-        final decoded = jsonDecode(response.body);
-        if (decoded is! Map<String, dynamic>) {
-          throw const FormatException('公钥不是 JSON 对象');
-        }
-        key = decoded;
-      } catch (error) {
-        throw AcademicError(ErrorCode.pageChanged, '学校公钥格式无效', cause: error);
-      }
-      final modulus = str(key['modulus']);
-      final exponent = str(key['exponent']);
+      var modulus = _cachedModulus ?? '';
+      var exponent = _cachedExponent ?? '';
       if (modulus.isEmpty || exponent.isEmpty) {
-        throw AcademicError(ErrorCode.pageChanged, '学校公钥格式无效');
+        final keyUrl =
+            _app('${_endpoints.publicKeyPath}?time=${_nowMs()}&_=${_nowMs()}');
+        final response = await _http.get(
+            keyUrl, const HttpRequestOptions(purpose: RequestPurpose.auth));
+        if (response.status < 200 || response.status >= 300) {
+          throw AcademicError(
+            ErrorCode.networkRetryable,
+            '学校公钥获取失败（HTTP ${response.status}）',
+            httpStatus: response.status,
+          );
+        }
+        Map<String, dynamic> key;
+        try {
+          final decoded = jsonDecode(response.body);
+          if (decoded is! Map<String, dynamic>) {
+            throw const FormatException('公钥不是 JSON 对象');
+          }
+          key = decoded;
+        } catch (error) {
+          throw AcademicError(ErrorCode.pageChanged, '学校公钥格式无效', cause: error);
+        }
+        modulus = str(key['modulus']);
+        exponent = str(key['exponent']);
+        if (modulus.isEmpty || exponent.isEmpty) {
+          throw AcademicError(ErrorCode.pageChanged, '学校公钥格式无效');
+        }
+        _cachedModulus = modulus;
+        _cachedExponent = exponent;
+        _debug('auth:public-key', <String, Object?>{
+          'url': response.url,
+          'modulusLength': modulus.length,
+          'modulusPreview': modulus.substring(0, min(24, modulus.length)),
+          'exponent': exponent,
+          'looksHex':
+              RegExp(r'^[0-9a-f]+$', caseSensitive: false).hasMatch(modulus),
+          'looksBase64': RegExp(r'^[A-Za-z0-9+/]+=*$').hasMatch(modulus),
+        });
       }
-      _debug('auth:public-key', <String, Object?>{
-        'url': response.url,
-        'modulusLength': modulus.length,
-        'modulusPreview': modulus.substring(0, min(24, modulus.length)),
-        'exponent': exponent,
-        'looksHex':
-            RegExp(r'^[0-9a-f]+$', caseSensitive: false).hasMatch(modulus),
-        'looksBase64': RegExp(r'^[A-Za-z0-9+/]+=*$').hasMatch(modulus),
-      });
       mm = zfFormEncryptPassword(modulus, exponent, password);
     }
     fields['yhm'] = username;
@@ -836,6 +850,8 @@ class ZhengfangClient {
     // 学校真的拒绝了这次登录时，先报它的原因，再去试着读身份信息——否则错误会被后续
     // 的"登录页重定向"覆盖成一句含糊的提示。
     if (isLoginPage(result.body)) {
+      _cachedModulus = null;
+      _cachedExponent = null;
       final failure = _classifyLoginFailure(result.body);
       if (failure != null && failure.code == ErrorCode.invalidCredentials) {
         _pending = null;
@@ -847,10 +863,6 @@ class ZhengfangClient {
       }
     }
 
-    await _http.get(
-      _app(_indexMenuPath),
-      HttpRequestOptions(referer: result.url, purpose: RequestPurpose.auth),
-    );
     final identity = await _readIdentity();
     if (identity.studentName.isNotEmpty || identity.studentId.isNotEmpty) {
       _pending = null;
@@ -925,8 +937,13 @@ class ZhengfangClient {
   /// 探测教务系统的正方 CAS 入口：GET `{教务根}/sso/zfiotlogin`（不跟随重定向）。
   /// 跳到 `/cas/login` 且 service 指回教务域时返回入口地址，否则 null。
   Future<String?> _discoverCasLoginUrl() async {
+    if (_casDiscoveryDone) return _cachedCasLoginUrl;
     final serviceUrl = _config.casServiceUrl ?? _app('');
-    if (_config.casLoginUrl != null) return _config.casLoginUrl;
+    if (_config.casLoginUrl != null) {
+      _cachedCasLoginUrl = _config.casLoginUrl;
+      _casDiscoveryDone = true;
+      return _cachedCasLoginUrl;
+    }
     final base = Uri.parse(serviceUrl);
     final probeUrl = Uri(
       scheme: base.scheme,
@@ -940,18 +957,40 @@ class ZhengfangClient {
         const HttpRequestOptions(
             followRedirects: false, purpose: RequestPurpose.auth),
       );
-      if (response.status < 300 || response.status > 399) return null;
+      if (response.status < 300 || response.status > 399) {
+        _cachedCasLoginUrl = null;
+        _casDiscoveryDone = true;
+        return null;
+      }
       final location = firstHeader(response.headers, 'location');
-      if (location == null || location.isEmpty) return null;
+      if (location == null || location.isEmpty) {
+        _cachedCasLoginUrl = null;
+        _casDiscoveryDone = true;
+        return null;
+      }
       final target = Uri.tryParse(resolveUrl(probeUrl.toString(), location));
-      if (target == null || !target.path.contains('/cas/login')) return null;
+      if (target == null || !target.path.contains('/cas/login')) {
+        _cachedCasLoginUrl = null;
+        _casDiscoveryDone = true;
+        return null;
+      }
       final service = Uri.tryParse(target.queryParameters['service'] ?? '');
-      if (service == null || service.host != base.host) return null;
+      if (service == null || service.host != base.host) {
+        _cachedCasLoginUrl = null;
+        _casDiscoveryDone = true;
+        return null;
+      }
       _http.allowHost(target.host);
-      return target.toString();
+      _cachedCasLoginUrl = target.toString();
+      _casDiscoveryDone = true;
+      return _cachedCasLoginUrl;
     } on AcademicError {
+      _cachedCasLoginUrl = null;
+      _casDiscoveryDone = true;
       return null;
     } catch (_) {
+      _cachedCasLoginUrl = null;
+      _casDiscoveryDone = true;
       return null;
     }
   }

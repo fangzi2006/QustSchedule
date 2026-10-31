@@ -50,11 +50,12 @@ class ScheduleService {
   /// 非 final：app 启动后再接线（handler 需要引用 UI 状态机）。
   Future<String?> Function(CaptchaState state) captchaHandler;
 
-  /// 阶段回调：`relogin` 表示正在用保存的账密重新登录。
-  /// UI 用它把"正在更新课表"换成"正在重新登录"，但不遮挡页面。
+  /// 阶段回调：`relogin` 表示正在用保存的账密重新登录；
+  /// `fetching_schedule` 表示重新登录成功，正在抓取新课表。
   void Function(String stage)? onStage;
 
   static const String stageRelogin = 'relogin';
+  static const String stageFetchingSchedule = 'fetching_schedule';
 
   /// 熔断窗口内允许的自动登录次数。
   final int autoLoginLimit;
@@ -291,6 +292,8 @@ class ScheduleService {
 
     await _persist(client);
     // 不在此重置熔断：自动登录次数必须跨轮次累计（见 _recordAutoLogin）。
+
+    onStage?.call(stageFetchingSchedule);
 
     // 重登后只重试一次，不循环。
     try {

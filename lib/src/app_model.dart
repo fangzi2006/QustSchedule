@@ -1444,11 +1444,15 @@ class AppModel extends ChangeNotifier {
     service.rebindCookieStorage(repository);
   }
 
-  /// 编排层进入"重新登录"时更新提示语——用户能看到"在重登"，但课表不会被遮住。
+  /// 编排层进入"重新登录"或"重新登录后拉取课表"时更新提示语——用户能看到真实进度流转，但课表不会被遮住。
   void _onServiceStage(String stage) {
     if (stage == ScheduleService.stageRelogin) {
       _refreshing = true;
       _showHint('正在重新登录…');
+    } else if (stage == ScheduleService.stageFetchingSchedule) {
+      _refreshing = true;
+      final hasData = _schedule != null;
+      _showHint(hasData ? '更新中…' : '获取中…');
     }
   }
 

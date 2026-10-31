@@ -354,6 +354,44 @@ void main() {
       await pending;
       rig.model.dispose();
     });
+
+    test('重登刷新时提示先切到正在重新登录，登录完切回更新中，取回后已更新', () async {
+      final rig = buildRig();
+      rig.model.hydrateForTest(schedule: sampleSchedule());
+      rig.model.username = '2407720102';
+      rig.model.service.accountHint = '2407720102';
+      await rig.credentials.save(
+        '$_baseUrl|2407720102',
+        const Credentials('2407720102', 'pw'),
+      );
+      final loginCompleter = Completer<AuthState>();
+      final scheduleCompleter = Completer<Schedule>();
+      final hints = <String>[];
+      rig.model.addListener(() {
+        if (rig.model.hint.isNotEmpty && (hints.isEmpty || hints.last != rig.model.hint)) {
+          hints.add(rig.model.hint);
+        }
+      });
+
+      rig.backend.fetchBehavior = (call, termId) {
+        if (call == 1) throw expired();
+        return scheduleCompleter.future;
+      };
+      rig.backend.loginBehavior = (call, creds) => loginCompleter.future;
+
+      final pending = rig.model.refresh();
+      await Future<void>.delayed(Duration.zero);
+      expect(hints, contains('正在重新登录…'));
+
+      loginCompleter.complete(const AuthenticatedState(studentId: '2407720102', studentName: '张三'));
+      await Future<void>.delayed(Duration.zero);
+      expect(hints.last, '更新中…');
+
+      scheduleCompleter.complete(sampleSchedule());
+      await pending;
+      expect(rig.model.hint, '已更新');
+      rig.model.dispose();
+    });
   });
 
   group('状态弹窗的数据来源', () {

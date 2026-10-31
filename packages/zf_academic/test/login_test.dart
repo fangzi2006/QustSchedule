@@ -96,6 +96,34 @@ void main() {
       });
     });
 
+    test('二次重登复用 CAS 探测与 RSA 公钥，不重复发起多余请求', () async {
+      await withServer((server) async {
+        final client =
+            vmZhengfangClient(ZfClientConfig(baseUrl: server.baseUrl));
+        await client.login(Credentials(server.username, server.password));
+        final firstKeyCount = server
+            .paths()
+            .where((p) => p.endsWith('/xtgl/login_getPublicKey.html'))
+            .length;
+        final firstCasCount =
+            server.paths().where((p) => p.endsWith('/sso/zfiotlogin')).length;
+        expect(firstKeyCount, 1);
+        expect(firstCasCount, 1);
+
+        // 二次登录（模拟 Cookie 过期后同一实例重新登录）
+        await client.login(Credentials(server.username, server.password));
+        final secondKeyCount = server
+            .paths()
+            .where((p) => p.endsWith('/xtgl/login_getPublicKey.html'))
+            .length;
+        final secondCasCount =
+            server.paths().where((p) => p.endsWith('/sso/zfiotlogin')).length;
+        expect(secondKeyCount, 1, reason: '公钥应从客户端缓存复用，不重复发起网络请求');
+        expect(secondCasCount, 1, reason: 'CAS 探测结果应复用，不重复探测');
+        client.dispose();
+      });
+    });
+
     test('请求形状：form action 带 ?time=、双 mm、登录前先清理会话', () async {
       await withServer((server) async {
         final client =
