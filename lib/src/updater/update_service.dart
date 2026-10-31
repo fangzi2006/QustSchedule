@@ -154,7 +154,8 @@ class UpdateService {
     bool? isAndroid,
     String? androidArch,
   }) {
-    final onWindows = isWindows ?? (isPortable != null ? true : Platform.isWindows);
+    final onWindows =
+        isWindows ?? (isPortable != null ? true : Platform.isWindows);
     if (onWindows) {
       final portable = isPortable ?? isWindowsPortable();
       if (portable) {
