@@ -376,6 +376,52 @@ class UpdateService {
   }
 
   /// 兼容单代理调用的封装
+  /// 带弱网重试机制的更新检测（纯网络策略：遇到网络错误退避重试）。
+  Future<UpdateCheckResult> checkForUpdatesWithRetry({
+    required String currentVersion,
+    required String selectedProxy,
+    List<String> backupProxies = const <String>[],
+    int maxRetries = 2,
+    Duration retryDelay = const Duration(seconds: 2),
+    Future<void> Function(Duration delay)? delayFn,
+  }) async {
+    int retries = 0;
+    while (true) {
+      try {
+        final result = await checkForUpdatesWithFallback(
+          currentVersion: currentVersion,
+          selectedProxy: selectedProxy,
+          backupProxies: backupProxies,
+        );
+        if (result.status == UpdateStatus.networkError &&
+            retries < maxRetries) {
+          retries++;
+          if (delayFn != null) {
+            await delayFn(retryDelay);
+          } else {
+            await Future<void>.delayed(retryDelay);
+          }
+          continue;
+        }
+        return result;
+      } catch (e) {
+        if (retries < maxRetries) {
+          retries++;
+          if (delayFn != null) {
+            await delayFn(retryDelay);
+          } else {
+            await Future<void>.delayed(retryDelay);
+          }
+          continue;
+        }
+        return UpdateCheckResult(
+          status: UpdateStatus.networkError,
+          errorMessage: '检查更新网络异常: $e',
+        );
+      }
+    }
+  }
+
   Future<UpdateCheckResult> checkForUpdates({
     required String currentVersion,
     required String proxyPrefix,

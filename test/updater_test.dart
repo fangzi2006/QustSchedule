@@ -557,4 +557,76 @@ void main() {
       expect(find.text('更新日志'), findsOneWidget);
     });
   });
+
+  group('自动更新重试机制 (UpdateService.checkForUpdatesWithRetry)', () {
+    test('首次检测成功不触发重试', () async {
+      final service = _MockRetryUpdateService(
+        results: const [UpdateCheckResult(status: UpdateStatus.hasUpdate)],
+      );
+      int delayCalls = 0;
+      final result = await service.checkForUpdatesWithRetry(
+        currentVersion: '1.0.0',
+        selectedProxy: '',
+        delayFn: (_) async => delayCalls++,
+      );
+      expect(result.status, UpdateStatus.hasUpdate);
+      expect(service.calls, 1);
+      expect(delayCalls, 0);
+    });
+
+    test('网络超时触发重试并在成功后返回', () async {
+      final service = _MockRetryUpdateService(
+        results: const [
+          UpdateCheckResult(status: UpdateStatus.networkError),
+          UpdateCheckResult(status: UpdateStatus.hasUpdate),
+        ],
+      );
+      int delayCalls = 0;
+      final result = await service.checkForUpdatesWithRetry(
+        currentVersion: '1.0.0',
+        selectedProxy: '',
+        delayFn: (_) async => delayCalls++,
+      );
+      expect(result.status, UpdateStatus.hasUpdate);
+      expect(service.calls, 2);
+      expect(delayCalls, 1);
+    });
+
+    test('持续网络错误达到最大重试次数后返回错误', () async {
+      final service = _MockRetryUpdateService(
+        results: const [
+          UpdateCheckResult(status: UpdateStatus.networkError),
+          UpdateCheckResult(status: UpdateStatus.networkError),
+          UpdateCheckResult(status: UpdateStatus.networkError),
+        ],
+      );
+      int delayCalls = 0;
+      final result = await service.checkForUpdatesWithRetry(
+        currentVersion: '1.0.0',
+        selectedProxy: '',
+        maxRetries: 2,
+        delayFn: (_) async => delayCalls++,
+      );
+      expect(result.status, UpdateStatus.networkError);
+      expect(service.calls, 3);
+      expect(delayCalls, 2);
+    });
+  });
+}
+
+class _MockRetryUpdateService extends UpdateService {
+  _MockRetryUpdateService({required this.results});
+  final List<UpdateCheckResult> results;
+  int calls = 0;
+
+  @override
+  Future<UpdateCheckResult> checkForUpdatesWithFallback({
+    required String currentVersion,
+    required String selectedProxy,
+    List<String> backupProxies = const <String>[],
+  }) async {
+    final result = results[calls];
+    calls++;
+    return result;
+  }
 }

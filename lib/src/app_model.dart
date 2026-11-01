@@ -25,6 +25,9 @@ import 'reschedule.dart';
 import 'schedule_cache.dart';
 import 'term_calendar.dart';
 import 'timetable.dart';
+import 'app_version.dart';
+import 'updater/update_models.dart';
+import 'updater/update_service.dart';
 
 enum AppStatus {
   /// 启动中：读快照、试探会话。
@@ -515,6 +518,109 @@ class AppModel extends ChangeNotifier {
 
   bool get autoCheckUpdate => _preferences.autoCheckUpdate;
 
+  bool _hasCheckedAutoUpdate = false;
+  Timer? _autoUpdateTimer;
+
+  /// 单次会话是否已触发过自动检查更新。
+  @visibleForTesting
+  bool get hasCheckedAutoUpdate => _hasCheckedAutoUpdate;
+
+  /// 取消待执行的自动更新检查定时器。
+  void cancelAutoUpdate() {
+    _autoUpdateTimer?.cancel();
+    _autoUpdateTimer = null;
+  }
+
+  /// 启动时触发自动检查更新（由 UI 挂载后通知，集中管理定时器与重试）。
+  void checkAutoUpdate({
+    required void Function(UpdateCheckResult result) onHasUpdate,
+    UpdateService? updateService,
+    Duration initialDelay = const Duration(seconds: 1),
+  }) {
+    if (_hasCheckedAutoUpdate) return;
+    if (!autoCheckUpdate) return;
+
+    int retryCount = 0;
+    void scheduleCheck(Duration delay) {
+      _autoUpdateTimer?.cancel();
+      if (delay == Duration.zero) {
+        if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
+        final service = updateService ?? UpdateService();
+        service.checkForUpdatesWithFallback(
+          currentVersion: appVersion,
+          selectedProxy: selectedUpdateProxy,
+          backupProxies: allUpdateProxies,
+        ).then((result) {
+          if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
+          if (result.status == UpdateStatus.hasUpdate) {
+            _hasCheckedAutoUpdate = true;
+            if (result.release != null) onHasUpdate(result);
+          } else if (result.status == UpdateStatus.noUpdate) {
+            _hasCheckedAutoUpdate = true;
+          } else if (result.status == UpdateStatus.networkError) {
+            if (retryCount < 2) {
+              retryCount++;
+              scheduleCheck(const Duration(seconds: 2));
+            } else {
+              _hasCheckedAutoUpdate = true;
+            }
+          } else {
+            _hasCheckedAutoUpdate = true;
+          }
+        }).catchError((_) {
+          if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
+          if (retryCount < 2) {
+            retryCount++;
+            scheduleCheck(const Duration(seconds: 2));
+          } else {
+            _hasCheckedAutoUpdate = true;
+          }
+        });
+        return;
+      }
+
+      _autoUpdateTimer = Timer(delay, () async {
+        if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
+        try {
+          final service = updateService ?? UpdateService();
+          final result = await service.checkForUpdatesWithFallback(
+            currentVersion: appVersion,
+            selectedProxy: selectedUpdateProxy,
+            backupProxies: allUpdateProxies,
+          );
+          if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
+
+          if (result.status == UpdateStatus.hasUpdate) {
+            _hasCheckedAutoUpdate = true;
+            if (result.release != null) {
+              onHasUpdate(result);
+            }
+          } else if (result.status == UpdateStatus.noUpdate) {
+            _hasCheckedAutoUpdate = true;
+          } else if (result.status == UpdateStatus.networkError) {
+            if (retryCount < 2) {
+              retryCount++;
+              scheduleCheck(const Duration(seconds: 2));
+            } else {
+              _hasCheckedAutoUpdate = true;
+            }
+          } else {
+            _hasCheckedAutoUpdate = true;
+          }
+        } catch (_) {
+          if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
+          if (retryCount < 2) {
+            retryCount++;
+            scheduleCheck(const Duration(seconds: 2));
+          } else {
+            _hasCheckedAutoUpdate = true;
+          }
+        }
+      });
+    }
+
+    scheduleCheck(initialDelay);
+  }
   Future<void> setAutoCheckUpdate(bool value) async {
     if (_preferences.autoCheckUpdate == value) return;
     await _preferences.setAutoCheckUpdate(value);
@@ -1626,6 +1732,7 @@ class AppModel extends ChangeNotifier {
     weekNotifier.dispose();
     prefsNotifier.dispose();
     _hintTimer?.cancel();
+    cancelAutoUpdate();
     _appearanceTimer?.cancel();
     // 面板没点"完成"就被关掉（比如返回手势）时，别把刚拖好的值丢掉。
     unawaited(flushAppearance());

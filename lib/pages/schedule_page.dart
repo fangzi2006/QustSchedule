@@ -33,9 +33,7 @@ import '../widgets/floating_dock.dart';
 import '../widgets/time_wheel_picker.dart';
 import '../widgets/week_pager.dart';
 import 'appearance_sheet.dart';
-import '../src/app_version.dart';
-import '../src/updater/update_models.dart';
-import '../src/updater/update_service.dart';
+
 import 'update_dialog.dart';
 import 'reschedule_page.dart';
 import 'school_address_page.dart';
@@ -65,9 +63,6 @@ class _SchedulePageState extends State<SchedulePage> {
   ///    只重建顶栏与右下角按钮这两个小部件；
   ///  - 状态：`model.week` 留到停稳后再写（见 `_WeekPagerState._settleToPage`）。
   final ValueNotifier<int> _shownWeek = ValueNotifier<int>(1);
-  static bool _hasCheckedAutoUpdate = false;
-  int _updateRetryCount = 0;
-  Timer? _updateCheckTimer;
 
   @override
   void initState() {
@@ -76,67 +71,23 @@ class _SchedulePageState extends State<SchedulePage> {
     // 只听周次通知：换周不该让整张课表重建（内容没变）。
     model.weekNotifier.addListener(_syncShownWeek);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _scheduleAutoUpdateCheck(delay: const Duration(seconds: 1));
-    });
-  }
-
-  void _scheduleAutoUpdateCheck({required Duration delay}) {
-    if (_hasCheckedAutoUpdate) return;
-    if (!model.autoCheckUpdate) return;
-
-    _updateCheckTimer?.cancel();
-    _updateCheckTimer = Timer(delay, () async {
-      if (!mounted || _hasCheckedAutoUpdate) return;
-      try {
-        final service = UpdateService();
-        final result = await service.checkForUpdatesWithFallback(
-          currentVersion: appVersion,
-          selectedProxy: model.selectedUpdateProxy,
-          backupProxies: model.allUpdateProxies,
-        );
-
-        if (!mounted || _hasCheckedAutoUpdate) return;
-
-        if (result.status == UpdateStatus.hasUpdate) {
-          _hasCheckedAutoUpdate = true;
-          final release = result.release;
-          if (release != null) {
-            await showUpdateDialog(
-              context,
-              updateResult: result,
-              proxyPrefix: model.selectedUpdateProxy,
-              backupProxies: model.allUpdateProxies,
-            );
-          }
-        } else if (result.status == UpdateStatus.noUpdate) {
-          _hasCheckedAutoUpdate = true;
-        } else if (result.status == UpdateStatus.networkError) {
-          // 断网或网络超时：每隔 2 秒重试一次，最多重试 2 次
-          if (_updateRetryCount < 2) {
-            _updateRetryCount++;
-            _scheduleAutoUpdateCheck(delay: const Duration(seconds: 2));
-          } else {
-            _hasCheckedAutoUpdate = true;
-          }
-        } else {
-          // rateLimited 等其他终态
-          _hasCheckedAutoUpdate = true;
-        }
-      } catch (_) {
-        if (!mounted || _hasCheckedAutoUpdate) return;
-        if (_updateRetryCount < 2) {
-          _updateRetryCount++;
-          _scheduleAutoUpdateCheck(delay: const Duration(seconds: 2));
-        } else {
-          _hasCheckedAutoUpdate = true;
-        }
-      }
+      widget.model.checkAutoUpdate(
+        onHasUpdate: (result) {
+          if (!mounted) return;
+          showUpdateDialog(
+            context,
+            updateResult: result,
+            proxyPrefix: widget.model.selectedUpdateProxy,
+            backupProxies: widget.model.allUpdateProxies,
+          );
+        },
+      );
     });
   }
 
   @override
   void dispose() {
-    _updateCheckTimer?.cancel();
+    widget.model.cancelAutoUpdate();
     model.weekNotifier.removeListener(_syncShownWeek);
     _shownWeek.dispose();
     super.dispose();

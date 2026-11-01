@@ -16,6 +16,8 @@ import 'package:qustschedule/src/schedule_service.dart';
 import 'package:qustschedule/src/term_calendar.dart';
 import 'package:qustschedule/src/timetable.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:qustschedule/src/updater/update_models.dart';
+import 'package:qustschedule/src/updater/update_service.dart';
 import 'package:zf_academic/zf_academic_io.dart';
 
 import 'support/fake_backend.dart';
@@ -1217,4 +1219,74 @@ void main() {
       );
     });
   });
+
+  group('自动更新会话调度 (AppModel.checkAutoUpdate)', () {
+    test('autoCheckUpdate 为 false 时直接跳过', () async {
+      final model = buildModel(
+        preferences: Preferences.inMemory(autoCheckUpdate: false),
+      );
+      bool callbackInvoked = false;
+      model.checkAutoUpdate(
+        onHasUpdate: (_) => callbackInvoked = true,
+        initialDelay: Duration.zero,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(callbackInvoked, isFalse);
+      expect(model.hasCheckedAutoUpdate, isFalse);
+    });
+
+    test('已检查过时不再重复触发', () async {
+      final model = buildModel(
+        preferences: Preferences.inMemory(autoCheckUpdate: true),
+      );
+      int callbackCount = 0;
+      final mockService = _MockUpdateService(hasUpdate: true);
+      model.checkAutoUpdate(
+        onHasUpdate: (_) => callbackCount++,
+        updateService: mockService,
+        initialDelay: Duration.zero,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(callbackCount, 1);
+      expect(model.hasCheckedAutoUpdate, isTrue);
+
+      model.checkAutoUpdate(
+        onHasUpdate: (_) => callbackCount++,
+        updateService: mockService,
+        initialDelay: Duration.zero,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(callbackCount, 1);
+      expect(mockService.callCount, 1);
+    });
+  });
+}
+
+class _MockUpdateService extends UpdateService {
+  _MockUpdateService({required this.hasUpdate});
+  final bool hasUpdate;
+  int callCount = 0;
+
+  @override
+  Future<UpdateCheckResult> checkForUpdatesWithFallback({
+    required String currentVersion,
+    required String selectedProxy,
+    List<String> backupProxies = const <String>[],
+  }) async {
+    callCount++;
+    return UpdateCheckResult(
+      status: hasUpdate ? UpdateStatus.hasUpdate : UpdateStatus.noUpdate,
+      release: hasUpdate
+          ? const ReleaseInfo(
+              tagName: 'v2.0.0',
+              version: '2.0.0',
+              name: 'v2.0.0',
+              body: '',
+              publishedAt: null,
+              assets: [],
+              htmlUrl: '',
+            )
+          : null,
+    );
+  }
 }
