@@ -45,8 +45,8 @@ zf_academic_io（依赖 dart:io）
 ```sh
 cd packages/zf_academic
 dart pub get
-dart test        # 72 个用例
-dart analyze     # 0 问题
+dart test
+dart analyze
 ```
 
 覆盖：加密的确定性黄金向量、PKCS#1 往返与随机填充、Cookie 匹配/过期/迁移/快照往返、

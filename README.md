@@ -57,6 +57,12 @@
   - 针对通知、精确闹钟、后台耗电优化、自启动提供精准的状态自检与直达系统设置入口；
   - 诊断区支持「立即显示通知」与「延迟测试提醒」，方便即时预览效果与排查系统拦截。
 
+### 🚀 自动检查更新
+
+- **自动检查**：冷启动时触发更新检查，发现新版本会弹出通知
+
+- **加速代理**：内置多条 GitHub 镜像加速代理池，保障弱网环境下的稳定检测。
+
 ### 🔒 数据、安全与网络
 
 - **凭据安全**：密码绝不明文落地，退出登录即刻彻底销毁凭据；网络 Cookie 快照隔离在 App 私有沙箱目录中。
@@ -89,9 +95,6 @@
   - 核心运行时仅依赖 `flutter_secure_storage`（加密凭据）、`path_provider`（私有路径）、`url_launcher`（外部链接跳转）。
 - **协议层解耦（`zf_academic`）**：
   - 教务交互与协议解析全部封装在子模块 `packages/zf_academic` 中，为**纯 Dart 实现（零 Flutter 引擎依赖）**；
-  - 包含原生 HTTP 请求管线、Cookie 容器（RFC 6265）、正方定制 RSA/CAS 加密算法、教务 HTML 容错解析引擎，支持完全脱离 UI 进行快速单测。
-- **全面自动化测试**：
-  - 全套 395 项离线测试（Flutter UI 与状态机 312 项 + 教务协议层 83 项），覆盖表单校验、布局溢出防爆、动画打断、闹钟排程、Cookie 隔离等各种极端场景。
 
 ## 目录结构
 
@@ -109,9 +112,10 @@ qustschedule/
 │   │   ├── term_calendar.dart         周次 ↔ 日期转换、同日排课布局
 │   │   ├── timetable.dart             作息表模型与节次快捷运算
 │   │   ├── course_text.dart           卡片文字自适应缩放与截断排版
-│   │   ├── preferences_repository.dart 用户偏好持久化（Schema 11，向下兼容）
+│   │   ├── preferences_repository.dart 用户偏好持久化（Schema 13，向下兼容）
 │   │   ├── credentials_repository.dart 凭据安全存储（Keystore / DPAPI）
 │   │   ├── session_repository.dart    Cookie 容器快照持久化
+│   │   ├── update_service.dart        应用更新：加速代理降级、便携版热更新与 Robocopy 替换
 │   │   ├── reminder_planner.dart      提醒规划纯函数：事件生成、指纹、14 天窗口
 │   │   ├── reminder_gateway.dart      原生闹钟与提醒通道抽象（MethodChannel）
 │   │   ├── reminder_service.dart      提醒编排：防抖聚合、去重与重试
