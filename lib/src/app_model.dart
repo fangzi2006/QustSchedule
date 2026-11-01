@@ -546,36 +546,41 @@ class AppModel extends ChangeNotifier {
       if (delay == Duration.zero) {
         if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
         final service = updateService ?? UpdateService();
-        service.checkForUpdatesWithFallback(
-          currentVersion: appVersion,
-          selectedProxy: selectedUpdateProxy,
-          backupProxies: allUpdateProxies,
-        ).then((result) {
-          if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
-          if (result.status == UpdateStatus.hasUpdate) {
-            _hasCheckedAutoUpdate = true;
-            if (result.release != null) onHasUpdate(result);
-          } else if (result.status == UpdateStatus.noUpdate) {
-            _hasCheckedAutoUpdate = true;
-          } else if (result.status == UpdateStatus.networkError) {
-            if (retryCount < 2) {
-              retryCount++;
-              scheduleCheck(const Duration(seconds: 2));
-            } else {
-              _hasCheckedAutoUpdate = true;
-            }
-          } else {
-            _hasCheckedAutoUpdate = true;
-          }
-        }).catchError((_) {
-          if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
-          if (retryCount < 2) {
-            retryCount++;
-            scheduleCheck(const Duration(seconds: 2));
-          } else {
-            _hasCheckedAutoUpdate = true;
-          }
-        });
+        service
+            .checkForUpdatesWithFallback(
+              currentVersion: appVersion,
+              selectedProxy: selectedUpdateProxy,
+              backupProxies: allUpdateProxies,
+            )
+            .then((result) {
+              if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed)
+                return;
+              if (result.status == UpdateStatus.hasUpdate) {
+                _hasCheckedAutoUpdate = true;
+                if (result.release != null) onHasUpdate(result);
+              } else if (result.status == UpdateStatus.noUpdate) {
+                _hasCheckedAutoUpdate = true;
+              } else if (result.status == UpdateStatus.networkError) {
+                if (retryCount < 2) {
+                  retryCount++;
+                  scheduleCheck(const Duration(seconds: 2));
+                } else {
+                  _hasCheckedAutoUpdate = true;
+                }
+              } else {
+                _hasCheckedAutoUpdate = true;
+              }
+            })
+            .catchError((_) {
+              if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed)
+                return;
+              if (retryCount < 2) {
+                retryCount++;
+                scheduleCheck(const Duration(seconds: 2));
+              } else {
+                _hasCheckedAutoUpdate = true;
+              }
+            });
         return;
       }
 
@@ -621,6 +626,7 @@ class AppModel extends ChangeNotifier {
 
     scheduleCheck(initialDelay);
   }
+
   Future<void> setAutoCheckUpdate(bool value) async {
     if (_preferences.autoCheckUpdate == value) return;
     await _preferences.setAutoCheckUpdate(value);
