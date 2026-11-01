@@ -510,6 +510,10 @@ void main() {
       expect(weeks('第3-5周'), <int>[3, 4, 5]);
       expect(weeks('1,3,5周'), <int>[1, 3, 5]);
       expect(weeks('[1-16周]'), List<int>.generate(16, (i) => i + 1));
+      expect(tryParseWeeks('1~16周'), List<int>.generate(16, (i) => i + 1));
+      expect(tryParseWeeks('1至16周'), List<int>.generate(16, (i) => i + 1));
+      expect(tryParseWeeks('1-8周(全)'), <int>[1, 2, 3, 4, 5, 6, 7, 8]);
+      expect(tryParseWeeks('非标准说明文本'), isEmpty);
     });
 
     test('isLoginPage / detectCaptcha / hiddenFields', () {
@@ -589,6 +593,15 @@ void main() {
       expect(entries[0].weeks, [1, 2, 3, 4]);
       expect(entries[1].name, '非常规周次课程');
       expect(entries[1].weeks, isEmpty);
+      expect(
+        entries[1].details?.any(
+              (d) =>
+                  d.id == 'rawWeeks' &&
+                  d.label == '周次说明' &&
+                  d.value == '非标准说明文本',
+            ),
+        isTrue,
+      );
     });
   });
 }

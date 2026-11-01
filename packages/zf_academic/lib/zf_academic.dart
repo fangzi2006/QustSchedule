@@ -110,6 +110,7 @@ export 'src/schedule.dart'
         periods,
         selectedTermFromHtml,
         termsFromHtml,
+        tryParseWeeks,
         weeks;
 export 'src/types.dart'
     show

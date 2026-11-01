@@ -144,14 +144,17 @@ List<(int, int)> periods(String value) {
   return spans;
 }
 
-/// `1-4周(单)`、`第3-5周`、`1,3,5周`、`[1-16周]` → 周次数组。上限 25 周，超出视为页面结构变化。
-List<int> weeks(String value) {
+/// 尝试将 `1-4周(单)`、`第3-5周`、`1,3,5周`、`[1-16周]`、`1~16周`、`1至16周` 等文本安全解析为周次数组。
+///
+/// 若字符串为空或不包含任何可识别周次（如“分散教学”等非常规文本），返回空列表，不抛出异常。
+List<int> tryParseWeeks(String value) {
   if (value.trim().isEmpty) return const <int>[];
   final normalized = value
       .replaceAll('（', '(')
       .replaceAll('）', ')')
-      .replaceAll(RegExp(r'—|－'), '-')
+      .replaceAll(RegExp(r'[—－~～]|至|到'), '-')
       .replaceAll('第', '')
+      .replaceAll(RegExp(r'\((?:周|全)\)'), '周')
       .replaceAll('(周)', '周')
       .replaceAll(RegExp(r'[\[\]]'), '');
   final result = <int>{};
@@ -160,13 +163,13 @@ List<int> weeks(String value) {
   );
   for (final match in pattern.allMatches(normalized)) {
     for (final range in (match.group(1) ?? '').split(RegExp(r'[,，、]'))) {
-      final pair = range.split('-').map(int.parse).toList();
-      final start = pair[0];
-      final end = pair.length > 1 ? pair[1] : start;
+      final parts =
+          range.split('-').map((s) => int.tryParse(s.trim())).toList();
+      if (parts.isEmpty || parts.any((p) => p == null)) continue;
+      final start = parts[0]!;
+      final end = parts.length > 1 ? parts[1]! : start;
       final mode = match.group(2) ?? match.group(3);
-      if (start < 1 || end < start || end > 25) {
-        changed('学校课表周次超出当前支持的 1–25 周');
-      }
+      if (start < 1 || end < start || end > 25) continue;
       for (var week = start; week <= end; week++) {
         if (mode == null || week % 2 == (mode == '单' ? 1 : 0)) {
           result.add(week);
@@ -174,8 +177,26 @@ List<int> weeks(String value) {
       }
     }
   }
-  if (result.isEmpty) changed('学校课表缺少可识别的周次');
   return result.toList()..sort();
+}
+
+/// `1-4周(单)`、`第3-5周`、`1,3,5周`、`[1-16周]` → 周次数组。上限 25 周，超出视为页面结构变化。
+List<int> weeks(String value) {
+  if (value.trim().isEmpty) return const <int>[];
+  final list = tryParseWeeks(value);
+  if (list.isEmpty) {
+    final raw = value.replaceAll(RegExp(r'\s+'), '');
+    final match = RegExp(r'(\d+)(?:[—－~～\-]|至|到)(\d+)').firstMatch(raw);
+    if (match != null) {
+      final start = int.tryParse(match.group(1) ?? '') ?? 0;
+      final end = int.tryParse(match.group(2) ?? '') ?? 0;
+      if (start < 1 || end < start || end > 25) {
+        changed('学校课表周次超出当前支持的 1–25 周');
+      }
+    }
+    changed('学校课表缺少可识别的周次');
+  }
+  return list;
 }
 
 List<ScheduleDetail> _scheduleDetails(Map<String, dynamic> row) {
@@ -218,11 +239,13 @@ List<ScheduleEntry> jsonSchedule(List<Map<String, dynamic>> rows) {
     final room = field(row, const ['cdmc', 'CDMC', 'jxcdmc']);
     final location = [campus, room].where((part) => part.isNotEmpty).join(' ');
     final rawWeeks = field(row, const ['zcd', 'ZCD', 'weeks']);
-    List<int> weekList;
-    try {
-      weekList = rawWeeks.isEmpty ? const <int>[] : weeks(rawWeeks);
-    } catch (_) {
-      weekList = const <int>[];
+    final weekList = tryParseWeeks(rawWeeks);
+    if (weekList.isEmpty && rawWeeks.trim().isNotEmpty) {
+      details.add(ScheduleDetail(
+        id: 'rawWeeks',
+        label: '周次说明',
+        value: rawWeeks.trim(),
+      ));
     }
     final courseKey = field(row, const [
       'schedule_source_id',
