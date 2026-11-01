@@ -553,8 +553,9 @@ class AppModel extends ChangeNotifier {
               backupProxies: allUpdateProxies,
             )
             .then((result) {
-              if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed)
+              if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) {
                 return;
+              }
               if (result.status == UpdateStatus.hasUpdate) {
                 _hasCheckedAutoUpdate = true;
                 if (result.release != null) onHasUpdate(result);
@@ -572,8 +573,9 @@ class AppModel extends ChangeNotifier {
               }
             })
             .catchError((_) {
-              if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed)
+              if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) {
                 return;
+              }
               if (retryCount < 2) {
                 retryCount++;
                 scheduleCheck(const Duration(seconds: 2));
