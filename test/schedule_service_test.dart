@@ -48,7 +48,7 @@ class _Harness {
   /// 编排层实际传给客户端的配置（用来验证 onRequest 等接线）。
   ZfClientConfig? config;
 
-  static const String accountKey = '$_baseUrl|2407720102';
+  static const String accountKey = '$_baseUrl|20240001';
 }
 
 void main() {
@@ -57,7 +57,7 @@ void main() {
       final h = _Harness();
       await h.credentials.save(
         _Harness.accountKey,
-        const Credentials('2407720102', 'pw'),
+        const Credentials('20240001', 'pw'),
       );
 
       final schedule = await h.service.getSchedule();
@@ -112,7 +112,7 @@ void main() {
       final h = _Harness();
       await h.credentials.save(
         _Harness.accountKey,
-        const Credentials('2407720102', 'pw'),
+        const Credentials('20240001', 'pw'),
       );
       h.backend.fetchBehavior = (call, termId) async {
         if (call == 1) throw expired();
@@ -153,7 +153,7 @@ void main() {
       final h = _Harness();
       await h.credentials.save(
         _Harness.accountKey,
-        const Credentials('2407720102', 'old-pw'),
+        const Credentials('20240001', 'old-pw'),
       );
       h.backend.fetchBehavior = (call, termId) async => throw expired();
       h.backend.loginBehavior = (call, credentials) async =>
@@ -177,7 +177,7 @@ void main() {
       final h = _Harness();
       await h.credentials.save(
         _Harness.accountKey,
-        const Credentials('2407720102', 'pw'),
+        const Credentials('20240001', 'pw'),
       );
       var call = 0;
       h.backend.fetchBehavior = (_, termId) async {
@@ -203,7 +203,7 @@ void main() {
       final h = _Harness();
       await h.credentials.save(
         _Harness.accountKey,
-        const Credentials('2407720102', 'pw'),
+        const Credentials('20240001', 'pw'),
       );
       h.backend.fetchBehavior = (call, termId) async => throw pageChanged();
 
@@ -225,7 +225,7 @@ void main() {
       final h = _Harness();
       await h.credentials.save(
         _Harness.accountKey,
-        const Credentials('2407720102', 'pw'),
+        const Credentials('20240001', 'pw'),
       );
       h.backend.loginBehavior = (call, credentials) async {
         await Future<void>.delayed(const Duration(milliseconds: 30));
@@ -252,7 +252,7 @@ void main() {
       final h = _Harness(autoLoginLimit: 1);
       await h.credentials.save(
         _Harness.accountKey,
-        const Credentials('2407720102', 'pw'),
+        const Credentials('20240001', 'pw'),
       );
 
       // 第一次：失效 → 重登成功 → 重试又失效（第二轮回抛）
@@ -294,14 +294,14 @@ void main() {
       final h = _Harness(autoLoginLimit: 0);
       await h.credentials.save(
         _Harness.accountKey,
-        const Credentials('2407720102', 'pw'),
+        const Credentials('20240001', 'pw'),
       );
       h.backend.fetchBehavior = (call, termId) async => throw expired();
 
       await expectLater(h.service.getSchedule(), throwsA(isA<AcademicError>()));
       expect(h.service.breakerOpen, isTrue);
 
-      final state = await h.service.signIn('2407720102', 'pw');
+      final state = await h.service.signIn('20240001', 'pw');
       expect(state, isA<AuthenticatedState>());
       expect(h.service.breakerOpen, isFalse);
     });
@@ -316,7 +316,7 @@ void main() {
       );
       await h.credentials.save(
         _Harness.accountKey,
-        const Credentials('2407720102', 'pw'),
+        const Credentials('20240001', 'pw'),
       );
       h.backend.fetchBehavior = (call, termId) async {
         if (call == 1) throw expired();
@@ -344,7 +344,7 @@ void main() {
       final h = _Harness(captchaHandler: (state) async => null);
       await h.credentials.save(
         _Harness.accountKey,
-        const Credentials('2407720102', 'pw'),
+        const Credentials('20240001', 'pw'),
       );
       h.backend.fetchBehavior = (call, termId) async => throw expired();
       h.backend.loginBehavior = (call, credentials) async => const CaptchaState(
@@ -411,7 +411,7 @@ void main() {
       h.service.onStage = stages.add;
       await h.credentials.save(
         _Harness.accountKey,
-        const Credentials('2407720102', 'pw'),
+        const Credentials('20240001', 'pw'),
       );
       h.backend.fetchBehavior = (call, termId) async {
         if (call == 1) throw expired();
@@ -441,11 +441,11 @@ void main() {
     test('只用登录：signIn 记住密码并落盘 Cookie', () async {
       final h = _Harness();
 
-      final state = await h.service.signIn('2407720102', 'pw');
+      final state = await h.service.signIn('20240001', 'pw');
 
       expect(state, isA<AuthenticatedState>());
       final saved = await h.credentials.get(_Harness.accountKey);
-      expect(saved?.username, '2407720102');
+      expect(saved?.username, '20240001');
       expect(saved?.password, 'pw');
       expect(h.storage.saveCount, 1);
     });
@@ -453,7 +453,7 @@ void main() {
     test('只用登录：remember=false 时不写安全存储', () async {
       final h = _Harness();
 
-      await h.service.signIn('2407720102', 'pw', remember: false);
+      await h.service.signIn('20240001', 'pw', remember: false);
 
       expect(await h.credentials.has(_Harness.accountKey), isFalse);
       expect(h.storage.saveCount, 1, reason: 'Cookie 仍要保存');
@@ -470,7 +470,7 @@ void main() {
 
     test('退出登录清空快照；forget 一并删凭据', () async {
       final h = _Harness();
-      await h.service.signIn('2407720102', 'pw');
+      await h.service.signIn('20240001', 'pw');
 
       await h.service.signOut(forgetCredentials: true);
 
@@ -482,7 +482,7 @@ void main() {
       final h = _Harness();
       await h.credentials.save(
         _Harness.accountKey,
-        const Credentials('2407720102', 'pw'),
+        const Credentials('20240001', 'pw'),
       );
       var termsCall = 0;
       h.backend.termsBehavior = (call) async {
@@ -510,7 +510,7 @@ void main() {
       );
       await h.credentials.save(
         _Harness.accountKey,
-        const Credentials('2407720102', 'pw'),
+        const Credentials('20240001', 'pw'),
       );
       h.backend.fetchBehavior = (call, termId) async {
         if (call == 1) {
@@ -519,7 +519,7 @@ void main() {
         return sampleSchedule(termId ?? '2026-2027-1');
       };
       // 冷启动：Cookie 快照在，但快照里没有用户名，只能靠本地账号拼 key。
-      h.service.accountHint = '2407720102';
+      h.service.accountHint = '20240001';
       await h.service.bootstrap();
 
       final schedule = await h.service.getSchedule();
@@ -536,7 +536,7 @@ void main() {
       );
       await h.credentials.save(
         _Harness.accountKey,
-        const Credentials('2407720102', 'pw'),
+        const Credentials('20240001', 'pw'),
       );
       h.backend.fetchBehavior = (call, termId) async {
         throw AcademicError(ErrorCode.sessionExpired, '登录已失效');

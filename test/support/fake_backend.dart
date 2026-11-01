@@ -53,8 +53,8 @@ class FakeBackend implements ScheduleBackend {
     this.loginBehavior,
     this.submitBehavior,
     this.termsBehavior,
-    this.studentId = '2407720102',
-    this.studentName = '房子洋',
+    this.studentId = '20240001',
+    this.studentName = '测试学生',
     this.checkSessionReadsIdentity = true,
     this.sessionExpired = false,
     CookieStoreSnapshot? cookies,
@@ -116,10 +116,7 @@ class FakeBackend implements ScheduleBackend {
     final behavior = loginBehavior;
     if (behavior != null) return behavior(loginCount, credentials);
     cookies = snapshotOf('https://jw.example.edu.cn/jwglxt', value: 'fresh');
-    return const AuthenticatedState(
-      studentId: '2407720102',
-      studentName: '房子洋',
-    );
+    return const AuthenticatedState(studentId: '20240001', studentName: '测试学生');
   }
 
   @override
@@ -128,10 +125,7 @@ class FakeBackend implements ScheduleBackend {
     final behavior = submitBehavior;
     if (behavior != null) return behavior(submitCount, code);
     cookies = snapshotOf('https://jw.example.edu.cn/jwglxt', value: 'fresh');
-    return const AuthenticatedState(
-      studentId: '2407720102',
-      studentName: '房子洋',
-    );
+    return const AuthenticatedState(studentId: '20240001', studentName: '测试学生');
   }
 
   @override
@@ -155,8 +149,8 @@ class FakeBackend implements ScheduleBackend {
       );
     }
     if (checkSessionReadsIdentity) {
-      studentId = '2407720102';
-      studentName = '房子洋';
+      studentId = '20240001';
+      studentName = '测试学生';
     }
     return SessionState(
       status: SessionStatus.authenticated,

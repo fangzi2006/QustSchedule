@@ -111,7 +111,7 @@ void main() {
       final client = _client(fake);
 
       await client.postForm('$_root/xtgl/login_slogin.html', <String, String>{
-        'yhm': '2407720102',
+        'yhm': '20240001',
         'mm': 'CIPHER',
         'csrftoken': 'uuid-1,uuid2',
       });
@@ -120,7 +120,7 @@ void main() {
       expect(request.method, 'POST');
       expect(request.headers['Content-Type'],
           'application/x-www-form-urlencoded; charset=utf-8');
-      expect(request.body, 'yhm=2407720102&mm=CIPHER&csrftoken=uuid-1%2Cuuid2');
+      expect(request.body, 'yhm=20240001&mm=CIPHER&csrftoken=uuid-1%2Cuuid2');
     });
 
     test('表单值里的空格编码为 +（与浏览器 URLSearchParams 一致）', () async {
@@ -674,12 +674,12 @@ void main() {
         expect(received.last, contains('cookie=[JSESSIONID=socket-1]'));
 
         final form = await client.postForm('$base/form', <String, String>{
-          'yhm': '2407720102',
+          'yhm': '20240001',
           'mm': 'CIPHER',
         });
         expect(form.body, 'ok:/jwglxt/form');
         expect(received.last,
-            'POST /jwglxt/form cookie=[JSESSIONID=socket-1] body=[yhm=2407720102&mm=CIPHER]');
+            'POST /jwglxt/form cookie=[JSESSIONID=socket-1] body=[yhm=20240001&mm=CIPHER]');
 
         final redirected = await client.get('$base/redir');
         expect(redirected.body, 'ok:/jwglxt/echo');

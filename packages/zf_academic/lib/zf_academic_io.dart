@@ -11,7 +11,7 @@
 /// final client = vmZhengfangClient(
 ///   const ZfClientConfig(baseUrl: 'https://jwglxt1.qust.edu.cn/jwglxt'),
 /// );
-/// final state = await client.login(Credentials('2407720102', '…'));
+/// final state = await client.login(Credentials('20240001', '…'));
 /// await client.close();
 /// ```
 library zf_academic_io;

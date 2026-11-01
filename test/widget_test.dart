@@ -2259,7 +2259,7 @@ void main() {
       expect(find.text('退出并忘记密码'), findsNothing);
       expect(find.text('退出登录（保留密码）'), findsNothing);
       expect(find.text('忘记密码'), findsNothing);
-      expect(find.text('房子洋'), findsOneWidget);
+      expect(find.text('测试学生'), findsOneWidget);
       expect(find.text('未登录'), findsNothing);
     });
 
@@ -2351,7 +2351,7 @@ void main() {
       expect(find.byType(HomeShell), findsOneWidget);
 
       // 切线路会沿用当前账号自动登录，先让模型处于"登录过"的状态。
-      await model.signIn('2407720102', 'pw');
+      await model.signIn('20240001', 'pw');
       await tester.pumpAndSettle();
       expect(find.byType(HomeShell), findsOneWidget);
 

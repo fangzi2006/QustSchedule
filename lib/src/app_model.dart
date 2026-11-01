@@ -1391,8 +1391,8 @@ class AppModel extends ChangeNotifier {
   void hydrateForTest({
     required Schedule schedule,
     Terms? terms,
-    String studentName = '房子洋',
-    String studentId = '2407720102',
+    String studentName = '测试学生',
+    String studentId = '20240001',
     int? week,
     DateTime? termStart,
   }) {

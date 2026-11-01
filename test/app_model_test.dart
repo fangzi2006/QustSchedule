@@ -102,29 +102,29 @@ void main() {
       // 没有 Cookie 快照、也没有保存的凭据 → 停在登录页；但账号应该已经从设置里读出来，
       // 不用等任何网络请求（否则调试页永远是"-"，直到某次刷新成功）。
       final prefs = Preferences.inMemory(
-        lastAccounts: <String, String>{_baseUrl: '2407720102'},
+        lastAccounts: <String, String>{_baseUrl: '20240001'},
       );
       final model = bootRig(preferences: prefs);
       await model.boot();
 
       expect(model.status, AppStatus.needLogin);
-      expect(model.studentId, '2407720102');
+      expect(model.studentId, '20240001');
     });
 
     test('登录成功后记住账号与姓名', () async {
       final prefs = Preferences.inMemory();
       final rig = buildRig(preferences: prefs);
-      await rig.model.signIn('2407720102', 'pw');
+      await rig.model.signIn('20240001', 'pw');
 
-      expect(prefs.accountOf(_baseUrl), '2407720102');
-      expect(prefs.studentNameOf(_baseUrl), '房子洋');
-      expect(rig.model.studentId, '2407720102');
-      expect(rig.model.studentName, '房子洋');
+      expect(prefs.accountOf(_baseUrl), '20240001');
+      expect(prefs.studentNameOf(_baseUrl), '测试学生');
+      expect(rig.model.studentId, '20240001');
+      expect(rig.model.studentName, '测试学生');
     });
 
     test('冷启动直接从本地缓存恢复学号与姓名，不发起网络请求', () async {
       final prefs = Preferences.inMemory(
-        lastAccounts: <String, String>{_baseUrl: '2407720102'},
+        lastAccounts: <String, String>{_baseUrl: '20240001'},
         lastStudentNames: <String, String>{_baseUrl: '张三'},
       );
       final cache = FakeScheduleCache(
@@ -139,7 +139,7 @@ void main() {
 
       await model.boot();
 
-      expect(model.studentId, '2407720102');
+      expect(model.studentId, '20240001');
       expect(model.studentName, '张三');
       expect(backend.checkSessionCount, 0, reason: '已有完整缓存身份，冷启动无需打网络');
       model.dispose();
@@ -149,11 +149,11 @@ void main() {
       // 用户报告的确切场景：长时间不用 → Cookie 失效 → 冷启动刷新。
       final credentials = InMemoryCredentialStore();
       await credentials.save(
-        '$_baseUrl|2407720102',
-        const Credentials('2407720102', 'pw'),
+        '$_baseUrl|20240001',
+        const Credentials('20240001', 'pw'),
       );
       final prefs = Preferences.inMemory(
-        lastAccounts: <String, String>{_baseUrl: '2407720102'},
+        lastAccounts: <String, String>{_baseUrl: '20240001'},
       );
       final repo = FakeSessionRepository(snapshotOf(_baseUrl));
       final backend = FakeBackend(studentId: '', studentName: '')
@@ -185,8 +185,8 @@ void main() {
 
     test('退出登录清掉记住的账号与姓名', () async {
       final prefs = Preferences.inMemory(
-        lastAccounts: <String, String>{_baseUrl: '2407720102'},
-        lastStudentNames: <String, String>{_baseUrl: '房子洋'},
+        lastAccounts: <String, String>{_baseUrl: '20240001'},
+        lastStudentNames: <String, String>{_baseUrl: '测试学生'},
       );
       final rig = buildRig(preferences: prefs);
       await rig.model.signOut();
@@ -407,11 +407,11 @@ void main() {
     test('重登刷新时提示先切到正在重新登录，登录完切回更新中，取回后已更新', () async {
       final rig = buildRig();
       rig.model.hydrateForTest(schedule: sampleSchedule());
-      rig.model.username = '2407720102';
-      rig.model.service.accountHint = '2407720102';
+      rig.model.username = '20240001';
+      rig.model.service.accountHint = '20240001';
       await rig.credentials.save(
-        '$_baseUrl|2407720102',
-        const Credentials('2407720102', 'pw'),
+        '$_baseUrl|20240001',
+        const Credentials('20240001', 'pw'),
       );
       final loginCompleter = Completer<AuthState>();
       final scheduleCompleter = Completer<Schedule>();
@@ -434,7 +434,7 @@ void main() {
       expect(hints, contains('正在重新登录…'));
 
       loginCompleter.complete(
-        const AuthenticatedState(studentId: '2407720102', studentName: '张三'),
+        const AuthenticatedState(studentId: '20240001', studentName: '张三'),
       );
       await Future<void>.delayed(Duration.zero);
       expect(hints.last, '更新中…');
@@ -510,8 +510,8 @@ void main() {
       await rig.model.loadScheduleForTest();
 
       expect(rig.backend.checkSessionCount, 1);
-      expect(rig.model.studentName, '房子洋');
-      expect(rig.model.studentId, '2407720102');
+      expect(rig.model.studentName, '测试学生');
+      expect(rig.model.studentId, '20240001');
       expect(rig.model.signedIn, isTrue);
       rig.model.dispose();
     });
@@ -532,10 +532,10 @@ void main() {
           checkSessionReadsIdentity: false,
         ),
       );
-      rig.model.username = '2407720102';
+      rig.model.username = '20240001';
       await rig.model.loadScheduleForTest();
 
-      expect(rig.model.studentId, '2407720102');
+      expect(rig.model.studentId, '20240001');
       expect(rig.model.signedIn, isTrue);
       rig.model.dispose();
     });
@@ -548,7 +548,7 @@ void main() {
 
       await rig.model.changePassword('brand-new-pass');
 
-      final saved = await rig.credentials.get('$_baseUrl|2407720102');
+      final saved = await rig.credentials.get('$_baseUrl|20240001');
       expect(saved, isNotNull);
       expect(saved!.password, 'brand-new-pass');
       expect(rig.backend.loginCount, 1);
@@ -565,7 +565,7 @@ void main() {
         rig.model.changePassword('wrong'),
         throwsA(isA<AcademicError>()),
       );
-      expect(await rig.credentials.has('$_baseUrl|2407720102'), isFalse);
+      expect(await rig.credentials.has('$_baseUrl|20240001'), isFalse);
       rig.model.dispose();
     });
   });
@@ -586,7 +586,7 @@ void main() {
 
       // 切换地址现在会沿用当前账号自动登录，所以先让它处于"登录过"的状态
       // （真实用户切线路前必然是登录着的）。
-      await model.signIn('2407720102', 'pw');
+      await model.signIn('20240001', 'pw');
       await model.changeSchool('https://jw2.example.edu.cn/jwglxt');
       expect(model.schoolBaseUrl, 'https://jw2.example.edu.cn/jwglxt');
       await Future<void>.delayed(Duration.zero);
@@ -596,7 +596,7 @@ void main() {
     test('切换地址沿用当前账号直接登录，不退回登录页', () async {
       final prefs = Preferences.inMemory();
       final model = buildModel(preferences: prefs);
-      await model.signIn('2407720102', 'pw');
+      await model.signIn('20240001', 'pw');
       expect(model.status, AppStatus.ready);
 
       await model.changeSchool('https://jwglxt2.qust.edu.cn/jwglxt');
@@ -605,18 +605,18 @@ void main() {
       // 6 条线路是同一套系统、账号通用：换过去应当自动登录，而不是把用户
       // 踢回登录页重填一遍。
       expect(model.status, AppStatus.ready, reason: '不该退回 needLogin');
-      expect(model.username, '2407720102');
+      expect(model.username, '20240001');
       expect(model.schedule, isNotNull, reason: '课表要在新地址上取回来');
       expect(
         prefs.accountOf('https://jwglxt2.qust.edu.cn/jwglxt'),
-        '2407720102',
+        '20240001',
         reason: '账号要落到新地址下，否则下次冷启动拼不出凭据 key',
       );
     });
 
     test('切换线路全程不经过登录页状态（不会闪回登录页）', () async {
       final model = buildModel();
-      await model.signIn('2407720102', 'pw');
+      await model.signIn('20240001', 'pw');
 
       // 监听要在登录之后才挂：只看"换线路"这一段的状态。
       final seen = <AppStatus>[];
@@ -635,7 +635,7 @@ void main() {
     test('切换线路时登录失败：回滚原线路，只提示不跳页', () async {
       final backend = FakeBackend();
       final rig = buildRig(backend: backend);
-      await rig.model.signIn('2407720102', 'pw');
+      await rig.model.signIn('20240001', 'pw');
       final String before = rig.model.schoolBaseUrl;
 
       // 新线路登录被拒（密码改了 / 线路异常）。

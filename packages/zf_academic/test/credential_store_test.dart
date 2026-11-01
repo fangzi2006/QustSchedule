@@ -8,11 +8,11 @@ void main() {
       expect(await store.get('qust'), isNull);
       expect(await store.has('qust'), isFalse);
 
-      await store.save('qust', const Credentials('2407720102', 'secret'));
+      await store.save('qust', const Credentials('20240001', 'secret'));
       expect(await store.has('qust'), isTrue);
       final loaded = await store.get('qust');
       expect(loaded, isNotNull);
-      expect(loaded!.username, '2407720102');
+      expect(loaded!.username, '20240001');
       expect(loaded.password, 'secret');
 
       await store.remove('qust');
@@ -34,12 +34,12 @@ void main() {
 
   group('credentialStoreKey', () {
     test('同一账号稳定、不同账号不同、且不含账号明文', () {
-      final key = credentialStoreKey('2407720102');
-      expect(credentialStoreKey('2407720102'), key);
-      expect(key != credentialStoreKey('2407720103'), isTrue);
+      final key = credentialStoreKey('20240001');
+      expect(credentialStoreKey('20240001'), key);
+      expect(key != credentialStoreKey('20240002'), isTrue);
       expect(key.startsWith('zf_pw_'), isTrue);
       expect(RegExp(r'^zf_pw_[0-9a-f]{64}$').hasMatch(key), isTrue);
-      expect(key.contains('2407720102'), isFalse, reason: '存储键必须是账号的哈希，不能出现明文');
+      expect(key.contains('20240001'), isFalse, reason: '存储键必须是账号的哈希，不能出现明文');
     });
   });
 }

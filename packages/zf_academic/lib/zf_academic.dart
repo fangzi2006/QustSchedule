@@ -4,7 +4,7 @@
 /// import 'package:zf_academic/zf_academic.dart';
 ///
 /// // 1. 凭据（app 侧应注入 flutter_secure_storage 实现，见 example/）
-/// final credentials = Credentials('2407720102', '…');
+/// final credentials = Credentials('20240001', '…');
 /// final store = InMemoryCredentialStore()..save('qust', credentials);
 ///
 /// // 2. Cookie（登录成功后 export()，之后 fromSnapshot() 恢复）

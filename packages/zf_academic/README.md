@@ -64,7 +64,7 @@ import 'package:zf_academic/zf_academic_io.dart';
 final client = vmZhengfangClient(
   const ZfClientConfig(baseUrl: 'https://jwglxt1.qust.edu.cn/jwglxt'),
 );
-final state = await client.login(const Credentials('2407720102', '…'));
+final state = await client.login(const Credentials('20240001', '…'));
 if (state is AuthenticatedState) {
   // 2) 保存 Cookie（落盘由 app 决定；凭据放 flutter_secure_storage，见 example/）
   final storage = FileCookieStorage('./zf-session.json');
