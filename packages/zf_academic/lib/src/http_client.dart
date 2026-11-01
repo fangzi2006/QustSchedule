@@ -23,7 +23,7 @@ import 'dart:typed_data';
 
 import 'cookies.dart';
 import 'errors.dart';
-import 'respond.dart' show looksLikeAccessForbidden, looksLikeServerError;
+import 'respond.dart' show inspectResponse;
 import 'types.dart';
 import 'urls.dart';
 import 'util.dart';
@@ -414,12 +414,17 @@ class AcademicHttpClient {
 
       if (raw.status == 403) {
         final snippet = _snippetOf(raw);
-        if (looksLikeAccessForbidden(snippet) ||
-            options.purpose == RequestPurpose.auth) {
+        final diag = inspectResponse(
+          statusCode: raw.status,
+          body: snippet,
+          isAuth: options.purpose == RequestPurpose.auth,
+        );
+        if (diag.isAccessForbidden || options.purpose == RequestPurpose.auth) {
           throw AcademicError(
             ErrorCode.accessForbidden,
             '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
             httpStatus: 403,
+            cause: diag.detail,
           );
         }
       }
@@ -451,10 +456,13 @@ class AcademicHttpClient {
 
   /// 这条响应看起来哪里不对（null = 正常）。用于调试页的"请求记录"。
   String? _issueFor(RawHttpResponse raw) {
-    final snippet = _snippetOf(raw);
-    if (looksLikeAccessForbidden(snippet)) return '访问被拦截（403）';
     if (raw.status >= 500) return 'HTTP ${raw.status} 服务端异常';
     if (raw.status == 429) return 'HTTP 429 请求过多';
+
+    final snippet = _snippetOf(raw);
+    final diag = inspectResponse(statusCode: raw.status, body: snippet);
+    if (diag.isAccessForbidden) return '访问被拦截（403）';
+
     if (raw.status >= 400) return 'HTTP ${raw.status}';
     final contentType =
         (_firstHeader(raw.headers, 'content-type') ?? '').toLowerCase();
@@ -462,7 +470,7 @@ class AcademicHttpClient {
       return null;
     }
     // 只看开头 4KB：错误页/维护页的原因都在前面，没必要整个解析一遍。
-    return looksLikeServerError(snippet) ? '返回错误页' : null;
+    return diag.isServerError ? '返回错误页' : null;
   }
 
   String _snippetOf(RawHttpResponse raw) {
@@ -589,12 +597,18 @@ class AcademicHttpClient {
     required String targetUrl,
     required RequestPurpose purpose,
   }) async {
-    if (looksLikeAccessForbidden(_snippetOf(raw)) ||
-        _looksLikeBlockRedirectUrl(targetUrl)) {
+    final rawSnippet = _snippetOf(raw);
+    final rawDiag = inspectResponse(
+      statusCode: raw.status,
+      body: rawSnippet,
+      isAuth: purpose == RequestPurpose.auth,
+    );
+    if (rawDiag.isAccessForbidden || _looksLikeBlockRedirectUrl(targetUrl)) {
       throw AcademicError(
         ErrorCode.accessForbidden,
         '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
         httpStatus: 403,
+        cause: rawDiag.detail ?? targetUrl,
       );
     }
 
@@ -627,23 +641,13 @@ class AcademicHttpClient {
       }
 
       final snippet = _snippetOf(probeRaw);
-      if (probeRaw.status == 403 || looksLikeAccessForbidden(snippet)) {
-        _onRequest?.call(RequestLog(
-          method: 'GET',
-          url: probeRaw.url,
-          status: probeRaw.status,
-          purpose: purpose == RequestPurpose.auth
-              ? RequestPurpose.auth
-              : RequestPurpose.query,
-          issue: '访问被拦截（403）',
-        ));
-        throw AcademicError(
-          ErrorCode.accessForbidden,
-          '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
-          httpStatus: 403,
-        );
-      }
-      if (probeRaw.status >= 500 || looksLikeServerError(snippet)) {
+      final diag = inspectResponse(
+        statusCode: probeRaw.status,
+        body: snippet,
+        isAuth: purpose == RequestPurpose.auth,
+      );
+
+      if (diag.isServerError) {
         _onRequest?.call(RequestLog(
           method: 'GET',
           url: probeRaw.url,
@@ -657,6 +661,25 @@ class AcademicHttpClient {
           ErrorCode.serverError,
           '教务系统服务端异常（HTTP ${probeRaw.status}），请稍后重试',
           httpStatus: probeRaw.status,
+          cause: diag.detail,
+        );
+      }
+
+      if (diag.isAccessForbidden || probeRaw.status == 403) {
+        _onRequest?.call(RequestLog(
+          method: 'GET',
+          url: probeRaw.url,
+          status: probeRaw.status,
+          purpose: purpose == RequestPurpose.auth
+              ? RequestPurpose.auth
+              : RequestPurpose.query,
+          issue: '访问被拦截（403）',
+        ));
+        throw AcademicError(
+          ErrorCode.accessForbidden,
+          '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
+          httpStatus: 403,
+          cause: diag.detail,
         );
       }
 

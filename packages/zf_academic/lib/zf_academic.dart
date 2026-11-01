@@ -90,7 +90,11 @@ export 'src/http_client.dart'
         sniffMimeType;
 export 'src/respond.dart'
     show
+        ResponseDiagnosis,
+        ResponseKind,
+        extractHtmlTitle,
         hasSuccess,
+        inspectResponse,
         isPermissionDenied,
         listRows,
         looksLikeAccessForbidden,

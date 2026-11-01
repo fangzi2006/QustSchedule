@@ -21,18 +21,65 @@ Object? _tryParseJson(String text) {
 Map<String, dynamic>? _asObject(Object? value) =>
     value is Map<String, dynamic> ? value : null;
 
-/// 这段响应像不像"后端挂了"的页面（而不是正常的教务页）。
-///
-/// 典型来源：网关/Nginx 的 502/504 页、Spring 的 Whitelabel 错误页、
-/// 学校运维挂的"系统维护中"页。它们通常**仍是 HTTP 200**，只在正文里写着
-/// 故障原因 —— 只按状态码判断会把它们当成正常页面，最后误报成
-/// "页面结构与预期不一致"（PAGE_CHANGED），把人引向"学校升级了系统"。
-///
-/// 只收**特征明确**的写法，宁缺勿滥：漏判只是回到原来的 PAGE_CHANGED，
-/// 误判却会把真正需要适配的结构变化说成"服务器故障"。
-bool looksLikeServerError(String body) {
-  if (body.isEmpty) return false;
-  final text = body.toLowerCase();
+/// 从 HTML 源码中提取 <title> 标签内的文本。
+String? extractHtmlTitle(String html) {
+  if (html.isEmpty) return null;
+  final match = RegExp(r'<title[^>]*>([\s\S]*?)</title>', caseSensitive: false)
+      .firstMatch(html);
+  if (match == null) return null;
+  final raw = stripTags(match.group(1) ?? '').trim();
+  return raw.isEmpty ? null : raw;
+}
+
+/// HTTP 响应的健康状态分类。
+enum ResponseKind {
+  /// 正常业务响应（包括正常的 HTML 页面或 JSON 数据）。
+  ok,
+
+  /// 服务端故障（5xx、系统维护、Tomcat/Nginx 崩溃、正方系统错误）。
+  serverError,
+
+  /// 访问策略拦截 / 403（外网访问受限、防火墙或深信服网关策略拦截）。
+  accessForbidden,
+}
+
+/// 统一响应诊断结果（保留深挖能力，附带诊断原因）。
+final class ResponseDiagnosis {
+  final ResponseKind kind;
+
+  /// 提取到的页面标题或错误特征描述，直接供 RequestLog 和调试回溯。
+  final String? detail;
+
+  const ResponseDiagnosis(this.kind, [this.detail]);
+
+  bool get isOk => kind == ResponseKind.ok;
+  bool get isServerError => kind == ResponseKind.serverError;
+  bool get isAccessForbidden => kind == ResponseKind.accessForbidden;
+
+  @override
+  String toString() =>
+      'ResponseDiagnosis($kind${detail != null ? ', detail: $detail' : ''})';
+}
+
+/// 判定正文与标题是否明确属于服务端故障（500/502/维护/系统崩溃）。
+bool _isDefiniteServerError(String lowerBody, String? lowerTitle) {
+  if (lowerTitle != null) {
+    // 排除明确带 403 的拦截标题（如"访问出错-403"）
+    if (!lowerTitle.contains('403')) {
+      if (lowerTitle == '访问出错' ||
+          lowerTitle.contains('server error') ||
+          lowerTitle.contains('bad gateway') ||
+          lowerTitle.contains('gateway timeout') ||
+          lowerTitle.contains('gateway time-out') ||
+          lowerTitle.contains('service temporarily unavailable') ||
+          lowerTitle.contains('系统维护') ||
+          lowerTitle.contains('系统繁忙') ||
+          lowerTitle.contains('服务器错误')) {
+        return true;
+      }
+    }
+  }
+
   const markers = <String>[
     'internal server error',
     'bad gateway',
@@ -50,9 +97,109 @@ bool looksLikeServerError(String body) {
     '数据库连接异常',
   ];
   for (final marker in markers) {
-    if (text.contains(marker)) return true;
+    if (lowerBody.contains(marker)) return true;
   }
   return false;
+}
+
+/// 判定正文与标题是否明确属于访问策略拦截（校园网防火墙 / 403 拦截）。
+bool _isDefiniteAccessForbidden(String lowerBody, String? lowerTitle) {
+  if (lowerTitle != null) {
+    if (lowerTitle.contains('访问出错-403') ||
+        lowerTitle.contains('403 forbidden') ||
+        lowerTitle.contains('access denied') ||
+        lowerTitle.contains('request forbidden')) {
+      return true;
+    }
+  }
+
+  // 高置信度的校园网/网关拦截特征（已移除宽泛模糊词：'访问出错' 与单独的 '访问策略'）
+  const markers = <String>[
+    '访问出错-403',
+    '访问策略禁止',
+    '禁止您访问',
+    '仅限校园网',
+    '仅限校内',
+    '校园网内访问',
+    '非校园网网段',
+    '403 forbidden',
+    'access denied',
+    'request forbidden',
+  ];
+  for (final marker in markers) {
+    if (lowerBody.contains(marker)) return true;
+  }
+
+  // 复合特征：包含 403 并且明确提示受限/禁止/未授权
+  if (lowerBody.contains('403') &&
+      (lowerBody.contains('禁止访问') ||
+          lowerBody.contains('拒绝访问') ||
+          lowerBody.contains('访问策略') ||
+          lowerBody.contains('策略限制') ||
+          lowerBody.contains('错误代码'))) {
+    return true;
+  }
+
+  return false;
+}
+
+/// 统一诊断 HTTP 响应的健康状态。
+///
+/// 具备严格的优先级保证：
+/// 1. 显式 HTTP 5xx 状态码优先判定为服务端故障；
+/// 2. HTML 语义结构中优先判定服务端故障（解决"正方 500 页面标题也是访问出错"的误判根因）；
+/// 3. 基于高置信度指纹判定访问策略拦截（403 校园网限制）；
+/// 4. 诊断详情 [ResponseDiagnosis.detail] 携带关键标题或特征，供 [RequestLog] 与异常溯源。
+ResponseDiagnosis inspectResponse({
+  required int statusCode,
+  required String body,
+  bool isAuth = false,
+}) {
+  if (statusCode >= 500) {
+    return ResponseDiagnosis(
+        ResponseKind.serverError, 'HTTP $statusCode 服务端异常');
+  }
+
+  final trimmed = body.trim();
+  if (trimmed.isEmpty) {
+    if (statusCode == 403 && isAuth) {
+      return const ResponseDiagnosis(ResponseKind.accessForbidden, 'HTTP 403');
+    }
+    return const ResponseDiagnosis(ResponseKind.ok);
+  }
+
+  final title = extractHtmlTitle(trimmed);
+  final lowerTitle = title?.toLowerCase();
+  final lowerBody = trimmed.toLowerCase();
+
+  // 优先判定服务端故障（正方 500、Nginx 502/504、运维维护等）
+  if (_isDefiniteServerError(lowerBody, lowerTitle)) {
+    return ResponseDiagnosis(
+      ResponseKind.serverError,
+      title != null ? '返回错误页（$title）' : '返回错误页',
+    );
+  }
+
+  // 判定策略拦截（深信服/防火墙阻断、校园网限制）
+  if (_isDefiniteAccessForbidden(lowerBody, lowerTitle) ||
+      (statusCode == 403 && isAuth)) {
+    return ResponseDiagnosis(
+      ResponseKind.accessForbidden,
+      title != null ? '访问被拦截（403）[标题: $title]' : '访问被拦截（403）',
+    );
+  }
+
+  return const ResponseDiagnosis(ResponseKind.ok);
+}
+
+/// 这段响应像不像"后端挂了"的页面（而不是正常的教务页）。
+///
+/// 典型来源：网关/Nginx 的 502/504 页、Spring 的 Whitelabel 错误页、
+/// 学校运维挂的"系统维护中"页，以及正方系统报错页。它们通常**仍是 HTTP 200**。
+bool looksLikeServerError(String body) {
+  if (body.isEmpty) return false;
+  final title = extractHtmlTitle(body);
+  return _isDefiniteServerError(body.toLowerCase(), title?.toLowerCase());
 }
 
 /// 响应正文是否像防火墙 / 网关策略拦截页（如外网被校园网网关拦截时的「访问出错-403」页）。
@@ -62,30 +209,8 @@ bool looksLikeServerError(String body) {
 /// 区分开：此类错误并非教务服务器崩溃，而是学校限制了外网直连。
 bool looksLikeAccessForbidden(String body) {
   if (body.isEmpty) return false;
-  final text = body.toLowerCase();
-  const markers = <String>[
-    '访问出错-403',
-    '访问出错',
-    '访问策略禁止',
-    '禁止您访问',
-    '访问策略',
-    '仅限校园网',
-    '仅限校内',
-    '校园网内访问',
-    '403 forbidden',
-    'access denied',
-    'request forbidden',
-  ];
-  for (final marker in markers) {
-    if (text.contains(marker)) return true;
-  }
-  if (text.contains('403') &&
-      (text.contains('禁止访问') ||
-          text.contains('拒绝访问') ||
-          text.contains('错误代码'))) {
-    return true;
-  }
-  return false;
+  final title = extractHtmlTitle(body);
+  return _isDefiniteAccessForbidden(body.toLowerCase(), title?.toLowerCase());
 }
 
 /// 从 JSON 字段、`alert()` 或可见文本里取一句人话错误信息（截断 180 字，与原实现一致）。
@@ -202,26 +327,32 @@ List<Map<String, dynamic>> listRows(String body, List<String> keys) {
   if (isLoginPage(text)) {
     throw AcademicError(ErrorCode.sessionExpired, '登录已失效，请重新登录');
   }
-  if (text == 'null' || text == '[]') {
-    return const <Map<String, dynamic>>[];
-  }
-  final root = _tryParseJson(text);
-  if (root == null) {
-    if (looksLikeAccessForbidden(text)) {
+  final Object? root;
+  try {
+    root = jsonDecode(text);
+  } catch (_) {
+    // 不是有效 JSON，结构化诊断是否是服务端错误页或防火墙拦截页
+    final diagnosis = inspectResponse(statusCode: 200, body: text);
+    if (diagnosis.isServerError) {
+      throw AcademicError(
+        ErrorCode.serverError,
+        '教务返回了错误/维护页面，不是课表数据',
+        cause: diagnosis.detail,
+      );
+    }
+    if (diagnosis.isAccessForbidden) {
       throw AcademicError(
         ErrorCode.accessForbidden,
         '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
         httpStatus: 403,
-      );
-    }
-    // 先分清"服务器坏了"和"页面改版了"：两者的处置完全不同。
-    if (looksLikeServerError(text)) {
-      throw AcademicError(
-        ErrorCode.serverError,
-        '教务返回了错误/维护页面，不是课表数据',
+        cause: diagnosis.detail,
       );
     }
     changed('教务返回了无法识别的列表，请重新进入页面');
+  }
+
+  if (root == null) {
+    return const <Map<String, dynamic>>[];
   }
 
   final object = _asObject(root);
@@ -314,11 +445,21 @@ void requireQueryPage(String body, int httpStatus) {
   if (isLoginPage(body)) {
     throw AcademicError(ErrorCode.sessionExpired, '登录已失效，请重新登录');
   }
-  if (looksLikeAccessForbidden(body)) {
+  final diagnosis = inspectResponse(statusCode: httpStatus, body: body);
+  if (diagnosis.isServerError) {
+    throw AcademicError(
+      ErrorCode.serverError,
+      '教务返回了错误/维护页面，无法正常读取页面',
+      httpStatus: httpStatus >= 400 ? httpStatus : null,
+      cause: diagnosis.detail,
+    );
+  }
+  if (diagnosis.isAccessForbidden) {
     throw AcademicError(
       ErrorCode.accessForbidden,
       '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
       httpStatus: 403,
+      cause: diagnosis.detail,
     );
   }
   if (httpStatus < 200 || httpStatus >= 300) {

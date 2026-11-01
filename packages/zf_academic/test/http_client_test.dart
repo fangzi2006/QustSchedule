@@ -373,11 +373,65 @@ void main() {
       const body = '<html><head><title>访问出错-403</title></head>'
           '<body><p>访问策略禁止您访问该网站</p><small>错误代码：403</small></body></html>';
       expect(looksLikeAccessForbidden(body), isTrue);
+      expect(looksLikeServerError(body), isFalse);
       expect(
         () => listRows(body, const <String>['kbList']),
         throwsA(isA<AcademicError>()
             .having((error) => error.code, 'code', ErrorCode.accessForbidden)),
       );
+    });
+
+    test('正方系统异常页（标题为「访问出错」，HTTP 200）→ SERVER_ERROR，不误判为 ACCESS_FORBIDDEN', () {
+      const body = '<html><head><title>访问出错</title></head>'
+          '<body><div class="error_text">系统忙，请稍候重试！</div></body></html>';
+      expect(looksLikeServerError(body), isTrue);
+      expect(looksLikeAccessForbidden(body), isFalse);
+      expect(
+        () => listRows(body, const <String>['kbList']),
+        throwsA(isA<AcademicError>()
+            .having((error) => error.code, 'code', ErrorCode.serverError)),
+      );
+    });
+
+    test('统一分类器 inspectResponse 正确区分 403 拦截、500 服务端故障与合法响应', () {
+      // 5xx 状态码
+      expect(
+        inspectResponse(statusCode: 502, body: '').isServerError,
+        isTrue,
+      );
+
+      // 正方 500 页面（HTTP 200）
+      const zf500 =
+          '<html><head><title>访问出错</title></head><body>维护中</body></html>';
+      final d500 = inspectResponse(statusCode: 200, body: zf500);
+      expect(d500.isServerError, isTrue);
+      expect(d500.isAccessForbidden, isFalse);
+      expect(d500.detail, contains('访问出错'));
+
+      // 防火墙 403 页面（HTTP 200）
+      const waf403 =
+          '<html><head><title>访问出错-403</title></head><body>访问策略禁止访问</body></html>';
+      final d403 = inspectResponse(statusCode: 200, body: waf403);
+      expect(d403.isAccessForbidden, isTrue);
+      expect(d403.isServerError, isFalse);
+      expect(d403.detail, contains('访问出错-403'));
+
+      // 校园网限制纯文本
+      const campusOnly = '<html><body>仅限校园网内访问</body></html>';
+      final dCampus = inspectResponse(statusCode: 200, body: campusOnly);
+      expect(dCampus.isAccessForbidden, isTrue);
+
+      // 正常 JSON 响应
+      expect(
+        inspectResponse(statusCode: 200, body: '{"code":"0","kbList":[]}').isOk,
+        isTrue,
+      );
+    });
+
+    test('listRows 正确处理 null 与空数组而无需魔法字符串特判', () {
+      expect(listRows('null', const <String>['kbList']), isEmpty);
+      expect(listRows('[]', const <String>['kbList']), isEmpty);
+      expect(listRows('{"kbList":[]}', const <String>['kbList']), isEmpty);
     });
 
     test('302 跳转到外部拦截页「访问出错-403」→ ACCESS_FORBIDDEN', () async {
