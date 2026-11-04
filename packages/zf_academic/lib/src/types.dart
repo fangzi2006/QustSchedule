@@ -188,6 +188,188 @@ final class Page<T> {
 }
 
 // ---------------------------------------------------------------------------
+// 考试与成绩
+// ---------------------------------------------------------------------------
+
+/// 一场考试安排（来自教务 kwgl/kscx_cxXsksxxIndex.html）。
+final class ExamItem {
+  final String courseName; // 课程名称 (kcmc)
+  final String examType; // 考试批次 (ksmc, 如 "2024-2025-1期末考试")
+  final DateTime? startTime; // 考试起始时刻
+  final DateTime? endTime; // 考试终止时刻
+  final String campus; // 校区 (xqmc, 如 "崂山校区")
+  final String classroom; // 考场教室 (cdmc, 如 "弘毅楼 201")
+  final String seatNumber; // 座位号 (zwh)
+  final String examForm; // 形式 (ksfs/ksxs, 如 "闭卷/笔试")
+  final String rawTimeStr; // 原始时间字符串 (如 "2025-01-08 08:30-10:30")
+  final String status; // 状态/备注 (kszt/bz)
+
+  const ExamItem({
+    required this.courseName,
+    this.examType = '',
+    this.startTime,
+    this.endTime,
+    this.campus = '',
+    this.classroom = '',
+    this.seatNumber = '',
+    this.examForm = '',
+    this.rawTimeStr = '',
+    this.status = '',
+  });
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'courseName': courseName,
+        'examType': examType,
+        if (startTime != null) 'startTime': startTime!.toIso8601String(),
+        if (endTime != null) 'endTime': endTime!.toIso8601String(),
+        'campus': campus,
+        'classroom': classroom,
+        'seatNumber': seatNumber,
+        'examForm': examForm,
+        'rawTimeStr': rawTimeStr,
+        'status': status,
+      };
+
+  factory ExamItem.fromJson(Map<String, dynamic> json) => ExamItem(
+        courseName: (json['courseName'] as String?) ?? '',
+        examType: (json['examType'] as String?) ?? '',
+        startTime: json['startTime'] != null
+            ? DateTime.tryParse(json['startTime'] as String)
+            : null,
+        endTime: json['endTime'] != null
+            ? DateTime.tryParse(json['endTime'] as String)
+            : null,
+        campus: (json['campus'] as String?) ?? '',
+        classroom: (json['classroom'] as String?) ?? '',
+        seatNumber: (json['seatNumber'] as String?) ?? '',
+        examForm: (json['examForm'] as String?) ?? '',
+        rawTimeStr: (json['rawTimeStr'] as String?) ?? '',
+        status: (json['status'] as String?) ?? '',
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ExamItem &&
+          runtimeType == other.runtimeType &&
+          courseName == other.courseName &&
+          examType == other.examType &&
+          startTime == other.startTime &&
+          endTime == other.endTime &&
+          campus == other.campus &&
+          classroom == other.classroom &&
+          seatNumber == other.seatNumber &&
+          examForm == other.examForm &&
+          rawTimeStr == other.rawTimeStr &&
+          status == other.status;
+
+  @override
+  int get hashCode => Object.hash(
+        courseName,
+        examType,
+        startTime,
+        endTime,
+        campus,
+        classroom,
+        seatNumber,
+        examForm,
+        rawTimeStr,
+        status,
+      );
+
+  @override
+  String toString() =>
+      'ExamItem($courseName, $examType, $rawTimeStr, $classroom, $seatNumber)';
+}
+
+/// 一门课程成绩（来自教务 cjcx/cjcx_cxDgXscj.html）。
+final class GradeItem {
+  final String courseName; // 课程名称 (kcmc)
+  final String courseCode; // 课程代码 (kch)
+  final double credit; // 学分 (xf)
+  final double? gradePoint; // 官方绩点 (jd)
+  final String rawScore; // 原始分 (cj)
+  final double? numericScore; // 百分制折算值 (bfzcj)
+  final String courseNature; // 课程性质 (kcxzmc)
+  final String courseCategory; // 课程类别 (kclbmc)
+  final String examNature; // 考试性质 (ksxz)
+  final String? termId; // 学期标识 (如 "2024-2025-1")
+
+  const GradeItem({
+    required this.courseName,
+    this.courseCode = '',
+    required this.credit,
+    this.gradePoint,
+    required this.rawScore,
+    this.numericScore,
+    this.courseNature = '',
+    this.courseCategory = '',
+    this.examNature = '',
+    this.termId,
+  });
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'courseName': courseName,
+        'courseCode': courseCode,
+        'credit': credit,
+        'gradePoint': gradePoint,
+        'rawScore': rawScore,
+        'numericScore': numericScore,
+        'courseNature': courseNature,
+        'courseCategory': courseCategory,
+        'examNature': examNature,
+        if (termId != null) 'termId': termId,
+      };
+
+  factory GradeItem.fromJson(Map<String, dynamic> json) => GradeItem(
+        courseName: (json['courseName'] as String?) ?? '',
+        courseCode: (json['courseCode'] as String?) ?? '',
+        credit: (json['credit'] as num?)?.toDouble() ?? 0.0,
+        gradePoint: (json['gradePoint'] as num?)?.toDouble(),
+        rawScore: (json['rawScore'] as String?) ?? '',
+        numericScore: (json['numericScore'] as num?)?.toDouble(),
+        courseNature: (json['courseNature'] as String?) ?? '',
+        courseCategory: (json['courseCategory'] as String?) ?? '',
+        examNature: (json['examNature'] as String?) ?? '',
+        termId: json['termId'] as String?,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is GradeItem &&
+          runtimeType == other.runtimeType &&
+          courseName == other.courseName &&
+          courseCode == other.courseCode &&
+          credit == other.credit &&
+          gradePoint == other.gradePoint &&
+          rawScore == other.rawScore &&
+          numericScore == other.numericScore &&
+          courseNature == other.courseNature &&
+          courseCategory == other.courseCategory &&
+          examNature == other.examNature &&
+          termId == other.termId;
+
+  @override
+  int get hashCode => Object.hash(
+        courseName,
+        courseCode,
+        credit,
+        gradePoint,
+        rawScore,
+        numericScore,
+        courseNature,
+        courseCategory,
+        examNature,
+        termId,
+      );
+
+  @override
+  String toString() =>
+      'GradeItem($courseName, credit: $credit, jd: $gradePoint, score: $rawScore)';
+}
+
+// ---------------------------------------------------------------------------
 // 学校配置
 // ---------------------------------------------------------------------------
 
@@ -224,6 +406,8 @@ final class ZfEndpoints {
   final bool personal;
   final String gradesPath;
   final String gradeGnmkdm;
+  final String examsPath;
+  final String examGnmkdm;
 
   const ZfEndpoints({
     this.loginPagePath = '/xtgl/login_slogin.html',
@@ -236,6 +420,8 @@ final class ZfEndpoints {
     this.personal = false,
     this.gradesPath = '/cjcx/cjcx_cxDgXscj.html',
     this.gradeGnmkdm = 'N305005',
+    this.examsPath = '/kwgl/kscx_cxXsksxxIndex.html',
+    this.examGnmkdm = 'N358105',
   });
 
   ZfEndpoints copyWith({
@@ -249,6 +435,8 @@ final class ZfEndpoints {
     bool? personal,
     String? gradesPath,
     String? gradeGnmkdm,
+    String? examsPath,
+    String? examGnmkdm,
   }) {
     return ZfEndpoints(
       loginPagePath: loginPagePath ?? this.loginPagePath,
@@ -261,6 +449,8 @@ final class ZfEndpoints {
       personal: personal ?? this.personal,
       gradesPath: gradesPath ?? this.gradesPath,
       gradeGnmkdm: gradeGnmkdm ?? this.gradeGnmkdm,
+      examsPath: examsPath ?? this.examsPath,
+      examGnmkdm: examGnmkdm ?? this.examGnmkdm,
     );
   }
 }

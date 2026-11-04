@@ -18,6 +18,7 @@ library;
 import 'dart:convert';
 import 'dart:math';
 
+import 'academic_query.dart';
 import 'cookies.dart';
 import 'credential_store.dart' show Credentials;
 import 'crypto.dart';
@@ -661,6 +662,157 @@ class ZhengfangClient {
     final sorted = all.toList()..sort();
     return '${sorted.first}-${sorted.last}';
   }
+
+  // -------------------------------------------------------------------------
+  // 考试与成绩
+  // -------------------------------------------------------------------------
+
+  /// 查询考试安排。不传 `termId` 时用当前学期；传空字符串查询历年所有。
+  Future<List<ExamItem>> fetchExams([String? termId]) async {
+    assertActive();
+    final id = termId ?? (await fetchTerms()).currentId;
+    final params = zfTermParams(id);
+    final target = withQuery(_app(_endpoints.examsPath), <String, String>{
+      'doType': 'query',
+      'gnmkdm': _endpoints.examGnmkdm,
+    });
+    final fields = <String, String>{
+      'xnm': params.xnm,
+      'xqm': params.xqm,
+      'ksmcdmb_id': '',
+      '_search': 'false',
+      'nd': '${_nowMs()}',
+      'queryModel.showCount': '500',
+      'queryModel.currentPage': '1',
+      'queryModel.sortName': 'kssj',
+      'queryModel.sortOrder': 'asc',
+    };
+    final response = await _http.postPairs(
+      target,
+      fields.entries.map((e) => (e.key, e.value)).toList(),
+      HttpRequestOptions(
+        referer: withQuery(_app(_endpoints.examsPath), <String, String>{
+          'gnmkdm': _endpoints.examGnmkdm,
+        }),
+        ajax: true,
+      ),
+    );
+    lastExamsRawBody = response.body;
+    if (isLoginPage(response.body)) {
+      throw AcademicError(ErrorCode.sessionExpired, '登录已失效，请重新登录');
+    }
+    final diagnosis =
+        inspectResponse(statusCode: response.status, body: response.body);
+    if (diagnosis.isServerError) {
+      throw AcademicError(
+        ErrorCode.serverError,
+        '教务返回了错误/维护页面，不是考试数据',
+        cause: diagnosis.detail,
+      );
+    }
+    if (diagnosis.isAccessForbidden) {
+      throw AcademicError(
+        ErrorCode.accessForbidden,
+        '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
+        httpStatus: 403,
+        cause: diagnosis.detail,
+      );
+    }
+    final rows = listRows(response.body, const ['items', 'data', 'rows']);
+    lastExamsRows = rows;
+    final items = jsonExams(rows);
+    _debug('exams:parsed', <String, Object?>{
+      'termId': id,
+      'bodyLength': response.body.length,
+      'rows': rows.length,
+      'items': items.length,
+    });
+    return items;
+  }
+
+  /// 最近一次考试查询的原始响应体（未解析）。调试用。
+  String? lastExamsRawBody;
+
+  /// 最近一次考试查询解析出的原始行。调试用。
+  List<Map<String, dynamic>> lastExamsRows = const <Map<String, dynamic>>[];
+
+  /// 查询成绩。不传 `termId` 时用当前学期；传空字符串查询历年所有。
+  Future<List<GradeItem>> fetchGrades([String? termId]) async {
+    assertActive();
+    final id = termId ?? (await fetchTerms()).currentId;
+    final params = zfTermParams(id);
+    final target = withQuery(_app(_endpoints.gradesPath), <String, String>{
+      'doType': 'query',
+      'gnmkdm': _endpoints.gradeGnmkdm,
+    });
+    final fields = <String, String>{
+      'xnm': params.xnm,
+      'xqm': params.xqm,
+      '_search': 'false',
+      'nd': '${_nowMs()}',
+      'queryModel.showCount': '500',
+      'queryModel.currentPage': '1',
+      'queryModel.sortName': 'xnm,xqm',
+      'queryModel.sortOrder': 'desc',
+    };
+    final response = await _http.postPairs(
+      target,
+      fields.entries.map((e) => (e.key, e.value)).toList(),
+      HttpRequestOptions(
+        referer: withQuery(_app(_endpoints.gradesPath), <String, String>{
+          'gnmkdm': _endpoints.gradeGnmkdm,
+        }),
+        ajax: true,
+      ),
+    );
+    lastGradesRawBody = response.body;
+    if (isLoginPage(response.body)) {
+      throw AcademicError(ErrorCode.sessionExpired, '登录已失效，请重新登录');
+    }
+    final diagnosis =
+        inspectResponse(statusCode: response.status, body: response.body);
+    if (diagnosis.isServerError) {
+      throw AcademicError(
+        ErrorCode.serverError,
+        '教务返回了错误/维护页面，不是成绩数据',
+        cause: diagnosis.detail,
+      );
+    }
+    if (diagnosis.isAccessForbidden) {
+      throw AcademicError(
+        ErrorCode.accessForbidden,
+        '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
+        httpStatus: 403,
+        cause: diagnosis.detail,
+      );
+    }
+    final detail = messageOf(response.body);
+    if (detail.contains('评价') ||
+        detail.contains('评教') ||
+        response.body.contains('教学质量评价') ||
+        response.body.contains('请先评教')) {
+      throw AcademicError(
+        ErrorCode.notEvaluated,
+        detail.isNotEmpty ? detail : '教务系统提示未完成教学评价，无法查询成绩',
+      );
+    }
+    final rows = listRows(response.body, const ['items', 'data', 'rows']);
+    lastGradesRows = rows;
+    final items = jsonGrades(rows);
+    _debug('grades:parsed', <String, Object?>{
+      'termId': id,
+      'bodyLength': response.body.length,
+      'rows': rows.length,
+      'items': items.length,
+    });
+    return items;
+  }
+
+  /// 最近一次成绩查询的原始响应体（未解析）。调试用。
+  String? lastGradesRawBody;
+
+  /// 最近一次成绩查询解析出的原始行。调试用。
+  List<Map<String, dynamic>> lastGradesRows = const <Map<String, dynamic>>[];
 
   // -------------------------------------------------------------------------
   // 表单直登

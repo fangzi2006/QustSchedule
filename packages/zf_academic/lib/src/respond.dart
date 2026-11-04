@@ -281,6 +281,12 @@ ErrorCode statusOf(String body, {int httpStatus = 200}) {
       RegExp('verifyCode', caseSensitive: false).hasMatch(detail)) {
     return ErrorCode.webLoginRequired;
   }
+  if (detail.contains('评价') ||
+      detail.contains('评教') ||
+      lower.contains('教学质量评价') ||
+      lower.contains('请先评教')) {
+    return ErrorCode.notEvaluated;
+  }
   final conflictId = _asObject(_tryParseJson(
       body.trim().replaceFirst(RegExp(r'^\uFEFF'), '')))?['yxjx0404id'];
   if (detail.contains('冲突') ||

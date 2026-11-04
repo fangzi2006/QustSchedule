@@ -33,6 +33,9 @@ enum ErrorCode {
   cancelled('CANCELLED'),
   resourceLimit('RESOURCE_LIMIT'),
   staleContext('STALE_CONTEXT'),
+
+  /// 教学质量评价未完成，教务系统拦截成绩查询。
+  notEvaluated('NOT_EVALUATED'),
   success('SUCCESS');
 
   /// 跨栈共用的名称，例如 `SESSION_EXPIRED`。

@@ -15,6 +15,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:zf_academic/zf_academic.dart';
 
+import 'academic_cache.dart';
+import 'academic_service.dart';
 import 'schedule_service.dart';
 import 'school.dart';
 import 'session_repository.dart';
@@ -71,6 +73,9 @@ class AppModel extends ChangeNotifier {
     CredentialStore? credentials,
     Preferences? preferences,
     ScheduleCache? scheduleCache,
+    ExamCache? examCache,
+    GradesCache? gradesCache,
+    AcademicService? academicService,
     String? schoolBaseUrl,
   }) : _schoolBaseUrl = schoolBaseUrl ?? defaultSchool.baseUrl,
        // 构造时显式给了地址（测试注入）就别被设置里的"上次用的学校"覆盖。
@@ -87,7 +92,18 @@ class AppModel extends ChangeNotifier {
        _preferencesReady = preferences != null,
        _preferencesLoaded = preferences != null,
        _scheduleCache = scheduleCache ?? LateScheduleCache(),
-       _cacheReady = scheduleCache != null {
+       _cacheReady = scheduleCache != null,
+       _examCache = examCache ?? LateExamCache(),
+       _examCacheReady = examCache != null,
+       _gradesCache = gradesCache ?? LateGradesCache(),
+       _gradesCacheReady = gradesCache != null {
+    this.academicService =
+        academicService ??
+        AcademicService(
+          service: this.service,
+          examCache: _examCache,
+          gradesCache: _gradesCache,
+        );
     // 自动回登遇到验证码时由状态机挂起、UI 输入（见 _handleCaptcha）。
     this.service.captchaHandler = _handleCaptcha;
     // 编排层进入"重新登录"阶段时，把右上角提示语换掉（仍不遮挡课表）。
@@ -109,6 +125,49 @@ class AppModel extends ChangeNotifier {
   /// 课表本地缓存（课表 + 抓取时间）。同样在 `boot()` 时替换为落盘实现。
   ScheduleCache _scheduleCache;
   final bool _cacheReady;
+
+  /// 考试本地离线缓存。
+  ExamCache _examCache;
+  final bool _examCacheReady;
+
+  /// 成绩本地离线缓存。
+  GradesCache _gradesCache;
+  final bool _gradesCacheReady;
+
+  /// 学业服务业务编排层。
+  late AcademicService academicService;
+
+  String _academicTermId = '';
+  String _loadedAcademicTerm = '';
+  String get academicTermId {
+    if (_academicTermId.isNotEmpty) return _academicTermId;
+    if (_termId.isNotEmpty) return _termId;
+    if (_terms != null && _terms!.currentId.isNotEmpty) {
+      return _terms!.currentId;
+    }
+    return '';
+  }
+
+  List<ExamItem> _exams = const <ExamItem>[];
+  List<ExamItem> get exams => _exams;
+
+  List<GradeItem> _grades = const <GradeItem>[];
+  List<GradeItem> get grades => _grades;
+
+  /// 当前学期成绩与学分绩点统计。
+  GradeStats get gradeStats => GradeStats.calculate(_grades);
+
+  bool _isNotEvaluated = false;
+  bool get isNotEvaluated => _isNotEvaluated;
+
+  bool _academicLoading = false;
+  bool get academicLoading => _academicLoading;
+
+  String? _academicError;
+  String? get academicError => _academicError;
+
+  /// 学业页面独立订阅源，防止课表刷新引起的无效重绘。
+  final ChangeNotifier academicNotifier = ChangeNotifier();
 
   AppStatus _status = AppStatus.booting;
   AppStatus get status => _status;
@@ -803,6 +862,11 @@ class AppModel extends ChangeNotifier {
           : FileSessionRepository.open();
       final preferencesFuture = _preferencesReady ? null : Preferences.open();
       final cacheFuture = _cacheReady ? null : FileScheduleCache.open();
+      final examCacheFuture = _examCacheReady ? null : FileExamCache.open();
+      final gradesCacheFuture = _gradesCacheReady
+          ? null
+          : FileGradesCache.open();
+
       if (sessionFuture != null) _rebindRepository(await sessionFuture);
       if (preferencesFuture != null) _preferences = await preferencesFuture;
       // 偏好到手（或本来就注入了内存实现）：提醒服务从这一刻起才允许同步。
@@ -810,6 +874,13 @@ class AppModel extends ChangeNotifier {
       // 冷启动也算"刚看见过今天"：回到前台时拿它比对，跨天才重建。
       _lastSeenDay = dayOnly(DateTime.now());
       if (cacheFuture != null) _scheduleCache = await cacheFuture;
+      if (examCacheFuture != null) _examCache = await examCacheFuture;
+      if (gradesCacheFuture != null) _gradesCache = await gradesCacheFuture;
+      academicService = AcademicService(
+        service: service,
+        examCache: _examCache,
+        gradesCache: _gradesCache,
+      );
       // 上次用的学校优先。以前不存这个，用户改了地址重启就退回默认学校。
       if (!_schoolFixed) {
         final savedSchool = _preferences.currentSchool;
@@ -873,7 +944,135 @@ class AppModel extends ChangeNotifier {
     _lastFetchedAt = cached.fetchedAt;
     _applyCalendar(cached.schedule);
     _setStatus(AppStatus.ready);
+    unawaited(_restoreCachedAcademicData(cached.schedule.termId));
   }
+
+  /// 切换学业查看学期。
+  void setAcademicTerm(String termId) {
+    if (_academicTermId == termId) return;
+    _academicTermId = termId;
+    loadAcademicData(termId: termId);
+  }
+
+  /// 恢复学期离线学业缓存（0 延迟展示）。
+  Future<void> _restoreCachedAcademicData(String termId) async {
+    if (termId.isEmpty) return;
+    try {
+      final cachedExams = await _examCache.load(termId);
+      final cachedGrades = await _gradesCache.load(termId);
+      if (cachedExams != null || cachedGrades != null) {
+        _exams = cachedExams?.items ?? const <ExamItem>[];
+        _grades = cachedGrades?.items ?? const <GradeItem>[];
+        _isNotEvaluated = cachedGrades?.isNotEvaluated ?? false;
+        _loadedAcademicTerm = termId;
+        _academicError = null;
+        academicNotifier.notifyListeners();
+      }
+    } catch (_) {}
+  }
+
+  /// 加载学业数据（考试与成绩）。
+  ///
+  /// 若 [forceRefresh] 为 false，优先使用本地离线缓存；
+  /// 若没有缓存或 [forceRefresh] 为 true，发起网络请求并落盘。
+  Future<void> loadAcademicData({
+    String? termId,
+    bool forceRefresh = false,
+  }) async {
+    var target = termId ?? academicTermId;
+    if (target.isEmpty) {
+      if (_terms != null && _terms!.currentId.isNotEmpty) {
+        target = _terms!.currentId;
+        _academicTermId = target;
+      } else {
+        try {
+          final t = await service.fetchTerms();
+          _terms = t;
+          target = t.currentId;
+          _academicTermId = target;
+        } catch (_) {}
+      }
+    }
+    if (target.isEmpty) return;
+
+    final bool termChanged = target != _loadedAcademicTerm;
+
+    if (!forceRefresh) {
+      final cachedExams = await _examCache.load(target);
+      final cachedGrades = await _gradesCache.load(target);
+      if (cachedExams != null || cachedGrades != null) {
+        _exams = cachedExams?.items ?? const <ExamItem>[];
+        _grades = cachedGrades?.items ?? const <GradeItem>[];
+        _isNotEvaluated = cachedGrades?.isNotEvaluated ?? false;
+        _loadedAcademicTerm = target;
+        _academicError = null;
+        academicNotifier.notifyListeners();
+        return;
+      }
+    }
+
+    if (termChanged) {
+      // 切换到无缓存的新学期：清空上一学期的残留数据，避免画面串台
+      _exams = const <ExamItem>[];
+      _grades = const <GradeItem>[];
+      _isNotEvaluated = false;
+      _loadedAcademicTerm = target;
+    }
+
+    _academicLoading = true;
+    _academicError = null;
+    academicNotifier.notifyListeners();
+
+    try {
+      Future<dynamic> safeRun(Future<dynamic> f) async {
+        try {
+          return await f;
+        } catch (e) {
+          return e;
+        }
+      }
+
+      final results = await Future.wait<dynamic>(<Future<dynamic>>[
+        safeRun(academicService.fetchExams(target)),
+        safeRun(academicService.fetchGrades(target)),
+      ]);
+
+      final examRes = results[0];
+      final gradeRes = results[1];
+
+      if (examRes is List<ExamItem>) {
+        _exams = examRes;
+      } else if (examRes is AcademicError) {
+        if (examRes.code != ErrorCode.notOpen) {
+          _academicError ??= examRes.message;
+        }
+      }
+
+      if (gradeRes is List<GradeItem>) {
+        _grades = gradeRes;
+        _isNotEvaluated = false;
+      } else if (gradeRes is AcademicError) {
+        if (gradeRes.code == ErrorCode.notEvaluated) {
+          _isNotEvaluated = true;
+          final existing = await _gradesCache.load(target);
+          if (existing != null && existing.items.isNotEmpty) {
+            _grades = existing.items;
+          }
+        } else {
+          _academicError ??= gradeRes.message;
+        }
+      }
+    } catch (e) {
+      _academicError = e.toString();
+    } finally {
+      _academicLoading = false;
+      academicNotifier.notifyListeners();
+    }
+  }
+
+  /// 手动刷新当前学业数据。
+  Future<void> refreshAcademicData() =>
+      loadAcademicData(termId: academicTermId, forceRefresh: true);
 
   /// 距上次成功抓课表是否已经超过用户设置的最小间隔。
   bool _shouldSilentRefresh(DateTime fetchedAt) =>
@@ -1509,6 +1708,9 @@ class AppModel extends ChangeNotifier {
     String studentId = '20240001',
     int? week,
     DateTime? termStart,
+    List<ExamItem>? exams,
+    List<GradeItem>? grades,
+    bool isNotEvaluated = false,
   }) {
     final bool identityChanged =
         _termId != schedule.termId ||
@@ -1519,6 +1721,14 @@ class AppModel extends ChangeNotifier {
     _termId = schedule.termId;
     _studentName = studentName;
     _studentId = studentId;
+    if (exams != null) _exams = exams;
+    if (grades != null) _grades = grades;
+    _isNotEvaluated = isNotEvaluated;
+    if (schedule.termId.isNotEmpty) {
+      _academicTermId = schedule.termId;
+      _loadedAcademicTerm = schedule.termId;
+    }
+    academicNotifier.notifyListeners();
     if (identityChanged) _notifyPrefs();
     _applyCalendar(schedule);
     if (termStart != null) _termStart = termStart;
@@ -1559,14 +1769,22 @@ class AppModel extends ChangeNotifier {
     _username = '';
     _studentId = '';
     _studentName = '';
-    _studentName = '';
     _schedule = null;
     _terms = null;
     _termId = '';
+    _academicTermId = '';
+    _loadedAcademicTerm = '';
     _captcha = null;
+    _exams = const <ExamItem>[];
+    _grades = const <GradeItem>[];
+    _isNotEvaluated = false;
+    _academicError = null;
+    academicNotifier.notifyListeners();
     _notifyPrefs();
     // 退出登录连缓存课表一起清：那是"这个账号"的数据，不该留下给下一个人看。
     unawaited(_scheduleCache.clear());
+    unawaited(_examCache.clear());
+    unawaited(_gradesCache.clear());
     _setStatus(AppStatus.needLogin, message: '已退出登录');
   }
 
@@ -1722,6 +1940,8 @@ class AppModel extends ChangeNotifier {
         return '登录会话已过期，请重新登录。';
       case ErrorCode.resultUnknown:
         return '教务系统未返回明确结果，请刷新后查看。';
+      case ErrorCode.notEvaluated:
+        return '本学期教学质量评价未完成，教务系统暂不开放成绩查询，请前往教务网完成评教。';
       case ErrorCode.notOpen:
       case ErrorCode.noCapacity:
       case ErrorCode.conflict:
@@ -1739,6 +1959,7 @@ class AppModel extends ChangeNotifier {
     _disposed = true;
     weekNotifier.dispose();
     prefsNotifier.dispose();
+    academicNotifier.dispose();
     _hintTimer?.cancel();
     cancelAutoUpdate();
     _appearanceTimer?.cancel();

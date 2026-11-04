@@ -6,6 +6,7 @@ library;
 import 'dart:async';
 
 import 'package:qustschedule/main.dart' show pageForStatus;
+import 'package:qustschedule/pages/academic_page.dart';
 import 'package:qustschedule/pages/debug_page.dart';
 import 'package:qustschedule/pages/home_shell.dart';
 import 'package:qustschedule/pages/login_page.dart';
@@ -842,8 +843,9 @@ void main() {
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(HomeShell(model: model)));
 
-      // 冷启动首帧只建课表页：设置页整棵建出来要占首帧构建的三分之一以上。
+      // 冷启动首帧只建课表页：学业与设置页懒建。
       expect(find.byType(SettingsPage), findsNothing);
+      expect(find.byType(AcademicPage), findsNothing);
       expect(shellPagePosition(tester), 0, reason: '横向轨道停在课表页这一端');
 
       // 光验第一帧是不够的：曾经试过"首帧之后延一帧预建"，那种写法在第 1 帧
@@ -858,6 +860,7 @@ void main() {
         findsNothing,
         reason: '空闲帧也不许预建：代价会落在用户正在看课表的那一帧上',
       );
+      expect(find.byType(AcademicPage), findsNothing);
 
       Future<void> tapDock(String label) async {
         await tester.tap(
@@ -884,7 +887,7 @@ void main() {
       );
     });
 
-    testWidgets('dock 在课表与设置之间切换', (tester) async {
+    testWidgets('dock 在课表、学业与设置之间切换', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(HomeShell(model: model)));
@@ -892,6 +895,18 @@ void main() {
       expect(find.text('第 1 周'), findsOneWidget);
       expect(shellPagePosition(tester), 0, reason: '初始停在课表页');
 
+      // 切到学业页 (index 1)
+      await tester.tap(
+        find.descendant(
+          of: find.byType(FloatingDock),
+          matching: find.text('学业'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(AcademicPage), findsOneWidget);
+      expect(shellPagePosition(tester), 1, reason: '整页滑到学业页');
+
+      // 切到设置页 (index 2)
       await tester.tap(
         find.descendant(
           of: find.byType(FloatingDock),
@@ -899,11 +914,11 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-
       expect(find.byType(SettingsPage), findsOneWidget);
       expect(find.text('作息时间表'), findsOneWidget);
-      expect(shellPagePosition(tester), 1, reason: '整页滑到设置页');
+      expect(shellPagePosition(tester), 2, reason: '整页滑到设置页');
 
+      // 切回课表页 (index 0)
       await tester.tap(
         find.descendant(
           of: find.byType(FloatingDock),
@@ -912,7 +927,6 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('第 1 周'), findsOneWidget);
-      // 回归断言：切回课表时它必须真的滑回原位，而不是停在两页中间。
       expect(shellPagePosition(tester), 0, reason: '整页滑回课表页');
     });
 
@@ -1727,28 +1741,26 @@ void main() {
       await tester.pumpAndSettle();
       expect(shellPagePosition(tester), 0);
 
-      Future<void> dragDock(bool right) async {
-        final label = right ? '课表' : '设置';
-        final gesture = await tester.startGesture(
-          tester.getCenter(
-            find.descendant(
-              of: find.byType(FloatingDock),
-              matching: find.text(label),
-            ),
-          ),
-        );
-        await gesture.moveBy(Offset(right ? 30 : -30, 0));
-        await tester.pump();
-        await gesture.moveBy(Offset(right ? 90 : -90, 0));
-        await tester.pump();
-        await gesture.up();
-        await tester.pumpAndSettle();
-      }
+      final dock = find.byType(FloatingDock);
+      final schedulePos = tester.getCenter(
+        find.descendant(of: dock, matching: find.text('课表')),
+      );
+      final settingsPos = tester.getCenter(
+        find.descendant(of: dock, matching: find.text('设置')),
+      );
 
-      await dragDock(true);
-      expect(shellPagePosition(tester), 1, reason: '松手切到设置页');
+      final gesture = await tester.startGesture(schedulePos);
+      await gesture.moveTo(settingsPos);
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(shellPagePosition(tester), 2, reason: '松手切到设置页');
 
-      await dragDock(false);
+      final gestureBack = await tester.startGesture(settingsPos);
+      await gestureBack.moveTo(schedulePos);
+      await tester.pump();
+      await gestureBack.up();
+      await tester.pumpAndSettle();
       expect(shellPagePosition(tester), 0, reason: '再拖回来');
     });
 
@@ -1762,21 +1774,21 @@ void main() {
       final capsule = tester.getRect(
         find.descendant(of: dock, matching: find.byType(Container)).first,
       );
-      // 从第一项正中起手，拖到两项正中之间。
+      // 从第一项正中起手，拖到两项之间。
       final gesture = await tester.startGesture(
-        Offset(capsule.left + capsule.width * 0.25, capsule.center.dy),
+        Offset(capsule.left + capsule.width * 0.16, capsule.center.dy),
       );
-      await gesture.moveBy(Offset(capsule.width * 0.25, 0));
+      await gesture.moveBy(Offset(capsule.width * 0.18, 0));
       await tester.pump();
 
-      // 还没松手，页面就该已经滑出去一半左右了。
+      // 还没松手，页面就该已经滑出去一部分了。
       final double mid = shellPagePosition(tester);
       expect(mid, greaterThan(0.05), reason: '拖动中页面跟着走，不等松手');
-      expect(mid, lessThan(0.95), reason: '只拖了一半，不该整页翻过去');
+      expect(mid, lessThan(1.95), reason: '只拖了一段，不该整页翻过去');
 
       await gesture.up();
       await tester.pumpAndSettle();
-      // 松手后吸附到整页：要么停在课表，要么停在设置，不能停在中间。
+      // 松手后吸附到整页
       expect(shellCurrentPage(tester), isNot(-1), reason: '松手后吸附到整页');
     });
 
@@ -1852,13 +1864,13 @@ void main() {
       );
 
       await tester.pump(const Duration(milliseconds: 300));
-      expect(shellPagePosition(tester), 1, reason: '按住不动也会滑到设置页');
-      expect(shellCurrentPage(tester), 1);
+      expect(shellPagePosition(tester), 2, reason: '按住不动也会滑到设置页');
+      expect(shellCurrentPage(tester), 2);
 
       // 松手：终态不动（不会因为再报一次目标而重新计一遍动画）。
       await gesture.up();
       await tester.pumpAndSettle();
-      expect(shellPagePosition(tester), 1);
+      expect(shellPagePosition(tester), 2);
       expect(find.byType(SettingsPage), findsOneWidget);
     });
 
@@ -1921,7 +1933,7 @@ void main() {
       await tester.pumpAndSettle();
     });
 
-    testWidgets('均分判定：轻微右滑不误切（阈值在胶囊中线）', (tester) async {
+    testWidgets('均分判定：轻微右滑不误切（阈值在分段点）', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(HomeShell(model: model)));
@@ -1932,19 +1944,18 @@ void main() {
       final capsule = tester.getRect(
         find.descendant(of: dock, matching: find.byType(Container)).first,
       );
-      // 从胶囊左 1/4 起手，只滑到 45% 处（仍在中线左侧），松手不该切页。
-      // 判定按均分点而不是按钮中心：否则滑过左按钮中心就会误判到设置页。
+      // 3 项均分每项占 1/3 (33%)。从 10% 起手，只滑 12%（到 22%，仍在首段），松手不该切页。
       final start = Offset(
-        capsule.left + capsule.width * 0.25,
+        capsule.left + capsule.width * 0.10,
         capsule.center.dy,
       );
       final gesture = await tester.startGesture(start);
-      await gesture.moveBy(Offset(capsule.width * 0.20, 0));
+      await gesture.moveBy(Offset(capsule.width * 0.12, 0));
       await tester.pump();
       await gesture.up();
       await tester.pumpAndSettle();
 
-      expect(shellPagePosition(tester), 0, reason: '左半段内松手，仍留在课表');
+      expect(shellPagePosition(tester), 0, reason: '首段内松手，仍留在课表');
     });
   });
 

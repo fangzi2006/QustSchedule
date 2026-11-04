@@ -58,6 +58,12 @@ class SyntheticZfOptions {
   /// 课表接口返回体；默认一条与 plugin-sdk 样本同形的 kbList。
   final String? scheduleBody;
 
+  /// 考试接口返回体。
+  final String? examsBody;
+
+  /// 成绩接口返回体。
+  final String? gradesBody;
+
   /// 让课表接口返回这段裸文本（用于测试"没有访问权限"分支）。
   final bool scheduleDenied;
 
@@ -83,6 +89,8 @@ class SyntheticZfOptions {
     this.captchaCode,
     this.reject,
     this.scheduleBody,
+    this.examsBody,
+    this.gradesBody,
     this.scheduleDenied = false,
     this.scheduleIndexBody,
     this.loginPageOverride,
@@ -116,6 +124,66 @@ String defaultScheduleBody() {
         'jcor': '5-6',
         'zcd': '2-8周',
         'kxh': '02',
+      },
+    ],
+  });
+}
+
+String defaultExamsBody() {
+  return jsonEncode(<String, dynamic>{
+    'items': <Map<String, dynamic>>[
+      <String, dynamic>{
+        'kcmc': '大学物理B',
+        'ksmc': '2026-2027-1期末考试',
+        'kssj': '2026-12-25 08:30-10:30',
+        'xqmc': '崂山校区',
+        'cdmc': '弘毅楼 201',
+        'zwh': '32',
+        'ksfs': '闭卷',
+        'kszt': '正常',
+      },
+      <String, dynamic>{
+        'kcmc': '离散数学',
+        'ksmc': '2026-2027-1期末考试',
+        'kssj': '2026-12-28 14:00-16:00',
+        'xqmc': '崂山校区',
+        'cdmc': '弘毅楼 305',
+        'zwh': '15',
+        'ksfs': '闭卷',
+        'kszt': '正常',
+      },
+    ],
+  });
+}
+
+String defaultGradesBody() {
+  return jsonEncode(<String, dynamic>{
+    'items': <Map<String, dynamic>>[
+      <String, dynamic>{
+        'kcmc': '高等数学A(1)',
+        'kch': 'MATH101',
+        'xf': '4.5',
+        'jd': '4.0',
+        'cj': '90',
+        'bfzcj': '90',
+        'kcxzmc': '必修',
+        'kclbmc': '通识必修',
+        'ksxz': '正常考试',
+        'xnm': '2026',
+        'xqm': '3',
+      },
+      <String, dynamic>{
+        'kcmc': '大学英语(1)',
+        'kch': 'ENG101',
+        'xf': '3.0',
+        'jd': '3.5',
+        'cj': '85',
+        'bfzcj': '85',
+        'kcxzmc': '必修',
+        'kclbmc': '通识必修',
+        'ksxz': '正常考试',
+        'xnm': '2026',
+        'xqm': '3',
       },
     ],
   });
@@ -426,7 +494,22 @@ class SyntheticZfServer {
           _options.scheduleIndexBody ?? defaultScheduleIndexBody());
       return;
     }
+    if (relative == '/kwgl/kscx_cxXsksxxIndex.html' ||
+        relative == '/kwgl/kswcx_cxXsks.html') {
+      if (request.method == 'POST') {
+        send(200, 'application/json; charset=utf-8',
+            _options.examsBody ?? defaultExamsBody());
+        return;
+      }
+      send(200, 'text/html; charset=utf-8', defaultScheduleIndexBody());
+      return;
+    }
     if (relative == '/cjcx/cjcx_cxDgXscj.html') {
+      if (request.method == 'POST') {
+        send(200, 'application/json; charset=utf-8',
+            _options.gradesBody ?? defaultGradesBody());
+        return;
+      }
       send(200, 'text/html; charset=utf-8', defaultScheduleIndexBody());
       return;
     }

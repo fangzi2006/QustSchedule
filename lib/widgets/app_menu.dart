@@ -23,6 +23,7 @@ class AppMenuItem<T> {
     this.icon,
     this.trailing,
     this.enabled = true,
+    this.selected = false,
   }) : isDivider = false;
 
   /// 一条分隔线（点击不会有任何结果）。
@@ -32,6 +33,7 @@ class AppMenuItem<T> {
       icon = null,
       trailing = null,
       enabled = true,
+      selected = false,
       isDivider = true;
 
   final T? value;
@@ -40,6 +42,7 @@ class AppMenuItem<T> {
   final Widget? trailing;
   final bool enabled;
   final bool isDivider;
+  final bool selected;
 }
 
 /// 贴着 [context] 对应的控件弹出菜单；选中后回调 [onSelected]。
@@ -273,7 +276,12 @@ class _MenuTile<T> extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final color = item.enabled ? theme.colorScheme.onSurface : theme.hintColor;
+    final color = !item.enabled
+        ? theme.hintColor
+        : item.selected
+        ? theme.colorScheme.primary
+        : theme.colorScheme.onSurface;
+    final fontWeight = item.selected ? FontWeight.w600 : FontWeight.normal;
     return InkWell(
       onTap: item.enabled ? () => Navigator.of(context).pop(item.value) : null,
       child: Padding(
@@ -286,12 +294,21 @@ class _MenuTile<T> extends StatelessWidget {
                 item.icon,
                 size: 18,
                 color: item.enabled
-                    ? theme.colorScheme.onSurfaceVariant
+                    ? (item.selected
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.onSurfaceVariant)
                     : theme.hintColor,
               ),
               const SizedBox(width: 10),
             ],
-            Text(item.label, style: TextStyle(fontSize: 14, color: color)),
+            Text(
+              item.label,
+              style: TextStyle(
+                fontSize: 14,
+                color: color,
+                fontWeight: fontWeight,
+              ),
+            ),
             if (item.trailing != null) ...<Widget>[
               const SizedBox(width: 16),
               item.trailing!,

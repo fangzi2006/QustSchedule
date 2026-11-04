@@ -46,10 +46,66 @@ CookieStoreSnapshot snapshotOf(String baseUrl, {String value = 'old'}) =>
       ],
     );
 
+List<ExamItem> sampleExams([String termId = '2026-2027-1']) => <ExamItem>[
+  ExamItem(
+    courseName: '大学物理B',
+    examType: '$termId期末考试',
+    startTime: DateTime(2026, 12, 25, 8, 30),
+    endTime: DateTime(2026, 12, 25, 10, 30),
+    campus: '崂山校区',
+    classroom: '弘毅楼 201',
+    seatNumber: '32',
+    examForm: '闭卷',
+    rawTimeStr: '2026-12-25 08:30-10:30',
+    status: '正常',
+  ),
+  ExamItem(
+    courseName: '离散数学',
+    examType: '$termId期末考试',
+    startTime: DateTime(2026, 12, 28, 14, 0),
+    endTime: DateTime(2026, 12, 28, 16, 0),
+    campus: '崂山校区',
+    classroom: '弘毅楼 305',
+    seatNumber: '15',
+    examForm: '闭卷',
+    rawTimeStr: '2026-12-28 14:00-16:00',
+    status: '正常',
+  ),
+];
+
+List<GradeItem> sampleGrades([String termId = '2026-2027-1']) => <GradeItem>[
+  GradeItem(
+    courseName: '高等数学A(1)',
+    courseCode: 'MATH101',
+    credit: 4.5,
+    gradePoint: 4.0,
+    rawScore: '90',
+    numericScore: 90.0,
+    courseNature: '必修',
+    courseCategory: '通识必修',
+    examNature: '正常考试',
+    termId: termId,
+  ),
+  GradeItem(
+    courseName: '大学英语(1)',
+    courseCode: 'ENG101',
+    credit: 3.0,
+    gradePoint: 3.5,
+    rawScore: '85',
+    numericScore: 85.0,
+    courseNature: '必修',
+    courseCategory: '通识必修',
+    examNature: '正常考试',
+    termId: termId,
+  ),
+];
+
 /// 假客户端：按注入的行为脚本响应，并记录调用次数。
 class FakeBackend implements ScheduleBackend {
   FakeBackend({
     this.fetchBehavior,
+    this.examsBehavior,
+    this.gradesBehavior,
     this.loginBehavior,
     this.submitBehavior,
     this.termsBehavior,
@@ -74,6 +130,8 @@ class FakeBackend implements ScheduleBackend {
   int checkSessionCount = 0;
 
   Future<Schedule> Function(int call, String? termId)? fetchBehavior;
+  Future<List<ExamItem>> Function(int call, String? termId)? examsBehavior;
+  Future<List<GradeItem>> Function(int call, String? termId)? gradesBehavior;
   Future<AuthState> Function(int call, Credentials credentials)? loginBehavior;
   Future<AuthState> Function(int call, String code)? submitBehavior;
   Future<Terms> Function(int call)? termsBehavior;
@@ -81,6 +139,8 @@ class FakeBackend implements ScheduleBackend {
   CookieStoreSnapshot cookies;
 
   int fetchCount = 0;
+  int examsCount = 0;
+  int gradesCount = 0;
   int loginCount = 0;
   int submitCount = 0;
   int refreshCount = 0;
@@ -96,6 +156,22 @@ class FakeBackend implements ScheduleBackend {
     final behavior = fetchBehavior;
     if (behavior != null) return behavior(fetchCount, termId);
     return sampleSchedule(termId ?? '2026-2027-1');
+  }
+
+  @override
+  Future<List<ExamItem>> fetchExams([String? termId]) async {
+    examsCount++;
+    final behavior = examsBehavior;
+    if (behavior != null) return behavior(examsCount, termId);
+    return sampleExams(termId ?? '2026-2027-1');
+  }
+
+  @override
+  Future<List<GradeItem>> fetchGrades([String? termId]) async {
+    gradesCount++;
+    final behavior = gradesBehavior;
+    if (behavior != null) return behavior(gradesCount, termId);
+    return sampleGrades(termId ?? '2026-2027-1');
   }
 
   @override

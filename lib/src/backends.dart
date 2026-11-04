@@ -14,6 +14,10 @@ abstract class ScheduleBackend {
 
   Future<Terms> fetchTerms();
 
+  Future<List<ExamItem>> fetchExams([String? termId]);
+
+  Future<List<GradeItem>> fetchGrades([String? termId]);
+
   Future<AuthState> login(Credentials credentials);
 
   Future<AuthState> submitCaptcha(String code);
@@ -58,6 +62,14 @@ class ZfBackend implements ScheduleBackend {
 
   @override
   Future<Terms> fetchTerms() => _client.fetchTerms();
+
+  @override
+  Future<List<ExamItem>> fetchExams([String? termId]) =>
+      _client.fetchExams(termId);
+
+  @override
+  Future<List<GradeItem>> fetchGrades([String? termId]) =>
+      _client.fetchGrades(termId);
 
   @override
   Future<AuthState> login(Credentials credentials) =>

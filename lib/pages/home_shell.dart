@@ -20,6 +20,7 @@ import '../src/app_model.dart';
 import '../src/reminder_service.dart';
 import '../widgets/floating_dock.dart';
 import '../widgets/status_popup.dart';
+import 'academic_page.dart';
 import 'debug_page.dart';
 import 'schedule_page.dart';
 import 'settings_page.dart';
@@ -44,6 +45,11 @@ class _HomeShellState extends State<HomeShell> {
       label: '课表',
     ),
     FloatingDockItem(
+      icon: Icons.school_outlined,
+      activeIcon: Icons.school_rounded,
+      label: '学业',
+    ),
+    FloatingDockItem(
       icon: Icons.settings_outlined,
       activeIcon: Icons.settings_rounded,
       label: '设置',
@@ -59,20 +65,17 @@ class _HomeShellState extends State<HomeShell> {
   /// 缓存实例后切页只动翻页器的位置，页面内容一个字节都不重建。
   late final Widget _schedulePage = SchedulePage(model: widget.model);
 
-  /// 设置页：**第一次切过去时才建**，建好就一直留着。
+  /// 学业页与设置页：**第一次切过去时才建**，建好就一直留着。
   ///
-  /// 懒建是为了冷启动首帧（设置页整棵建出来要占首帧构建的三分之一以上）。
-  /// 但建好之后**不能再扔**——切回来时它得还在，展开状态与滚动位置才不丢。
+  /// 懒建是为了冷启动首帧。但建好之后**不能再扔**——切回来时它们得还在，展开状态与滚动位置才不丢。
+  Widget? _academicPage;
   Widget? _settingsPage;
 
-  /// 切到设置页 → 现在就把设置页建出来。
-  ///
-  /// 必须在开始滑动**之前**建完：否则滑到一半才建，那一帧会卡住。
-  ///
-  /// 触发点是 dock 的 `onPressStart`（手指按下），不是"首帧后空闲时"：
-  /// 试过在首帧之后延一帧预建，实测那正好把 40~100ms 的构建砸在用户刚
-  /// 看到课表、正要滑动的那一帧上 —— 换来的是启动卡顿，不值。
-  /// 按下 dock 时用户已经决定要走了，这一帧的代价才是可以接受的。
+  void _ensureAcademicPage() {
+    if (_academicPage != null) return;
+    setState(() => _academicPage = AcademicPage(model: widget.model));
+  }
+
   void _ensureSettingsPage() {
     if (_settingsPage != null) return;
     setState(
@@ -83,11 +86,23 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
+  void _ensureLazyPages() {
+    if (_academicPage != null && _settingsPage != null) return;
+    setState(() {
+      _academicPage ??= AcademicPage(model: widget.model);
+      _settingsPage ??= SettingsPage(
+        model: widget.model,
+        reminders: widget.reminders,
+      );
+    });
+  }
+
   final GlobalKey<_ShellPagerState> _pagerKey = GlobalKey<_ShellPagerState>();
 
   @override
   Widget build(BuildContext context) {
     final topInset = MediaQuery.of(context).padding.top + kToolbarHeight;
+    final Widget? academicPage = _academicPage;
     final Widget? settingsPage = _settingsPage;
 
     return Scaffold(
@@ -102,6 +117,7 @@ class _HomeShellState extends State<HomeShell> {
                 _schedulePage,
                 // 还没建时给个空位：横向轨道上留出它的位置，
                 // 滑过去之前会先把它建好。
+                academicPage ?? const SizedBox.shrink(),
                 settingsPage ?? const SizedBox.shrink(),
               ],
             ),
@@ -114,8 +130,8 @@ class _HomeShellState extends State<HomeShell> {
               index: _index,
               items: _items,
               onPillProgress: _onPillProgress,
-              // 按下 dock 就把设置页建好：等滑到一半再建，那一帧必卡。
-              onPressStart: _ensureSettingsPage,
+              // 按下 dock 就把懒加载页面建好：等滑到一半再建，那一帧必卡。
+              onPressStart: _ensureLazyPages,
             ),
           ),
           // 状态弹窗挂在两页之上：登录 / 取课表 / 重登 / 报错都在这里出。
@@ -138,6 +154,11 @@ class _HomeShellState extends State<HomeShell> {
 
   /// 页面吸附到位、真的换页了（由翻页器在到位时通知）。
   void _onPageChanged(int index) {
+    if (index == 1 && _academicPage == null) {
+      _ensureAcademicPage();
+    } else if (index == 2 && _settingsPage == null) {
+      _ensureSettingsPage();
+    }
     if (index == _index) return;
     setState(() => _index = index);
   }
@@ -209,6 +230,8 @@ class _ShellPagerState extends State<_ShellPager>
   late final AnimationController _controller = AnimationController(
     vsync: this,
     duration: Duration.zero,
+    lowerBound: 0.0,
+    upperBound: (widget.pages.length - 1).toDouble(),
     value: widget.index.toDouble(),
   );
 
@@ -225,7 +248,7 @@ class _ShellPagerState extends State<_ShellPager>
     super.dispose();
   }
 
-  /// 轨道当前位置（0 = 第一页正中，1 = 第二页正中）。
+  /// 轨道当前位置（0 = 第一页正中，1 = 第二页正中，2 = 第三页正中）。
   double get _position => _controller.value;
 
   void _onTick() {
@@ -252,10 +275,8 @@ class _ShellPagerState extends State<_ShellPager>
   /// 落点判定在 [_onTick] 里（位置正好压在整页上时才算换页）。
   void followPill(double progress) {
     if (!mounted) return;
-    _controller.value = progress.clamp(
-      0.0,
-      (widget.pages.length - 1).toDouble(),
-    );
+    final double maxPage = (widget.pages.length - 1).toDouble();
+    _controller.value = (progress * maxPage).clamp(0.0, maxPage);
   }
 
   @override

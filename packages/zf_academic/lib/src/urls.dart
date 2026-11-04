@@ -190,6 +190,12 @@ ZfEndpoints normalizeEndpoints(ZfEndpoints? endpoints) {
     gradeGnmkdm: merged.gradeGnmkdm.isEmpty
         ? const ZfEndpoints().gradeGnmkdm
         : merged.gradeGnmkdm,
+    examsPath: merged.examsPath.isEmpty
+        ? const ZfEndpoints().examsPath
+        : merged.examsPath,
+    examGnmkdm: merged.examGnmkdm.isEmpty
+        ? const ZfEndpoints().examGnmkdm
+        : merged.examGnmkdm,
   );
 }
 
@@ -197,15 +203,25 @@ ZfEndpoints normalizeEndpoints(ZfEndpoints? endpoints) {
 // 学期
 // ---------------------------------------------------------------------------
 
-/// `2026-2027 第1学期` / `2026-2027-1` → Term；学年必须相邻。
+/// `2026-2027 第1学期` / `2026-2027-1` / `2024-2025-12` → Term；学年必须相邻。
 Term? parseTerm(String value) {
   final match =
-      RegExp(r'(\d{4})\D+(\d{4})\D+([123])(?:\D|$)').firstMatch(value);
+      RegExp(r'(\d{4})\D+(\d{4})\D+(\d{1,2})(?:\D|$)').firstMatch(value);
   if (match == null) return null;
   final year = int.parse(match.group(1)!);
   final nextYear = int.parse(match.group(2)!);
-  final semester = int.parse(match.group(3)!);
+  final rawCode = match.group(3)!;
   if (nextYear != year + 1) return null;
+  final int semester;
+  if (rawCode == '12') {
+    semester = 2;
+  } else if (rawCode == '16') {
+    semester = 3;
+  } else if (rawCode == '1' || rawCode == '2' || rawCode == '3') {
+    semester = int.parse(rawCode);
+  } else {
+    return null;
+  }
   return Term(
     id: '$year-$nextYear-$semester',
     name: '$year-$nextYear 第$semester学期',

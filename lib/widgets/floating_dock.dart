@@ -145,8 +145,15 @@ class _FloatingDockState extends State<FloatingDock>
     // `_pressed` 也要排除：手指还按着时页面先到位了（按下就报目标），
     // 这时把指示块拽到按钮中心，会从手指底下滑走。
     if (!_dragging && !_pressed && oldWidget.index != widget.index) {
-      _preview = widget.index;
-      if (_rects.length == widget.items.length) _snapTo(_rects[widget.index]);
+      if (_preview != widget.index) {
+        _preview = widget.index;
+        if (_rects.length == widget.items.length) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _snapTo(_rects[widget.index]);
+          });
+        }
+      }
     }
   }
 

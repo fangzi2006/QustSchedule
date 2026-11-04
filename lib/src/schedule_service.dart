@@ -127,6 +127,7 @@ class ScheduleService {
     _client?.close();
     _client = null;
     _inFlight = null;
+    _reloginFlight = null;
     _breakerOpen = false;
     _autoLogins.clear();
     // 换了学校就不能沿用上一个学校的账号，等 app 恢复目标学校的账号。
@@ -154,8 +155,46 @@ class ScheduleService {
     return (await _ensureClient()).fetchTerms();
   }
 
-  /// 只做回退登录（不重试原请求），供 [fetchTerms] 使用。
-  Future<void> _reloginOnly() async {
+  /// 取考试安排。与取课表共用同一个客户端；失效时同样走回退登录。
+  Future<List<ExamItem>> fetchExams([String? termId]) async {
+    final client = await _ensureClient();
+    try {
+      return await client.fetchExams(termId);
+    } on AcademicError catch (error) {
+      if (error.code != ErrorCode.sessionExpired) rethrow;
+    }
+    await _reloginOnly();
+    return (await _ensureClient()).fetchExams(termId);
+  }
+
+  /// 取成绩明细。与取课表共用同一个客户端；失效时同样走回退登录。
+  Future<List<GradeItem>> fetchGrades([String? termId]) async {
+    final client = await _ensureClient();
+    try {
+      return await client.fetchGrades(termId);
+    } on AcademicError catch (error) {
+      if (error.code != ErrorCode.sessionExpired) rethrow;
+    }
+    await _reloginOnly();
+    return (await _ensureClient()).fetchGrades(termId);
+  }
+
+  Future<void>? _reloginFlight;
+
+  /// 只做回退登录（不重试原请求），供 [fetchTerms]、[fetchExams]、[fetchGrades] 使用。
+  ///
+  /// 并发请求时合并为单次登录任务，避免 CAS 多重并发登录冲突与重复扣减熔断额度。
+  Future<void> _reloginOnly() {
+    final pending = _reloginFlight;
+    if (pending != null) return pending;
+    final task = _reloginOnlyInternal();
+    _reloginFlight = task;
+    return task.whenComplete(() {
+      if (_reloginFlight == task) _reloginFlight = null;
+    });
+  }
+
+  Future<void> _reloginOnlyInternal() async {
     final saved = await credentials.get(_accountKey());
     if (saved == null) {
       throw AcademicError(ErrorCode.sessionExpired, '会话已过期，且没有保存账号密码，请重新登录');

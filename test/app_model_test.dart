@@ -9,6 +9,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:qustschedule/src/academic_cache.dart';
 import 'package:qustschedule/src/app_model.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
 import 'package:qustschedule/src/schedule_cache.dart';
@@ -66,6 +67,8 @@ buildRig({Preferences? preferences, FakeBackend? backend}) {
       baseUrl: _baseUrl,
     ),
     preferences: preferences ?? Preferences.inMemory(),
+    examCache: InMemoryExamCache(),
+    gradesCache: InMemoryGradesCache(),
     schoolBaseUrl: _baseUrl,
   );
   return (model: model, backend: fake, credentials: credentials);
@@ -74,12 +77,14 @@ buildRig({Preferences? preferences, FakeBackend? backend}) {
 AppModel buildModel({Preferences? preferences}) =>
     buildRig(preferences: preferences).model;
 
-/// boot() 需要三个存储都已就绪，才不会去碰 path_provider / 平台通道。
+/// boot() 需要各个存储都已就绪，才不会去碰 path_provider / 平台通道。
 AppModel bootRig({
   FakeBackend? backend,
   FakeSessionRepository? repository,
   FakeScheduleCache? cache,
   Preferences? preferences,
+  ExamCache? examCache,
+  GradesCache? gradesCache,
 }) {
   final fake = backend ?? FakeBackend();
   final repo = repository ?? FakeSessionRepository();
@@ -94,6 +99,8 @@ AppModel bootRig({
     repository: repo,
     preferences: preferences ?? Preferences.inMemory(),
     scheduleCache: cache ?? FakeScheduleCache(),
+    examCache: examCache ?? InMemoryExamCache(),
+    gradesCache: gradesCache ?? InMemoryGradesCache(),
     schoolBaseUrl: _baseUrl,
   );
 }
@@ -175,6 +182,8 @@ void main() {
         repository: repo,
         preferences: prefs,
         scheduleCache: FakeScheduleCache(),
+        examCache: InMemoryExamCache(),
+        gradesCache: InMemoryGradesCache(),
         schoolBaseUrl: _baseUrl,
       );
 
@@ -1258,6 +1267,85 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(callbackCount, 1);
       expect(mockService.callCount, 1);
+    });
+  });
+
+  group('学业服务状态与学期隔离 (Academic services & isolation)', () {
+    test(
+      'setAcademicTerm isolates terms and clears old data on switch',
+      () async {
+        final backend = FakeBackend();
+        backend.examsBehavior = (call, term) async {
+          if (term == '2025-2026-1') {
+            return [
+              ExamItem(
+                courseName: '旧学期考试',
+                startTime: DateTime(2025, 12, 1, 9, 0),
+              ),
+            ];
+          }
+          return [
+            ExamItem(
+              courseName: '新学期考试',
+              startTime: DateTime(2026, 6, 1, 9, 0),
+            ),
+          ];
+        };
+        backend.gradesBehavior = (call, term) async {
+          if (term == '2025-2026-1') {
+            return const [
+              GradeItem(courseName: '旧学期课程', credit: 2.0, rawScore: '80'),
+            ];
+          }
+          return const [
+            GradeItem(courseName: '新学期课程', credit: 3.0, rawScore: '90'),
+          ];
+        };
+
+        final rig = buildRig(backend: backend);
+        final model = rig.model;
+
+        // 首次加载 2025-2026-1
+        await model.loadAcademicData(termId: '2025-2026-1');
+        expect(model.exams.map((e) => e.courseName), contains('旧学期考试'));
+        expect(model.grades.map((g) => g.courseName), contains('旧学期课程'));
+
+        // 切换到 2025-2026-2
+        model.setAcademicTerm('2025-2026-2');
+        await Future<void>.delayed(Duration.zero);
+        await model.loadAcademicData(termId: '2025-2026-2');
+
+        expect(model.academicTermId, equals('2025-2026-2'));
+        expect(model.exams.map((e) => e.courseName), contains('新学期考试'));
+        expect(model.exams.map((e) => e.courseName), isNot(contains('旧学期考试')));
+        expect(model.grades.map((g) => g.courseName), contains('新学期课程'));
+        expect(model.grades.map((g) => g.courseName), isNot(contains('旧学期课程')));
+      },
+    );
+
+    test('signOut clears academicTermId, exams, and grades', () async {
+      final rig = buildRig();
+      final model = rig.model;
+
+      model.hydrateForTest(
+        schedule: sampleSchedule(),
+        exams: [ExamItem(courseName: '测试考试', startTime: DateTime(2026, 1, 1))],
+        grades: const [
+          GradeItem(courseName: '测试课程', credit: 2.0, rawScore: '85'),
+        ],
+        isNotEvaluated: true,
+      );
+
+      expect(model.exams, isNotEmpty);
+      expect(model.grades, isNotEmpty);
+      expect(model.isNotEvaluated, isTrue);
+
+      await model.signOut();
+
+      expect(model.academicTermId, isEmpty);
+      expect(model.exams, isEmpty);
+      expect(model.grades, isEmpty);
+      expect(model.isNotEvaluated, isFalse);
     });
   });
 }

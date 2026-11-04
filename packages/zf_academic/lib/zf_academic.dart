@@ -102,6 +102,7 @@ export 'src/respond.dart'
         messageOf,
         requireQueryPage,
         statusOf;
+export 'src/academic_query.dart' show jsonExams, jsonGrades, parseExamTime;
 export 'src/schedule.dart'
     show
         jsonSchedule,
@@ -118,6 +119,8 @@ export 'src/types.dart'
         AuthState,
         AuthenticatedState,
         CaptchaState,
+        ExamItem,
+        GradeItem,
         Page,
         RawHttpRequest,
         RawHttpResponse,
