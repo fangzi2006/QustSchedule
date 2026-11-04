@@ -291,8 +291,7 @@ void main() {
 
       final loaded = await storage.load();
       expect(loaded, isNotNull);
-      expect(
-          loaded!.cookies.any((item) => item.name == 'JSESSIONID'), isTrue);
+      expect(loaded!.cookies.any((item) => item.name == 'JSESSIONID'), isTrue);
       await storage.clear();
     });
 

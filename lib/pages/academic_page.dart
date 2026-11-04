@@ -496,9 +496,10 @@ class NextExamHeroCard extends StatelessWidget {
     Color badgeColor = scheme.primary;
 
     if (start != null) {
-      final hasSpecificTime =
-          RegExp(r'\d{1,2}:\d{2}').hasMatch(exam.rawTimeStr);
-      final effectiveEnd = exam.effectiveEndTime ??
+      final hasSpecificTime = RegExp(r'\d{1,2}:\d{2}')
+          .hasMatch(exam.rawTimeStr);
+      final effectiveEnd =
+          exam.effectiveEndTime ??
           DateTime(start.year, start.month, start.day, 23, 59, 59);
 
       final startDate = DateTime(start.year, start.month, start.day);

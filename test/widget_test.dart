@@ -1222,8 +1222,9 @@ void main() {
       );
     });
 
-    testWidgets('地点只留房间号：CourseBlock 渲染 roomOnly(location) 裁剪结果',
-        (tester) async {
+    testWidgets('地点只留房间号：CourseBlock 渲染 roomOnly(location) 裁剪结果', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         sized(
           width: 140,

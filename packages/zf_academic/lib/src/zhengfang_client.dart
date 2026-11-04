@@ -816,10 +816,9 @@ class ZhengfangClient {
     //  - 若既无成绩数据也非未评教提示，则通过 listRows 走通用的列表结构校验与 PAGE_CHANGED 报错。
     // 后续如有教务系统真实未评教返回样本（如特定 JSON code、status 字段），可在此处精准替换调整。
     final detail = messageOf(response.body);
-    final hasEvaluationAlert =
-        detail.contains('评价') || detail.contains('评教');
-    final hasRawAlert = response.body.contains('教学质量评价') ||
-        response.body.contains('请先评教');
+    final hasEvaluationAlert = detail.contains('评价') || detail.contains('评教');
+    final hasRawAlert =
+        response.body.contains('教学质量评价') || response.body.contains('请先评教');
     if (hasEvaluationAlert || hasRawAlert) {
       throw AcademicError(
         ErrorCode.notEvaluated,

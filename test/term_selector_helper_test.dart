@@ -16,10 +16,7 @@ void main() {
     test('解析4位年份前缀学号 (如 20240001 -> 2024, 20260001 -> 2026)', () {
       expect(parseEnrollmentYear('20240001', now: refDate), 2024);
       expect(parseEnrollmentYear('20230001', now: refDate), 2023);
-      expect(
-        parseEnrollmentYear('20260001', now: DateTime(2026, 9, 1)),
-        2026,
-      );
+      expect(parseEnrollmentYear('20260001', now: DateTime(2026, 9, 1)), 2026);
       expect(parseEnrollmentYear('20221234', now: refDate), 2022);
       expect(parseEnrollmentYear('202400000001', now: refDate), 2024);
     });

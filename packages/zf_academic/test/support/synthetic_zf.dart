@@ -213,8 +213,8 @@ String defaultScheduleIndexBody() {
   );
 }
 
-final ({RSAPublicKey publicKey, RSAPrivateKey privateKey})
-    _defaultTestKeyPair = _generateKeyPair(1024);
+final ({RSAPublicKey publicKey, RSAPrivateKey privateKey}) _defaultTestKeyPair =
+    _generateKeyPair(1024);
 
 class SyntheticZfServer {
   final List<RecordedRequest> requests = <RecordedRequest>[];
