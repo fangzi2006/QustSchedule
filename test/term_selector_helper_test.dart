@@ -379,7 +379,7 @@ void main() {
       );
     });
 
-    test('Beyond Year 3 (大四以后) 回退至学年学期名称', () {
+    test('Year 4: 大五 上学期 与 大五 下学期 (支持五年制专业)', () {
       expect(
         formatTermPrimaryLabel(
           term: const Term(
@@ -390,19 +390,46 @@ void main() {
           ),
           enrollmentYear: enrollment,
         ),
-        '2028-2029 第1学期',
+        '大五 上学期',
       );
       expect(
         formatTermPrimaryLabel(
           term: const Term(
-            id: '2029-2030-2',
+            id: '2028-2029-2',
             name: '',
-            year: 2029,
+            year: 2028,
             semester: 2,
           ),
           enrollmentYear: enrollment,
         ),
-        '2029-2030 第2学期',
+        '大五 下学期',
+      );
+    });
+
+    test('Beyond Year 4 (大五以后) 回退至学年学期名称', () {
+      expect(
+        formatTermPrimaryLabel(
+          term: const Term(
+            id: '2029-2030-1',
+            name: '',
+            year: 2029,
+            semester: 1,
+          ),
+          enrollmentYear: enrollment,
+        ),
+        '2029-2030 第1学期',
+      );
+      expect(
+        formatTermPrimaryLabel(
+          term: const Term(
+            id: '2030-2031-2',
+            name: '',
+            year: 2030,
+            semester: 2,
+          ),
+          enrollmentYear: enrollment,
+        ),
+        '2030-2031 第2学期',
       );
     });
 

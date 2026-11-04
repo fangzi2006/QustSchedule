@@ -5,6 +5,7 @@
 library;
 
 import 'types.dart';
+import 'urls.dart' show zfCodeToSemester;
 import 'util.dart';
 
 /// 弹性考试时间解析器。
@@ -107,14 +108,6 @@ List<ExamItem> jsonExams(List<Map<String, dynamic>> rows) {
   return result;
 }
 
-const Map<String, int> _codeToSemester = <String, int>{
-  '3': 1,
-  '12': 2,
-  '16': 3,
-  '1': 1,
-  '2': 2,
-};
-
 /// 新正方成绩查询行 (`cjcx/cjcx_cxDgXscj.html`) → [GradeItem]。
 List<GradeItem> jsonGrades(List<Map<String, dynamic>> rows) {
   final result = <GradeItem>[];
@@ -142,7 +135,7 @@ List<GradeItem> jsonGrades(List<Map<String, dynamic>> rows) {
     String? termId;
     if (xnm.isNotEmpty && RegExp(r'^\d{4}$').hasMatch(xnm)) {
       final year = int.parse(xnm);
-      final sem = _codeToSemester[xqm] ?? int.tryParse(xqm);
+      final sem = zfCodeToSemester[xqm] ?? int.tryParse(xqm);
       if (sem != null) {
         termId = '$year-${year + 1}-$sem';
       }

@@ -135,6 +135,39 @@ void main() {
       final items = jsonExams(rows);
       expect(items, hasLength(1));
     });
+
+    test('effectiveEndTime 正确推算有效结束时刻（显式/单点+2h/日期终点/空）', () {
+      // 1. 已有显式 endTime
+      final examWithEnd = ExamItem(
+        courseName: '物理',
+        startTime: DateTime(2025, 1, 8, 8, 30),
+        endTime: DateTime(2025, 1, 8, 10, 30),
+      );
+      expect(examWithEnd.effectiveEndTime, DateTime(2025, 1, 8, 10, 30));
+
+      // 2. 仅单点时间时刻，按 2 小时考程估算
+      final examSingleTime = ExamItem(
+        courseName: '高数',
+        startTime: DateTime(2025, 1, 8, 8, 30),
+        rawTimeStr: '2025-01-08 08:30',
+      );
+      expect(examSingleTime.effectiveEndTime, DateTime(2025, 1, 8, 10, 30));
+
+      // 3. 仅日期无具体时刻，按当天 23:59:59.999 估算
+      final examDateOnly = ExamItem(
+        courseName: '英语',
+        startTime: DateTime(2025, 1, 8),
+        rawTimeStr: '2025-01-08',
+      );
+      expect(
+        examDateOnly.effectiveEndTime,
+        DateTime(2025, 1, 8, 23, 59, 59, 999),
+      );
+
+      // 4. 无时间信息
+      const examNoTime = ExamItem(courseName: '待定科目');
+      expect(examNoTime.effectiveEndTime, isNull);
+    });
   });
 
   group('客户端网络查询 (fetchExams)', () {

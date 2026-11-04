@@ -7,22 +7,15 @@ library;
 import 'errors.dart';
 import 'html.dart' show allTags, hasClass, innerOf, stripTags;
 import 'types.dart' show ScheduleDetail, ScheduleEntry, ScheduleRemark, Term;
-import 'urls.dart' show parseTerm;
+import 'urls.dart' show parseTerm, zfCodeToSemester;
 import 'util.dart' show field, firstOf, number, rowKey;
 
 const List<String> _yearNames = ['xnm', 'xnd', 'ddlXN', 'xn'];
 const List<String> _semesterNames = ['xqm', 'xqd', 'ddlXQ', 'xq'];
-const Map<String, int> _semesterFromCode = <String, int>{
-  '1': 1,
-  '3': 1,
-  '2': 2,
-  '12': 2,
-  '16': 3,
-};
 
 /// 学期下拉框里的编码值 → 第几学期。`xqm` 用编码表，其它字段只接受裸的 1/2/3。
 int? _semesterPart(String name, String value) {
-  if (name.split('\$').last == 'xqm') return _semesterFromCode[value];
+  if (name.split('\$').last == 'xqm') return zfCodeToSemester[value];
   return RegExp(r'^[123]$').hasMatch(value) ? int.parse(value) : null;
 }
 

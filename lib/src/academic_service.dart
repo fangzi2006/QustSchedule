@@ -130,13 +130,13 @@ class AcademicService {
   /// 独立捕获异常，绝不向上抛出阻碍课表主流程。
   Future<void> syncCurrentTermAsync({
     required String termId,
-    required VoidCallback onDataUpdated,
+    VoidCallback? onDataUpdated,
   }) async {
     if (termId.isEmpty) return;
     await Future.wait(<Future<dynamic>>[
       fetchExams(termId).catchError((_) => const <ExamItem>[]),
       fetchGrades(termId).catchError((_) => const <GradeItem>[]),
     ]);
-    onDataUpdated();
+    onDataUpdated?.call();
   }
 }

@@ -294,31 +294,11 @@ class _TermSelectorButton extends StatelessWidget {
 
 /// 判断考试是否已结束。
 ///
-/// 判定规则：
-///  1. 若存在 endTime，则以 endTime 是否早于 now 为准；
-///  2. 若存在 startTime：
-///     - 若 rawTimeStr 包含具体时刻（如 08:30），按常规考程 2 小时估算有效结束时刻，未满 2 小时前不判定为已结束；
-///     - 若仅公布考试日期而无具体时刻（如仅 2026-11-04），在该自然日（23:59:59）结束前不判定为已结束；
-///  3. 未公布时间（两者皆空）的考试不判定为已结束。
+/// 判定规则：委托给 [ExamItem.effectiveEndTime] 计算有效结束时刻。
 bool isExamPast(ExamItem exam, DateTime now) {
-  if (exam.endTime != null) {
-    return exam.endTime!.isBefore(now);
-  }
-  if (exam.startTime != null) {
-    final hasSpecificTime = RegExp(r'\d{1,2}:\d{2}').hasMatch(exam.rawTimeStr);
-    if (hasSpecificTime) {
-      return exam.startTime!.add(const Duration(hours: 2)).isBefore(now);
-    }
-    final endOfDay = DateTime(
-      exam.startTime!.year,
-      exam.startTime!.month,
-      exam.startTime!.day,
-      23,
-      59,
-      59,
-      999,
-    );
-    return endOfDay.isBefore(now);
+  final end = exam.effectiveEndTime;
+  if (end != null) {
+    return end.isBefore(now);
   }
   return false;
 }
@@ -516,13 +496,10 @@ class NextExamHeroCard extends StatelessWidget {
     Color badgeColor = scheme.primary;
 
     if (start != null) {
-      final hasSpecificTime = RegExp(r'\d{1,2}:\d{2}')
-          .hasMatch(exam.rawTimeStr);
-      final effectiveEnd =
-          exam.endTime ??
-          (hasSpecificTime
-              ? start.add(const Duration(hours: 2))
-              : DateTime(start.year, start.month, start.day, 23, 59, 59));
+      final hasSpecificTime =
+          RegExp(r'\d{1,2}:\d{2}').hasMatch(exam.rawTimeStr);
+      final effectiveEnd = exam.effectiveEndTime ??
+          DateTime(start.year, start.month, start.day, 23, 59, 59);
 
       final startDate = DateTime(start.year, start.month, start.day);
       final nowDate = DateTime(now.year, now.month, now.day);

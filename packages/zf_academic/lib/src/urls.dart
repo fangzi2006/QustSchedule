@@ -231,7 +231,17 @@ Term? parseTerm(String value) {
 }
 
 /// 新正方把学期编码成 `xqm`：第 1 学期 = 3，第 2 学期 = 12，第 3 学期 = 16。
-const Map<int, String> semesterCodes = {1: '3', 2: '12', 3: '16'};
+const Map<int, String> zfSemesterCodes = {1: '3', 2: '12', 3: '16'};
+const Map<int, String> semesterCodes = zfSemesterCodes;
+
+/// 新正方 xqm 代码 → 标准学期序号（1、2、3）。
+const Map<String, int> zfCodeToSemester = {
+  '3': 1,
+  '12': 2,
+  '16': 3,
+  '1': 1,
+  '2': 2,
+};
 
 /// 学期 id → 新正方表单参数。解析不了时返回空串（调用方按"不带学期"处理）。
 ({String xnm, String xqm}) zfTermParams(String? termId) {

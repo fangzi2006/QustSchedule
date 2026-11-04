@@ -603,90 +603,54 @@ class AppModel extends ChangeNotifier {
     if (!autoCheckUpdate) return;
 
     int retryCount = 0;
-    void scheduleCheck(Duration delay) {
-      _autoUpdateTimer?.cancel();
-      if (delay == Duration.zero) {
-        if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
+
+    late void Function(Duration delay) scheduleCheck;
+
+    Future<void> executeCheck() async {
+      if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
+      try {
         final service = updateService ?? UpdateService();
-        service
-            .checkForUpdatesWithFallback(
-              currentVersion: appVersion,
-              selectedProxy: selectedUpdateProxy,
-              backupProxies: allUpdateProxies,
-            )
-            .then((result) {
-              if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) {
-                return;
-              }
-              if (result.status == UpdateStatus.hasUpdate) {
-                _hasCheckedAutoUpdate = true;
-                if (result.release != null) onHasUpdate(result);
-              } else if (result.status == UpdateStatus.noUpdate) {
-                _hasCheckedAutoUpdate = true;
-              } else if (result.status == UpdateStatus.networkError) {
-                if (retryCount < 2) {
-                  retryCount++;
-                  scheduleCheck(const Duration(seconds: 2));
-                } else {
-                  _hasCheckedAutoUpdate = true;
-                }
-              } else {
-                _hasCheckedAutoUpdate = true;
-              }
-            })
-            .catchError((_) {
-              if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) {
-                return;
-              }
-              if (retryCount < 2) {
-                retryCount++;
-                scheduleCheck(const Duration(seconds: 2));
-              } else {
-                _hasCheckedAutoUpdate = true;
-              }
-            });
-        return;
-      }
-
-      _autoUpdateTimer = Timer(delay, () async {
+        final result = await service.checkForUpdatesWithFallback(
+          currentVersion: appVersion,
+          selectedProxy: selectedUpdateProxy,
+          backupProxies: allUpdateProxies,
+        );
         if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
-        try {
-          final service = updateService ?? UpdateService();
-          final result = await service.checkForUpdatesWithFallback(
-            currentVersion: appVersion,
-            selectedProxy: selectedUpdateProxy,
-            backupProxies: allUpdateProxies,
-          );
-          if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
 
-          if (result.status == UpdateStatus.hasUpdate) {
-            _hasCheckedAutoUpdate = true;
-            if (result.release != null) {
-              onHasUpdate(result);
-            }
-          } else if (result.status == UpdateStatus.noUpdate) {
-            _hasCheckedAutoUpdate = true;
-          } else if (result.status == UpdateStatus.networkError) {
-            if (retryCount < 2) {
-              retryCount++;
-              scheduleCheck(const Duration(seconds: 2));
-            } else {
-              _hasCheckedAutoUpdate = true;
-            }
-          } else {
-            _hasCheckedAutoUpdate = true;
-          }
-        } catch (_) {
-          if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
+        if (result.status == UpdateStatus.hasUpdate) {
+          _hasCheckedAutoUpdate = true;
+          if (result.release != null) onHasUpdate(result);
+        } else if (result.status == UpdateStatus.noUpdate) {
+          _hasCheckedAutoUpdate = true;
+        } else if (result.status == UpdateStatus.networkError) {
           if (retryCount < 2) {
             retryCount++;
             scheduleCheck(const Duration(seconds: 2));
           } else {
             _hasCheckedAutoUpdate = true;
           }
+        } else {
+          _hasCheckedAutoUpdate = true;
         }
-      });
+      } catch (_) {
+        if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
+        if (retryCount < 2) {
+          retryCount++;
+          scheduleCheck(const Duration(seconds: 2));
+        } else {
+          _hasCheckedAutoUpdate = true;
+        }
+      }
     }
+
+    scheduleCheck = (Duration delay) {
+      _autoUpdateTimer?.cancel();
+      if (delay == Duration.zero) {
+        unawaited(executeCheck());
+      } else {
+        _autoUpdateTimer = Timer(delay, executeCheck);
+      }
+    };
 
     scheduleCheck(initialDelay);
   }
@@ -1667,10 +1631,7 @@ class AppModel extends ChangeNotifier {
   /// 避免增加自动同步课表时通知的延迟与负担。
   Future<void> _syncAcademicQuietly(String termId) async {
     try {
-      await academicService.syncCurrentTermAsync(
-        termId: termId,
-        onDataUpdated: () {},
-      );
+      await academicService.syncCurrentTermAsync(termId: termId);
       if (_disposed || _status == AppStatus.needLogin) return;
       if (academicTermId == termId) {
         await _restoreCachedAcademicData(termId);

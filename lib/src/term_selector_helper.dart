@@ -237,7 +237,13 @@ List<Term> filterTerms({
   return result;
 }
 
-const List<String> _gradeNames = <String>['大一', '大二', '大三', '大四'];
+const List<String> _gradeNames = <String>[
+  '大一',
+  '大二',
+  '大三',
+  '大四',
+  '大五',
+];
 
 /// 解析学期数字（支持标准 1/2/3 及教务 xqm 编码 3/12/16）。
 int? resolveSemesterCode(int? rawSemester, String termId, [String? xqm]) {

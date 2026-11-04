@@ -1180,10 +1180,6 @@ class ZhengfangClient {
       _cachedCasLoginUrl = target.toString();
       _casDiscoveryDone = true;
       return _cachedCasLoginUrl;
-    } on AcademicError {
-      _cachedCasLoginUrl = null;
-      _casDiscoveryDone = true;
-      return null;
     } catch (_) {
       _cachedCasLoginUrl = null;
       _casDiscoveryDone = true;

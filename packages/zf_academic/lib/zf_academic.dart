@@ -155,6 +155,8 @@ export 'src/urls.dart'
         resolveUrl,
         semesterCodes,
         withQuery,
+        zfCodeToSemester,
+        zfSemesterCodes,
         zfTermParams;
 export 'src/util.dart' show delay, field, firstOf, isBlank, number, rowKey, str;
 export 'src/zhengfang_client.dart' show SessionInfo, ZhengfangClient;

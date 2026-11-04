@@ -247,6 +247,29 @@ final class ExamItem {
         status: (json['status'] as String?) ?? '',
       );
 
+  /// 有效结束时间：
+  ///  1. 若已提供 [endTime]，直接使用；
+  ///  2. 若仅有 [startTime] 且包含具体时刻（如 08:30），按标准考程 2 小时估算有效结束时刻；
+  ///  3. 若仅有考试日期而无具体时刻，按该自然日终点 (23:59:59) 估算；
+  ///  4. 无时间信息时返回 null。
+  DateTime? get effectiveEndTime {
+    if (endTime != null) return endTime;
+    if (startTime == null) return null;
+    final hasSpecificTime = RegExp(r'\d{1,2}:\d{2}').hasMatch(rawTimeStr);
+    if (hasSpecificTime) {
+      return startTime!.add(const Duration(hours: 2));
+    }
+    return DateTime(
+      startTime!.year,
+      startTime!.month,
+      startTime!.day,
+      23,
+      59,
+      59,
+      999,
+    );
+  }
+
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
