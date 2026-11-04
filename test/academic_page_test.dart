@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/pages/academic_page.dart';
@@ -94,6 +97,95 @@ void main() {
     expect(find.text('评教尚未完成'), findsOneWidget);
     expect(find.textContaining('本学期教学质量评价未完成'), findsOneWidget);
   });
+
+  testWidgets(
+    'AcademicPage shows friendly error banner and retry button on SocketException',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 1800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final backend = FakeBackend();
+      backend.gradesBehavior = (_, _) =>
+          throw const SocketException('Connection refused');
+      final model = _buildTestModel(backend: backend);
+
+      await tester.pumpWidget(_wrap(AcademicPage(model: model)));
+      // Tap refresh to trigger network call
+      await tester.tap(find.byTooltip('刷新学业数据'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('无法连接教务网，请检查网络或连接校园网后重试'), findsOneWidget);
+      expect(find.text('重试'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'AcademicPage shows friendly error banner and retry button on TimeoutException',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 1800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final backend = FakeBackend();
+      backend.gradesBehavior = (_, _) =>
+          throw TimeoutException('request timeout');
+      final model = _buildTestModel(backend: backend);
+
+      await tester.pumpWidget(_wrap(AcademicPage(model: model)));
+      await tester.tap(find.byTooltip('刷新学业数据'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('网络请求超时，请检查网络后重试'), findsOneWidget);
+      expect(find.text('重试'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'AcademicPage properly renders qualitative and extended passing grades',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 1800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final backend = FakeBackend();
+      backend.gradesBehavior = (_, _) async => const <GradeItem>[
+        GradeItem(
+          courseName: '形势与政策',
+          credit: 1.0,
+          rawScore: '通过',
+          termId: '2026-2027-1',
+        ),
+        GradeItem(
+          courseName: '实训科目',
+          credit: 2.0,
+          rawScore: '合格',
+          termId: '2026-2027-1',
+        ),
+        GradeItem(
+          courseName: '免修英语',
+          credit: 3.0,
+          rawScore: '免修',
+          termId: '2026-2027-1',
+        ),
+      ];
+      final model = _buildTestModel(backend: backend);
+
+      await tester.pumpWidget(_wrap(AcademicPage(model: model)));
+      await tester.tap(find.byTooltip('刷新学业数据'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('形势与政策'), findsOneWidget);
+      expect(find.text('通过'), findsOneWidget);
+      expect(find.text('实训科目'), findsOneWidget);
+      expect(find.text('合格'), findsOneWidget);
+      expect(find.text('免修英语'), findsOneWidget);
+      expect(find.text('免修'), findsOneWidget);
+    },
+  );
 
   testWidgets(
     'AcademicPage term selector displays human label and opens anchored menu',

@@ -786,23 +786,57 @@ class ZhengfangClient {
         cause: diagnosis.detail,
       );
     }
+    // 先尝试安全提取成绩列表
+    final rows =
+        listRowsOrEmpty(response.body, const ['items', 'data', 'rows']);
+    if (rows.isNotEmpty) {
+      lastGradesRows = rows;
+      final items = jsonGrades(rows);
+      _debug('grades:parsed', <String, Object?>{
+        'termId': id,
+        'bodyLength': response.body.length,
+        'rows': rows.length,
+        'items': items.length,
+      });
+      return items;
+    }
+
+    // 【未评教判定逻辑说明】
+    // 真实正方教务系统在学生未评教时，接口行为可能表现为：
+    //  1. 返回空数据列表（rows 为空）且顶层带 message / msg 字段提示未评教；
+    //  2. 或直接返回不含 items/rows 的错误对象（如 {"message": "请先完成本学期教学质量评价后再查询成绩", "flag": "-1"}）；
+    //  3. 或返回包含“教学质量评价”/“请先评教”的错误页面或弹窗提示。
+    // 注意：若 rows.isNotEmpty（即已解析出有效成绩），切勿因为某些课程名称（如
+    // “教学质量评价与监控专题”）或页面元数据中包含相关字符串而误触发拦截。
+    //
+    // 目前缺乏生产环境不同正方版本未评教状态的完整全量样本（例如准确的 code、flag 字段），
+    // 现采用「数据优先 + 空数据拦截」的稳健策略：
+    //  - 若已有成绩数据解析出来（rows.isNotEmpty），优先出分；
+    //  - 若 rows 为空，且 message 弹窗提示或原始响应中存在未评教关键词，则抛出 ErrorCode.notEvaluated；
+    //  - 若既无成绩数据也非未评教提示，则通过 listRows 走通用的列表结构校验与 PAGE_CHANGED 报错。
+    // 后续如有教务系统真实未评教返回样本（如特定 JSON code、status 字段），可在此处精准替换调整。
     final detail = messageOf(response.body);
-    if (detail.contains('评价') ||
-        detail.contains('评教') ||
-        response.body.contains('教学质量评价') ||
-        response.body.contains('请先评教')) {
+    final hasEvaluationAlert =
+        detail.contains('评价') || detail.contains('评教');
+    final hasRawAlert = response.body.contains('教学质量评价') ||
+        response.body.contains('请先评教');
+    if (hasEvaluationAlert || hasRawAlert) {
       throw AcademicError(
         ErrorCode.notEvaluated,
         detail.isNotEmpty ? detail : '教务系统提示未完成教学评价，无法查询成绩',
       );
     }
-    final rows = listRows(response.body, const ['items', 'data', 'rows']);
-    lastGradesRows = rows;
-    final items = jsonGrades(rows);
+
+    // 兜底：既无未评教拦截，rows 又为空，如果是畸形/无法识别的结构，通过 listRows 触发 PAGE_CHANGED 异常；
+    // 如果是正常合法的空列表（如 items: []），listRows 将安全返回 []。
+    final verifiedRows =
+        listRows(response.body, const ['items', 'data', 'rows']);
+    lastGradesRows = verifiedRows;
+    final items = jsonGrades(verifiedRows);
     _debug('grades:parsed', <String, Object?>{
       'termId': id,
       'bodyLength': response.body.length,
-      'rows': rows.length,
+      'rows': verifiedRows.length,
       'items': items.length,
     });
     return items;

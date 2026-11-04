@@ -58,7 +58,18 @@ class GradeStats {
       final raw = grade.rawScore.trim();
       final isPassed =
           (numScore != null && numScore >= 60.0) ||
-          const ['通过', '合格', '优秀', '良好', '中等', '及格'].contains(raw) ||
+          const [
+            '通过',
+            '合格',
+            '优秀',
+            '良好',
+            '中等',
+            '及格',
+            '免修',
+            '免考',
+            'P',
+            'p',
+          ].contains(raw) ||
           (grade.gradePoint != null && grade.gradePoint! > 0);
       if (isPassed) {
         passedCount++;

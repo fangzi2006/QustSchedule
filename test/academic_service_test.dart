@@ -60,6 +60,23 @@ void main() {
       expect(stats.passedCourses, equals(3));
       expect(stats.passedCredits, equals(6.5));
     });
+
+    test('recognizes extended passing scores (免修, 免考, 合格, P, p)', () {
+      final grades = [
+        const GradeItem(courseName: '大学英语免修', credit: 2.0, rawScore: '免修'),
+        const GradeItem(courseName: '体育免考', credit: 1.0, rawScore: '免考'),
+        const GradeItem(courseName: '金工实习', credit: 1.5, rawScore: '合格'),
+        const GradeItem(courseName: '通识选修1', credit: 1.0, rawScore: 'P'),
+        const GradeItem(courseName: '通识选修2', credit: 0.5, rawScore: 'p'),
+        const GradeItem(courseName: '高等数学挂科', credit: 4.0, rawScore: '不及格'),
+        const GradeItem(courseName: '未通过科目', credit: 1.0, rawScore: '不通过'),
+      ];
+
+      final stats = GradeStats.calculate(grades);
+      expect(stats.totalCourses, equals(7));
+      expect(stats.passedCourses, equals(5));
+      expect(stats.passedCredits, equals(6.0));
+    });
   });
 
   group('AcademicService operations', () {

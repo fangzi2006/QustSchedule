@@ -114,6 +114,39 @@ void main() {
           ));
     });
 
+    test('课程名称包含"教学质量评价"关键词但返回了成绩列表时正常出分不被误拦截', () async {
+      const bodyWithEvaluationCourse = '''
+      {
+        "items": [
+          {
+            "kcmc": "教育学前沿：教学质量评价与监控专题",
+            "kch": "EDU501",
+            "xf": "2.0",
+            "jd": "4.5",
+            "cj": "95",
+            "bfzcj": "95.0",
+            "kcxzmc": "选修",
+            "kclbmc": "专业选修",
+            "ksxz": "正常考试",
+            "xnm": "2026",
+            "xqm": "3"
+          }
+        ]
+      }
+      ''';
+      await withServer((server) async {
+        final client =
+            vmZhengfangClient(ZfClientConfig(baseUrl: server.baseUrl));
+        await client.login(Credentials(server.username, server.password));
+
+        final grades = await client.fetchGrades('2026-2027-1');
+        expect(grades, hasLength(1));
+        expect(grades.first.courseName, '教育学前沿：教学质量评价与监控专题');
+        expect(grades.first.numericScore, 95.0);
+        client.dispose();
+      }, const SyntheticZfOptions(gradesBody: bodyWithEvaluationCourse));
+    });
+
     test('未登录时拉取成绩抛出 SESSION_EXPIRED', () async {
       await withServer((server) async {
         final client =

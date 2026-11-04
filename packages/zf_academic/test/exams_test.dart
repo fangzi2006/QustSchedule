@@ -200,5 +200,28 @@ void main() {
       expect(term16, isNotNull);
       expect(term16!.semester, 3);
     });
+
+    test('calendarTerm 在东八区清晨与临界时间点保持本地学年学期正确（防 UTC 跨天回退）', () {
+      // 8月1日凌晨 01:00（若转 UTC 为 7月31日 17:00，曾导致年份-1）
+      final augEarly = DateTime(2026, 8, 1, 1, 0);
+      final termAug = calendarTerm(augEarly);
+      expect(termAug.year, 2026);
+      expect(termAug.semester, 1);
+      expect(termAug.id, '2026-2027-1');
+
+      // 1月15日凌晨 02:00 -> 仍属于当前学年第 1 学期
+      final janEarly = DateTime(2027, 1, 15, 2, 0);
+      final termJan = calendarTerm(janEarly);
+      expect(termJan.year, 2026);
+      expect(termJan.semester, 1);
+      expect(termJan.id, '2026-2027-1');
+
+      // 2月1日凌晨 00:30 -> 属于第 2 学期
+      final febEarly = DateTime(2027, 2, 1, 0, 30);
+      final termFeb = calendarTerm(febEarly);
+      expect(termFeb.year, 2026);
+      expect(termFeb.semester, 2);
+      expect(termFeb.id, '2026-2027-2');
+    });
   });
 }

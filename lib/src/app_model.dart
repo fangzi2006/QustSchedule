@@ -11,6 +11,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io' show SocketException;
 
 import 'package:flutter/foundation.dart';
 import 'package:zf_academic/zf_academic.dart';
@@ -1047,32 +1048,55 @@ class AppModel extends ChangeNotifier {
 
       if (examRes is List<ExamItem>) {
         _exams = examRes;
-      } else if (examRes is AcademicError) {
-        if (examRes.code != ErrorCode.notOpen) {
-          _academicError ??= examRes.message;
-        }
+      } else if (examRes is AcademicError &&
+          examRes.code == ErrorCode.notOpen) {
+        // 考试安排未开放属于正常学期周期状态，保持静默，不提示错误
+      } else if (examRes != null) {
+        _academicError ??= _describeAcademicError(examRes);
       }
 
       if (gradeRes is List<GradeItem>) {
         _grades = gradeRes;
         _isNotEvaluated = false;
-      } else if (gradeRes is AcademicError) {
-        if (gradeRes.code == ErrorCode.notEvaluated) {
-          _isNotEvaluated = true;
-          final existing = await _gradesCache.load(target);
-          if (existing != null && existing.items.isNotEmpty) {
-            _grades = existing.items;
-          }
-        } else {
-          _academicError ??= gradeRes.message;
+      } else if (gradeRes is AcademicError &&
+          gradeRes.code == ErrorCode.notEvaluated) {
+        _isNotEvaluated = true;
+        final existing = await _gradesCache.load(target);
+        if (existing != null && existing.items.isNotEmpty) {
+          _grades = existing.items;
         }
+      } else if (gradeRes != null) {
+        _academicError ??= _describeAcademicError(gradeRes);
       }
     } catch (e) {
-      _academicError = e.toString();
+      _academicError ??= _describeAcademicError(e);
     } finally {
       _academicLoading = false;
       academicNotifier.notifyListeners();
     }
+  }
+
+  /// 归一化学业数据加载错误，为用户呈现友好且具备指导性的提示文案。
+  String _describeAcademicError(dynamic err) {
+    if (err is AcademicError) {
+      return err.message;
+    }
+    if (err is TimeoutException) {
+      return '网络请求超时，请检查网络后重试';
+    }
+    if (err is SocketException) {
+      return '无法连接教务网，请检查网络或连接校园网后重试';
+    }
+    final errStr = err.toString();
+    if (errStr.contains('SocketException') ||
+        errStr.contains('Connection refused') ||
+        errStr.contains('Network is unreachable')) {
+      return '无法连接教务网，请检查网络或连接校园网后重试';
+    }
+    if (errStr.contains('TimeoutException') || errStr.contains('timed out')) {
+      return '网络请求超时，请检查网络后重试';
+    }
+    return '学业数据加载失败，请重试';
   }
 
   /// 手动刷新当前学业数据。

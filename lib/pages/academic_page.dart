@@ -1037,9 +1037,24 @@ class _GradeListTile extends StatelessWidget {
       if (num >= 60) return scheme.primary;
       return scheme.error;
     }
-    if (score == '优秀') return Colors.teal;
-    if (score == '良好' || score == '中等' || score == '及格') return scheme.primary;
-    if (score == '不及格' || score == '不合格') return scheme.error;
+    final trimmed = score.trim();
+    if (trimmed == '优秀') return Colors.teal;
+    if (const [
+      '良好',
+      '中等',
+      '及格',
+      '通过',
+      '合格',
+      '免修',
+      '免考',
+      'P',
+      'p',
+    ].contains(trimmed)) {
+      return scheme.primary;
+    }
+    if (const ['不及格', '不合格', '不通过', 'F', 'f'].contains(trimmed)) {
+      return scheme.error;
+    }
     return scheme.onSurface;
   }
 }

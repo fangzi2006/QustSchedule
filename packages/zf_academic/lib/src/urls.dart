@@ -246,8 +246,9 @@ const Map<int, String> semesterCodes = {1: '3', 2: '12', 3: '16'};
 /// 当前自然年推导出的学年学期，只在没有学校数据时用于兜底排序，不用来"发明"可选学期。
 Term calendarTerm([DateTime? now]) {
   final date = now ?? DateTime.now();
-  final month = date.toUtc().month;
-  final year = month >= 8 ? date.toUtc().year : date.toUtc().year - 1;
+  // 使用本地时区月份与年份，杜绝东八区清晨 (00:00–08:00) 转 UTC 导致跨天/跨月回退
+  final month = date.month;
+  final year = month >= 8 ? date.year : date.year - 1;
   final semester = month >= 8 || month == 1 ? 1 : 2;
   return parseTerm('$year-${year + 1}-$semester')!;
 }

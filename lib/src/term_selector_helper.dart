@@ -50,17 +50,8 @@ int? parseEnrollmentYear(String? studentId, {DateTime? now}) {
     return null;
   }
 
-  // 3. 若为 10 位学号（青科大本科 10 位学号如 2407720102、2007720102，或 4 位年份前缀如 2026000001）：
+  // 3. 若为 10 位学号（青科大标准本科 10 位学号 YY + CC + MM + NN + SS，前 2 位严格对应入学年份）：
   if (digits.length == 10) {
-    // 检查是否为 4 位年份前缀（如 2024000001、2026000001，其中后两位年份 >= 21）
-    if (digits.startsWith('20')) {
-      final mid2 = int.tryParse(digits.substring(2, 4)) ?? 0;
-      if (mid2 >= 21) {
-        final y4 = int.tryParse(digits.substring(0, 4));
-        if (y4 != null && isValidYear(y4)) return y4;
-      }
-    }
-    // 否则按青科大 10 位学号（YY + CC + MM + NN + SS）解析前 2 位为入学年份
     final y2 = int.tryParse(digits.substring(0, 2));
     if (y2 != null) {
       final yFull = y2 >= 80 ? (1900 + y2) : (2000 + y2);

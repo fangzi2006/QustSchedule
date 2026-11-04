@@ -13,25 +13,28 @@ void main() {
       expect(parseEnrollmentYear('2501010101', now: refDate), 2025);
     });
 
-    test('解析4位年份前缀学号 (如 20240001 -> 2024, 2026000001 -> 2026)', () {
+    test('解析4位年份前缀学号 (如 20240001 -> 2024, 20260001 -> 2026)', () {
       expect(parseEnrollmentYear('20240001', now: refDate), 2024);
       expect(parseEnrollmentYear('20230001', now: refDate), 2023);
       expect(
-        parseEnrollmentYear('2026000001', now: DateTime(2026, 9, 1)),
+        parseEnrollmentYear('20260001', now: DateTime(2026, 9, 1)),
         2026,
       );
       expect(parseEnrollmentYear('20221234', now: refDate), 2022);
+      expect(parseEnrollmentYear('202400000001', now: refDate), 2024);
     });
 
-    test('解析20级10位学号 (2007720102 -> 2020, 2015010101 -> 2020)', () {
+    test('解析青科大标准10位学号 (YY+CC+MM+NN+SS，前2位严格为入学年)', () {
       expect(parseEnrollmentYear('2007720102', now: refDate), 2020);
       expect(
         parseEnrollmentYear('2007720102', now: DateTime(2021, 9, 1)),
         2020,
       );
+      // 2020级 21学院学生：此前曾因 mid2 >= 21 被误判为 2021 级，现严格解析为 2020 级
+      expect(parseEnrollmentYear('2021010101', now: refDate), 2020);
       expect(parseEnrollmentYear('2015010101', now: refDate), 2020);
       expect(parseEnrollmentYear('2020000001', now: refDate), 2020);
-      expect(parseEnrollmentYear('2024000001', now: refDate), 2024);
+      expect(parseEnrollmentYear('2407720102', now: refDate), 2024);
     });
 
     test('纯年份字符 (2024 -> 2024, 24 -> 2024)', () {
