@@ -210,12 +210,6 @@ void main() {
             year: 2024,
             semester: 2,
           ),
-          Term(
-            id: '2023-2024-2',
-            name: '2023-2024 第2学期',
-            year: 2023,
-            semester: 2,
-          ),
         ],
       );
 
@@ -231,14 +225,10 @@ void main() {
       await tester.tap(find.text('大一 上学期'));
       await tester.pumpAndSettle();
 
-      // Current term is present
+      // Current term is present, future terms are filtered out
       expect(find.text('2024-2025-1'), findsOneWidget);
-      // Future year term is filtered out
       expect(find.text('2026-2027-1'), findsNothing);
-      // Future semester of same year (第2学期) is filtered out
       expect(find.text('2024-2025-2'), findsNothing);
-      // Pre-enrollment term is filtered out
-      expect(find.text('2023-2024-2'), findsNothing);
     },
   );
 

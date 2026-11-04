@@ -24,9 +24,10 @@ zf_academic（纯 Dart barrel，零 Flutter 依赖）
 ├── html.dart              轻量 HTML 扫描（隐藏域 / 验证码 / 身份 / 下拉框）
 ├── respond.dart           响应分类（错误不能当成空数据）
 ├── schedule.dart          课表与学期解析
+├── academic_query.dart    考试与成绩清洗、弹性时间解析、未评教拦截诊断
 ├── http_client.dart       AcademicHttpClient：手动重定向、白名单、重试、限速、字符集
 │                          （传输层 ZfHttpTransport 可注入，测试用假传输）
-└── zhengfang_client.dart  ZhengfangClient：登录 / 会话 / 学期 / 课表
+└── zhengfang_client.dart  ZhengfangClient：登录 / 会话 / 学期 / 课表 / 考试 / 成绩
 
 zf_academic_io（依赖 dart:io）
 ├── FileCookieStorage      Cookie 快照文件持久化（chmod 600）
@@ -87,6 +88,7 @@ await restored.close();
 
 - 表单直登（RSA 加密 + 图片验证码 + 登录前清理会话）、会话校验、学期目录、
   课表查询（含 `sjkList` 备注）、课表入口的路由发现。
+- 考试日程查询（`fetchExams`）与成绩单查询（`fetchGrades`），内置 `queryModel.showCount=500` 防正方分页截断机制及未评教错误（`ErrorCode.notEvaluated`）精准检测。
 - **统一认证（CAS）不在支持范围**：`probe()` 如实报告 `requiresCas`，
   `login()` 遇到 CAS 学校抛 `WEB_LOGIN_REQUIRED`。
 - 只针对新正方的页面结构；旧正方 / 强智 / 金智等系统会在登录阶段报 `PAGE_CHANGED`。

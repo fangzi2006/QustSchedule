@@ -5,51 +5,44 @@ import 'support/synthetic_zf.dart';
 
 void main() {
   group('考试时间解析 (parseExamTime)', () {
-    test('标准连字符格式 2025-01-08 08:30-10:30', () {
-      final parsed = parseExamTime('2025-01-08 08:30-10:30');
-      expect(parsed.startTime, DateTime(2025, 1, 8, 8, 30));
-      expect(parsed.endTime, DateTime(2025, 1, 8, 10, 30));
-    });
-
-    test('括号波浪线格式 2025-01-08(08:30~10:30)', () {
-      final parsed = parseExamTime('2025-01-08(08:30~10:30)');
-      expect(parsed.startTime, DateTime(2025, 1, 8, 8, 30));
-      expect(parsed.endTime, DateTime(2025, 1, 8, 10, 30));
-    });
-
-    test('中文年月日与「至」连接 2025年06月15日 14:00至16:00', () {
-      final parsed = parseExamTime('2025年06月15日 14:00至16:00');
-      expect(parsed.startTime, DateTime(2025, 6, 15, 14, 0));
-      expect(parsed.endTime, DateTime(2025, 6, 15, 16, 0));
-    });
-
-    test('斜杠日期与带秒时间 2025/02/10 09:00:00-11:00:00', () {
-      final parsed = parseExamTime('2025/02/10 09:00:00-11:00:00');
-      expect(parsed.startTime, DateTime(2025, 2, 10, 9, 0));
-      expect(parsed.endTime, DateTime(2025, 2, 10, 11, 0));
-    });
-
-    test('单点时间 2025-03-01 10:00', () {
-      final parsed = parseExamTime('2025-03-01 10:00');
-      expect(parsed.startTime, DateTime(2025, 3, 1, 10, 0));
-      expect(parsed.endTime, isNull);
-    });
-
-    test('仅日期 2025-03-01', () {
-      final parsed = parseExamTime('2025-03-01');
-      expect(parsed.startTime, DateTime(2025, 3, 1));
-      expect(parsed.endTime, isNull);
-    });
-
-    test('无效或待定文本返回 null', () {
-      expect(parseExamTime('').startTime, isNull);
-      expect(parseExamTime('待定').startTime, isNull);
-      expect(parseExamTime('时间未定').endTime, isNull);
+    test('覆盖所有有效格式与边界（标准/括号波浪线/中文/斜杠带秒/单点/仅日期/空/待定）', () {
+      final cases = [
+        (
+          '2025-01-08 08:30-10:30',
+          DateTime(2025, 1, 8, 8, 30),
+          DateTime(2025, 1, 8, 10, 30)
+        ),
+        (
+          '2025-01-08(08:30~10:30)',
+          DateTime(2025, 1, 8, 8, 30),
+          DateTime(2025, 1, 8, 10, 30)
+        ),
+        (
+          '2025年06月15日 14:00至16:00',
+          DateTime(2025, 6, 15, 14, 0),
+          DateTime(2025, 6, 15, 16, 0)
+        ),
+        (
+          '2025/02/10 09:00:00-11:00:00',
+          DateTime(2025, 2, 10, 9, 0),
+          DateTime(2025, 2, 10, 11, 0)
+        ),
+        ('2025-03-01 10:00', DateTime(2025, 3, 1, 10, 0), null),
+        ('2025-03-01', DateTime(2025, 3, 1), null),
+        ('', null, null),
+        ('待定', null, null),
+        ('时间未定', null, null),
+      ];
+      for (final (raw, start, end) in cases) {
+        final parsed = parseExamTime(raw);
+        expect(parsed.startTime, start, reason: 'Failed startTime for "$raw"');
+        expect(parsed.endTime, end, reason: 'Failed endTime for "$raw"');
+      }
     });
   });
 
   group('考试数据清洗与序列化 (jsonExams & ExamItem)', () {
-    test('完整解析考试行字段', () {
+    test('完整解析考试行字段并兼容青科大/正方别名字段 (cdxqmc/xqmc, cdmc/jxcdmc)', () {
       final rows = <Map<String, dynamic>>[
         <String, dynamic>{
           'kcmc': '大学物理B',
@@ -61,19 +54,41 @@ void main() {
           'ksfs': '闭卷',
           'kszt': '正常',
         },
+        <String, dynamic>{
+          'kcmc': '编译原理',
+          'ksmc': '期末考试',
+          'kssj': '2025-01-10(08:30-10:30)',
+          'cdxqmc': '崂山校区',
+          'jxcdmc': 'M1-301',
+          'zwh': '15',
+          'ksfs': '笔试',
+          'kszt': '正常',
+        },
       ];
       final items = jsonExams(rows);
-      expect(items, hasLength(1));
-      final exam = items.first;
-      expect(exam.courseName, '大学物理B');
-      expect(exam.examType, '2024-2025-1期末考试');
-      expect(exam.campus, '崂山校区');
-      expect(exam.classroom, '弘毅楼 201');
-      expect(exam.seatNumber, '32');
-      expect(exam.examForm, '闭卷');
-      expect(exam.status, '正常');
-      expect(exam.startTime, DateTime(2025, 1, 8, 8, 30));
-      expect(exam.endTime, DateTime(2025, 1, 8, 10, 30));
+      expect(items, hasLength(2));
+
+      final exam1 = items[0];
+      expect(exam1.courseName, '大学物理B');
+      expect(exam1.examType, '2024-2025-1期末考试');
+      expect(exam1.campus, '崂山校区');
+      expect(exam1.classroom, '弘毅楼 201');
+      expect(exam1.seatNumber, '32');
+      expect(exam1.examForm, '闭卷');
+      expect(exam1.status, '正常');
+      expect(exam1.startTime, DateTime(2025, 1, 8, 8, 30));
+      expect(exam1.endTime, DateTime(2025, 1, 8, 10, 30));
+
+      final exam2 = items[1];
+      expect(exam2.courseName, '编译原理');
+      expect(exam2.examType, '期末考试');
+      expect(exam2.campus, '崂山校区');
+      expect(exam2.classroom, 'M1-301');
+      expect(exam2.seatNumber, '15');
+      expect(exam2.examForm, '笔试');
+      expect(exam2.status, '正常');
+      expect(exam2.startTime, DateTime(2025, 1, 10, 8, 30));
+      expect(exam2.endTime, DateTime(2025, 1, 10, 10, 30));
     });
 
     test('过滤掉课程名为空的脏数据', () {
@@ -119,35 +134,6 @@ void main() {
       ];
       final items = jsonExams(rows);
       expect(items, hasLength(1));
-    });
-
-    test(
-        'jsonExams 解析青科大真实教务返回字段 (kcmc, kssj括号格式, cdmc, cdxqmc, ksmc, ksfs, zwh)',
-        () {
-      final rows = <Map<String, dynamic>>[
-        <String, dynamic>{
-          'kcmc': '编译原理',
-          'kssj': '2025-01-10(08:30-10:30)',
-          'cdmc': 'M1-301',
-          'cdxqmc': '崂山校区',
-          'ksmc': '期末考试',
-          'ksfs': '笔试',
-          'zwh': '15',
-          'kszt': '正常',
-        },
-      ];
-      final items = jsonExams(rows);
-      expect(items, hasLength(1));
-      final item = items.first;
-      expect(item.courseName, '编译原理');
-      expect(item.startTime, DateTime(2025, 1, 10, 8, 30));
-      expect(item.endTime, DateTime(2025, 1, 10, 10, 30));
-      expect(item.classroom, 'M1-301');
-      expect(item.campus, '崂山校区');
-      expect(item.examType, '期末考试');
-      expect(item.examForm, '笔试');
-      expect(item.seatNumber, '15');
-      expect(item.status, '正常');
     });
   });
 

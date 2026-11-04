@@ -213,6 +213,9 @@ String defaultScheduleIndexBody() {
   );
 }
 
+final ({RSAPublicKey publicKey, RSAPrivateKey privateKey})
+    _defaultTestKeyPair = _generateKeyPair(1024);
+
 class SyntheticZfServer {
   final List<RecordedRequest> requests = <RecordedRequest>[];
   final String username;
@@ -236,7 +239,7 @@ class SyntheticZfServer {
         password = options.password,
         studentId = options.studentId,
         studentName = options.studentName {
-    final keys = _generateKeyPair(1024);
+    final keys = _defaultTestKeyPair;
     privateKey = keys.privateKey;
     modulusBase64 = base64.encode(bigIntToBytes(keys.publicKey.modulus!));
     exponentBase64 = base64.encode(bigIntToBytes(keys.publicKey.exponent!));

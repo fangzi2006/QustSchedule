@@ -280,20 +280,20 @@ void main() {
     });
 
     test('FileCookieStorage 落盘往返（含 0600 收紧）', () async {
-      await withServer((server) async {
-        final client =
-            vmZhengfangClient(ZfClientConfig(baseUrl: server.baseUrl));
-        await client.login(Credentials(server.username, server.password));
-        final storage = FileCookieStorage('.dart_tool/test-session.json');
-        await storage.save(client.exportCookies());
-        client.dispose();
+      final store = CookieStore(baseUrl: 'https://jw.example.edu.cn/jwglxt')
+        ..setCookie(
+          Uri.parse('https://jw.example.edu.cn/jwglxt/'),
+          'JSESSIONID=fixture-session; Path=/jwglxt; HttpOnly',
+        );
+      final snapshot = store.export();
+      final storage = FileCookieStorage('.dart_tool/test-session.json');
+      await storage.save(snapshot);
 
-        final loaded = await storage.load();
-        expect(loaded, isNotNull);
-        expect(
-            loaded!.cookies.any((item) => item.name == 'JSESSIONID'), isTrue);
-        await storage.clear();
-      });
+      final loaded = await storage.load();
+      expect(loaded, isNotNull);
+      expect(
+          loaded!.cookies.any((item) => item.name == 'JSESSIONID'), isTrue);
+      await storage.clear();
     });
 
     test('checkSession 三态：已登录 / 已失效 / 无法确认', () async {
@@ -557,13 +557,6 @@ void main() {
       expect(normalized.scheduleQueryPath, '/kbcx/xskbcx_cxXsgrkb.html');
       expect(normalized.scheduleGnmkdm, 'N2151');
       expect(normalized.personal, isTrue);
-    });
-
-    test('listRows 容忍空课表与 null 响应，不误报 PAGE_CHANGED', () {
-      expect(listRows('null', ['kbList']), isEmpty);
-      expect(listRows('[]', ['kbList']), isEmpty);
-      expect(listRows('{"kbList": null}', ['kbList']), isEmpty);
-      expect(listRows('{"kbList": []}', ['kbList']), isEmpty);
     });
 
     test('jsonSchedule 跳过缺星期/节次的无规律课程，周次异常时安全兜底', () {

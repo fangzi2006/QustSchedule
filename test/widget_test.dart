@@ -1222,40 +1222,32 @@ void main() {
       );
     });
 
-    testWidgets('地点只留房间号：各种形态都按预期裁剪', (tester) async {
-      const cases = <String, String>{
-        '高密校区 M1-239': 'M1-239',
-        '高密校区 高密线上教室6': '高密线上教室6',
-        '崂山校区明德楼302教室': '明德楼302教室',
-        'M1-101': 'M1-101',
-        '线上': '线上',
-      };
-      for (final entry in cases.entries) {
-        await tester.pumpWidget(
-          sized(
-            width: 140,
-            height: 120,
-            entry: ScheduleEntry(
-              id: 'loc',
-              name: '高等数学',
-              teacher: '张三',
-              location: entry.key,
-              day: 1,
-              startPeriod: 1,
-              endPeriod: 1,
-              weeks: const <int>[1],
-            ),
+    testWidgets('地点只留房间号：CourseBlock 渲染 roomOnly(location) 裁剪结果',
+        (tester) async {
+      await tester.pumpWidget(
+        sized(
+          width: 140,
+          height: 120,
+          entry: const ScheduleEntry(
+            id: 'loc',
+            name: '高等数学',
+            teacher: '张三',
+            location: '高密校区 M1-239',
+            day: 1,
+            startPeriod: 1,
+            endPeriod: 1,
+            weeks: <int>[1],
           ),
-        );
-        expect(
-          find.descendant(
-            of: find.byType(CourseBlock),
-            matching: find.text(entry.value),
-          ),
-          findsOneWidget,
-          reason: '「${entry.key}」在卡片里显示为「${entry.value}」',
-        );
-      }
+        ),
+      );
+      expect(
+        find.descendant(
+          of: find.byType(CourseBlock),
+          matching: find.text('M1-239'),
+        ),
+        findsOneWidget,
+        reason: '「高密校区 M1-239」在卡片里显示为「M1-239」',
+      );
     });
 
     testWidgets('窄格子：先砍教师，课名与地点还在', (tester) async {

@@ -164,7 +164,7 @@ void main() {
   });
 
   group('重定向', () {
-    test('302 自动跟随；POST 的 302 转为 GET 且不再重放表单', () async {
+    test('302 自动跟随；GET 请求正常跟随跳转', () async {
       final fake = FakeTransport(<RawHttpResponse>[
         _response(302, location: '/jwglxt/xtgl/index_initMenu.html'),
         _response(200, body: 'menu'),
@@ -431,6 +431,7 @@ void main() {
     test('listRows 正确处理 null 与空数组而无需魔法字符串特判', () {
       expect(listRows('null', const <String>['kbList']), isEmpty);
       expect(listRows('[]', const <String>['kbList']), isEmpty);
+      expect(listRows('{"kbList": null}', const <String>['kbList']), isEmpty);
       expect(listRows('{"kbList":[]}', const <String>['kbList']), isEmpty);
     });
 
