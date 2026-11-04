@@ -1348,6 +1348,203 @@ void main() {
       expect(model.isNotEvaluated, isFalse);
     });
   });
+
+  group('静默更新串联 (syncSilently & 学业同步)', () {
+    test('syncSilently 课表查询完成后以异步非阻塞形式派发考试与成绩查询，不增加课表提示延迟', () async {
+      final backend = FakeBackend();
+      final academicCompleter = Completer<void>();
+      backend.examsBehavior = (call, termId) async {
+        await academicCompleter.future;
+        return sampleExams();
+      };
+      backend.gradesBehavior = (call, termId) async {
+        await academicCompleter.future;
+        return sampleGrades();
+      };
+
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
+      // 预置已有课表，进入静默更新模式
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+      final syncFuture = model.syncSilently();
+
+      // 验证课表更新返回，不等待学业同步完成
+      await syncFuture;
+      expect(model.hint, '已更新', reason: '课表获取完成后立即提示更新，无须等待学业数据');
+      expect(academicCompleter.isCompleted, isFalse, reason: '学业数据仍在异步进行中');
+
+      final academicSync = model.academicSyncForTest;
+      expect(academicSync, isNotNull, reason: '课表完成后派发了学业同步');
+
+      // 放行学业查询
+      academicCompleter.complete();
+      await academicSync;
+
+      expect(model.exams, isNotEmpty);
+      expect(model.grades, isNotEmpty);
+      expect(model.hint, '已更新', reason: '学业同步完成后绝不修改或覆盖课表提示');
+    });
+
+    test('静默更新中的学业同步完成后绝不弹出或下发通知（不额外调用 _showHint）', () async {
+      final backend = FakeBackend();
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+      final hints = <String>[];
+      model.addListener(() {
+        if (model.hint.isNotEmpty &&
+            (hints.isEmpty || hints.last != model.hint)) {
+          hints.add(model.hint);
+        }
+      });
+
+      await model.syncSilently();
+      await model.academicSyncForTest;
+
+      expect(hints, contains('更新中…'));
+      expect(hints, contains('已更新'));
+      // 没有任何包含考试或成绩的通知
+      for (final h in hints) {
+        expect(h, isNot(contains('考试')));
+        expect(h, isNot(contains('成绩')));
+      }
+    });
+
+    test('课表页手动刷新 refresh() 严格只刷新课表，不派发学业同步', () async {
+      final backend = FakeBackend();
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+      await model.refresh();
+
+      expect(model.academicSyncForTest, isNull, reason: '手动刷新课表绝不派发学业同步');
+      expect(backend.examsCount, 0);
+      expect(backend.gradesCount, 0);
+    });
+
+    test('课表查询失败时不派发学业同步', () async {
+      final backend = FakeBackend();
+      backend.fetchBehavior = (call, termId) async =>
+          throw const AcademicError(ErrorCode.networkRetryable, '网络超时');
+
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+      await model.syncSilently();
+
+      expect(model.academicSyncForTest, isNull, reason: '课表失败不得派发学业同步');
+      expect(backend.examsCount, 0);
+      expect(backend.gradesCount, 0);
+    });
+
+    test('冷启动自动静默刷新触发 syncSilently 并串联后台学业同步', () async {
+      final backend = FakeBackend();
+      final oldFetched = DateTime.now().subtract(const Duration(hours: 3));
+      final cache = FakeScheduleCache(
+        CachedSchedule(
+          baseUrl: _baseUrl,
+          schedule: sampleSchedule('2026-2027-1'),
+          fetchedAt: oldFetched,
+        ),
+      );
+      final sessionRepo = FakeSessionRepository(snapshotOf(_baseUrl));
+      final prefs = Preferences.inMemory(
+        autoRefresh: true,
+        autoRefreshIntervalMinutes: 30,
+      );
+
+      final model = bootRig(
+        backend: backend,
+        cache: cache,
+        repository: sessionRepo,
+        preferences: prefs,
+      );
+
+      await model.boot();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(model.status, AppStatus.ready);
+      final academicSync = model.academicSyncForTest;
+      expect(academicSync, isNotNull, reason: '冷启动静默刷新应异步串联学业同步');
+
+      await academicSync;
+      expect(model.exams, isNotEmpty);
+      expect(model.grades, isNotEmpty);
+      expect(backend.examsCount, 1);
+      expect(backend.gradesCount, 1);
+    });
+
+    test(
+      '静默更新中学业查询遇 Cookie 失效后台重登：学业重登保持静默，不破坏课表已更新提示，refreshing 不被锁住',
+      () async {
+        final backend = FakeBackend();
+        final rig = buildRig(backend: backend);
+        final model = rig.model;
+        await rig.credentials.save(
+          '${model.service.baseUrl.toLowerCase()}|20240001',
+          const Credentials('20240001', 'pw'),
+        );
+        model.service.accountHint = '20240001';
+        model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+        var examsCall = 0;
+        backend.examsBehavior = (call, termId) async {
+          examsCall++;
+          if (examsCall == 1) {
+            throw const AcademicError(ErrorCode.sessionExpired, '会话失效');
+          }
+          return sampleExams();
+        };
+
+        await model.syncSilently();
+        expect(model.hint, '已更新', reason: '课表成功后提示已更新');
+
+        // 等待学业同步完成
+        await model.academicSyncForTest;
+
+        expect(model.hint, '已更新', reason: '学业后台重登绝不上浮正在重新登录提示破坏课表提示');
+        expect(
+          model.refreshing,
+          isFalse,
+          reason: '静默更新完成后 refreshing 必须回到 false',
+        );
+        expect(backend.loginCount, 1, reason: '学业查询触发了一次自动重登');
+        expect(model.exams, isNotEmpty);
+      },
+    );
+
+    test('学业同步进行中用户退出登录：学业完成时不得向已退出状态写回残留数据', () async {
+      final backend = FakeBackend();
+      final academicCompleter = Completer<void>();
+      backend.examsBehavior = (call, termId) async {
+        await academicCompleter.future;
+        return sampleExams();
+      };
+
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+      await model.syncSilently();
+      expect(model.academicSyncForTest, isNotNull);
+
+      // 用户在学业查询网络等待期间点击退出登录
+      await model.signOut();
+      expect(model.status, AppStatus.needLogin);
+
+      // 放行学业查询完成
+      academicCompleter.complete();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(model.status, AppStatus.needLogin);
+      expect(model.exams, isEmpty, reason: '退出登录后学业同步完成不得复活数据');
+      expect(model.grades, isEmpty);
+    });
+  });
 }
 
 class _MockUpdateService extends UpdateService {

@@ -141,6 +141,7 @@ class FakeBackend implements ScheduleBackend {
   int fetchCount = 0;
   int examsCount = 0;
   int gradesCount = 0;
+  int termsCount = 0;
   int loginCount = 0;
   int submitCount = 0;
   int refreshCount = 0;
@@ -176,8 +177,9 @@ class FakeBackend implements ScheduleBackend {
 
   @override
   Future<Terms> fetchTerms() async {
+    termsCount++;
     final behavior = termsBehavior;
-    if (behavior != null) return behavior(1);
+    if (behavior != null) return behavior(termsCount);
     return const Terms(
       currentId: '2026-2027-1',
       items: <Term>[Term(id: '2026-2027-1', name: '2026-2027 第1学期')],

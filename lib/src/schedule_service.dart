@@ -17,6 +17,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:zf_academic/zf_academic_io.dart';
 
 import 'backends.dart';
@@ -73,6 +74,7 @@ class ScheduleService {
   String? accountHint;
 
   ScheduleBackend? _client;
+  Future<ScheduleBackend>? _clientFlight;
 
   /// 单 flight：进行中的取课表任务。
   Future<Schedule>? _inFlight;
@@ -118,6 +120,9 @@ class ScheduleService {
   void dispose() {
     _client?.close();
     _client = null;
+    _clientFlight = null;
+    _inFlight = null;
+    _reloginFlight = null;
   }
 
   /// 用户换了学校：丢掉旧客户端与旧 Cookie（快照与主机绑定，不能跨校复用）。
@@ -126,6 +131,7 @@ class ScheduleService {
     _baseUrl = baseUrl;
     _client?.close();
     _client = null;
+    _clientFlight = null;
     _inFlight = null;
     _reloginFlight = null;
     _breakerOpen = false;
@@ -145,135 +151,73 @@ class ScheduleService {
 
   /// 取学期列表。与取课表共用同一个客户端；失效时同样走回退登录。
   Future<Terms> fetchTerms() async {
+    await _waitForRelogin();
     final client = await _ensureClient();
     try {
       return await client.fetchTerms();
     } on AcademicError catch (error) {
       if (error.code != ErrorCode.sessionExpired) rethrow;
     }
-    await _reloginOnly();
+    await _reloginWithSavedCredentials();
     return (await _ensureClient()).fetchTerms();
   }
 
   /// 取考试安排。与取课表共用同一个客户端；失效时同样走回退登录。
   Future<List<ExamItem>> fetchExams([String? termId]) async {
+    await _waitForRelogin();
     final client = await _ensureClient();
     try {
       return await client.fetchExams(termId);
     } on AcademicError catch (error) {
       if (error.code != ErrorCode.sessionExpired) rethrow;
     }
-    await _reloginOnly();
+    await _reloginWithSavedCredentials();
     return (await _ensureClient()).fetchExams(termId);
   }
 
   /// 取成绩明细。与取课表共用同一个客户端；失效时同样走回退登录。
   Future<List<GradeItem>> fetchGrades([String? termId]) async {
+    await _waitForRelogin();
     final client = await _ensureClient();
     try {
       return await client.fetchGrades(termId);
     } on AcademicError catch (error) {
       if (error.code != ErrorCode.sessionExpired) rethrow;
     }
-    await _reloginOnly();
+    await _reloginWithSavedCredentials();
     return (await _ensureClient()).fetchGrades(termId);
   }
 
   Future<void>? _reloginFlight;
 
-  /// 只做回退登录（不重试原请求），供 [fetchTerms]、[fetchExams]、[fetchGrades] 使用。
+  @visibleForTesting
+  Future<void>? get reloginFlightForTest => _reloginFlight;
+
+  /// 等待当前正在进行的回退登录（若有）。
   ///
-  /// 并发请求时合并为单次登录任务，避免 CAS 多重并发登录冲突与重复扣减熔断额度。
-  Future<void> _reloginOnly() {
+  /// 确保重登期间为全局阻塞式，防止一边登录一边发出业务查询请求；
+  /// 若重登失败，向等待方传递错误，防止使用失效凭据盲目重发请求。
+  Future<void> _waitForRelogin() {
     final pending = _reloginFlight;
     if (pending != null) return pending;
-    final task = _reloginOnlyInternal();
+    return Future.value();
+  }
+
+  /// 全局阻塞式回退登录。
+  ///
+  /// 无论是取课表、学期、考试还是成绩遇会话过期，均共用同一单 flight 登录任务。
+  /// 并发请求合并为单次登录，避免多次重复并发登录与重复扣减熔断额度。
+  Future<void> _reloginWithSavedCredentials() {
+    final pending = _reloginFlight;
+    if (pending != null) return pending;
+    final task = _loginWithSavedCredentials();
     _reloginFlight = task;
     return task.whenComplete(() {
       if (_reloginFlight == task) _reloginFlight = null;
     });
   }
 
-  Future<void> _reloginOnlyInternal() async {
-    final saved = await credentials.get(_accountKey());
-    if (saved == null) {
-      throw AcademicError(ErrorCode.sessionExpired, '会话已过期，且没有保存账号密码，请重新登录');
-    }
-    if (_breakerOpen || !_autoLoginAllowed()) {
-      throw AcademicError(
-        ErrorCode.sessionExpired,
-        '自动登录次数过多（可能是账号密码已变更），请手动登录',
-      );
-    }
-    _recordAutoLogin();
-    final client = await _ensureClient();
-    final rollback = client.exportCookies();
-    try {
-      final state = await client.login(saved);
-      if (state is! AuthenticatedState) {
-        _restore(client, rollback);
-        throw AcademicError(
-          ErrorCode.sessionExpired,
-          '自动登录未完成（${state.runtimeType}）',
-        );
-      }
-    } catch (_) {
-      _restore(client, rollback);
-      rethrow;
-    }
-    await _persist(client);
-    // 注意：这里不重置熔断——只有手动登录才重置。
-    // 若在此清零，"重登成功但请求仍失败"就会无限自动重登，学校侧会计失败次数。
-  }
-
-  // -------------------------------------------------------------------------
-  // 入口一：启动时恢复会话（需求 1）
-  // -------------------------------------------------------------------------
-
-  /// 启动调用：有可用快照就返回它（调用方接着 [getSchedule] 试），没有返回 null。
-  ///
-  /// 换地址后的旧快照会被丢弃（baseUrl 不匹配），并清掉磁盘文件，避免下次再读到。
-  Future<CookieStoreSnapshot?> bootstrap() async {
-    final snapshot = await cookieStorage.load();
-    if (snapshot == null) return null;
-    if (!sameSchool(snapshot.baseUrl, _baseUrl)) {
-      await cookieStorage.clear();
-      return null;
-    }
-    if (snapshot.cookies.isEmpty) {
-      await cookieStorage.clear();
-      return null;
-    }
-    return snapshot;
-  }
-
-  // -------------------------------------------------------------------------
-  // 入口二：取课表（Cookie 优先，失效回退登录——需求 2）
-  // -------------------------------------------------------------------------
-
-  /// 取课表。并发调用共享同一次任务（单 flight）。
-  Future<Schedule> getSchedule({String? termId}) {
-    final pending = _inFlight;
-    if (pending != null) return pending;
-    final task = _getScheduleOnce(termId: termId);
-    _inFlight = task;
-    return task.whenComplete(() {
-      if (_inFlight == task) _inFlight = null;
-    });
-  }
-
-  Future<Schedule> _getScheduleOnce({String? termId}) async {
-    final client = await _ensureClient();
-    try {
-      return await client.fetchSchedule(termId);
-    } on AcademicError catch (error) {
-      if (error.code != ErrorCode.sessionExpired) rethrow;
-    }
-    // 走到这里：Cookie 失效。回退到账密登录。
-    return _reloginAndRetry(termId: termId);
-  }
-
-  Future<Schedule> _reloginAndRetry({String? termId}) async {
+  Future<void> _loginWithSavedCredentials() async {
     final client = await _ensureClient();
     final accountKey = _accountKey();
     final saved = await credentials.get(accountKey);
@@ -287,7 +231,6 @@ class ScheduleService {
       );
     }
     _recordAutoLogin();
-    onStage?.call(stageRelogin);
 
     // 回滚点：ZhengfangClient.login() 入口会作废旧 Cookie，失败时恢复它，
     // 否则一次不成功的重登会把"会话过期"恶化成"彻底掉登录"。
@@ -329,14 +272,74 @@ class ScheduleService {
       );
     }
 
+    if (_client != client) {
+      throw const AcademicError(ErrorCode.sessionExpired, '登录已取消或客户端已重置');
+    }
+
     await _persist(client);
     // 不在此重置熔断：自动登录次数必须跨轮次累计（见 _recordAutoLogin）。
+  }
 
+  // -------------------------------------------------------------------------
+  // 入口一：启动时恢复会话（需求 1）
+  // -------------------------------------------------------------------------
+
+  /// 启动调用：有可用快照就返回它（调用方接着 [getSchedule] 试），没有返回 null。
+  ///
+  /// 换地址后的旧快照会被丢弃（baseUrl 不匹配），并清掉磁盘文件，避免下次再读到。
+  Future<CookieStoreSnapshot?> bootstrap() async {
+    final snapshot = await cookieStorage.load();
+    if (snapshot == null) return null;
+    if (!sameSchool(snapshot.baseUrl, _baseUrl)) {
+      await cookieStorage.clear();
+      return null;
+    }
+    if (snapshot.cookies.isEmpty) {
+      await cookieStorage.clear();
+      return null;
+    }
+    return snapshot;
+  }
+
+  // -------------------------------------------------------------------------
+  // 入口二：取课表（Cookie 优先，失效回退登录——需求 2）
+  // -------------------------------------------------------------------------
+
+  /// 取课表。并发调用共享同一次任务（单 flight）。
+  Future<Schedule> getSchedule({String? termId}) {
+    final pending = _inFlight;
+    if (pending != null) return pending;
+    final task = _getScheduleOnce(termId: termId);
+    _inFlight = task;
+    return task.whenComplete(() {
+      if (_inFlight == task) _inFlight = null;
+    });
+  }
+
+  Future<Schedule> _getScheduleOnce({String? termId}) async {
+    final wasLoggingIn = _reloginFlight != null;
+    if (wasLoggingIn) {
+      onStage?.call(stageRelogin);
+    }
+    await _waitForRelogin();
+    if (wasLoggingIn) {
+      onStage?.call(stageFetchingSchedule);
+    }
+    final client = await _ensureClient();
+    try {
+      return await client.fetchSchedule(termId);
+    } on AcademicError catch (error) {
+      if (error.code != ErrorCode.sessionExpired) rethrow;
+    }
+    // 走到这里：Cookie 失效。回退到账密登录。
+    final rollback = client.exportCookies();
+    onStage?.call(stageRelogin);
+    await _reloginWithSavedCredentials();
     onStage?.call(stageFetchingSchedule);
 
     // 重登后只重试一次，不循环。
     try {
-      return await client.fetchSchedule(termId);
+      return await (await _ensureClient()).fetchSchedule(termId);
     } catch (_) {
       _restore(client, rollback);
       rethrow;
@@ -355,6 +358,9 @@ class ScheduleService {
     String password, {
     bool remember = true,
   }) async {
+    try {
+      await _waitForRelogin();
+    } catch (_) {}
     final client = await _ensureClient();
     final state = await client.login(Credentials(username, password));
     if (state is AuthenticatedState) {
@@ -397,6 +403,7 @@ class ScheduleService {
     final client = _client;
     if (client == null) return;
     if (client.session.authenticated) return;
+    await _waitForRelogin();
     try {
       await client.checkSession();
     } catch (_) {
@@ -414,7 +421,9 @@ class ScheduleService {
     final keyByName = _accountKey(username: sessionInfo?.username ?? '');
     _client?.close();
     _client = null;
+    _clientFlight = null;
     _inFlight = null;
+    _reloginFlight = null;
     accountHint = null;
     await cookieStorage.clear();
     if (forgetCredentials) {
@@ -435,9 +444,19 @@ class ScheduleService {
     return '$base|$account';
   }
 
-  Future<ScheduleBackend> _ensureClient() async {
+  Future<ScheduleBackend> _ensureClient() {
     final existing = _client;
-    if (existing != null) return existing;
+    if (existing != null) return Future.value(existing);
+    final pending = _clientFlight;
+    if (pending != null) return pending;
+    final task = _createClient();
+    _clientFlight = task;
+    return task.whenComplete(() {
+      if (_clientFlight == task) _clientFlight = null;
+    });
+  }
+
+  Future<ScheduleBackend> _createClient() async {
     final snapshot = await bootstrap();
     final client = backendFactory(
       ZfClientConfig(

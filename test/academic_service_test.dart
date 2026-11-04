@@ -190,5 +190,62 @@ void main() {
 
       expect(callbackCalled, isTrue);
     });
+
+    test(
+      'syncCurrentTermAsync with empty termId does not query backend',
+      () async {
+        var callbackCalled = false;
+        await academicService.syncCurrentTermAsync(
+          termId: '',
+          onDataUpdated: () {
+            callbackCalled = true;
+          },
+        );
+
+        expect(callbackCalled, isFalse);
+        expect(backend.examsCount, equals(0));
+        expect(backend.gradesCount, equals(0));
+      },
+    );
+
+    test('syncCurrentTermAsync handles session expired by auto relogin and updates cache', () async {
+      final creds = scheduleService.credentials;
+      await creds.save(
+        '${scheduleService.baseUrl.toLowerCase()}|20240001',
+        const Credentials('20240001', 'pw'),
+      );
+      scheduleService.accountHint = '20240001';
+
+      var examsCall = 0;
+      backend.examsBehavior = (call, termId) async {
+        examsCall++;
+        if (examsCall == 1) throw expired();
+        return sampleExams();
+      };
+      var gradesCall = 0;
+      backend.gradesBehavior = (call, termId) async {
+        gradesCall++;
+        if (gradesCall == 1) throw expired();
+        return sampleGrades();
+      };
+
+      var callbackCalled = false;
+      await academicService.syncCurrentTermAsync(
+        termId: '2026-2027-1',
+        onDataUpdated: () {
+          callbackCalled = true;
+        },
+      );
+
+      expect(callbackCalled, isTrue);
+      expect(backend.loginCount, equals(1), reason: '并发查询失效合并为 1 次重登');
+      expect(backend.examsCount, equals(2));
+      expect(backend.gradesCount, equals(2));
+
+      final cachedExams = await examCache.load('2026-2027-1');
+      final cachedGrades = await gradesCache.load('2026-2027-1');
+      expect(cachedExams?.items, isNotEmpty);
+      expect(cachedGrades?.items, isNotEmpty);
+    });
   });
 }

@@ -96,7 +96,8 @@ class AppModel extends ChangeNotifier {
        _examCache = examCache ?? LateExamCache(),
        _examCacheReady = examCache != null,
        _gradesCache = gradesCache ?? LateGradesCache(),
-       _gradesCacheReady = gradesCache != null {
+       _gradesCacheReady = gradesCache != null,
+       _academicServiceReady = academicService != null {
     this.academicService =
         academicService ??
         AcademicService(
@@ -133,6 +134,7 @@ class AppModel extends ChangeNotifier {
   /// 成绩本地离线缓存。
   GradesCache _gradesCache;
   final bool _gradesCacheReady;
+  final bool _academicServiceReady;
 
   /// 学业服务业务编排层。
   late AcademicService academicService;
@@ -876,11 +878,13 @@ class AppModel extends ChangeNotifier {
       if (cacheFuture != null) _scheduleCache = await cacheFuture;
       if (examCacheFuture != null) _examCache = await examCacheFuture;
       if (gradesCacheFuture != null) _gradesCache = await gradesCacheFuture;
-      academicService = AcademicService(
-        service: service,
-        examCache: _examCache,
-        gradesCache: _gradesCache,
-      );
+      if (!_academicServiceReady) {
+        academicService = AcademicService(
+          service: service,
+          examCache: _examCache,
+          gradesCache: _gradesCache,
+        );
+      }
       // 上次用的学校优先。以前不存这个，用户改了地址重启就退回默认学校。
       if (!_schoolFixed) {
         final savedSchool = _preferences.currentSchool;
@@ -909,7 +913,7 @@ class AppModel extends ChangeNotifier {
         if (snapshot != null &&
             _preferences.autoRefresh &&
             _shouldSilentRefresh(cached.fetchedAt)) {
-          unawaited(_loadSchedule(background: true));
+          unawaited(syncSilently());
         }
         return;
       }
@@ -979,6 +983,7 @@ class AppModel extends ChangeNotifier {
     String? termId,
     bool forceRefresh = false,
   }) async {
+    if (_academicLoading) return;
     var target = termId ?? academicTermId;
     if (target.isEmpty) {
       if (_terms != null && _terms!.currentId.isNotEmpty) {
@@ -1092,7 +1097,11 @@ class AppModel extends ChangeNotifier {
   ///
   /// 无论有没有数据，进度都只走「状态弹窗」：不把页面切成整屏 loading。
   /// [background] 为 true（或已经有数据）时课表继续显示旧内容。
-  Future<void> _loadSchedule({String? termId, bool background = false}) async {
+  Future<void> _loadSchedule({
+    String? termId,
+    bool background = false,
+    bool triggerAcademic = false,
+  }) async {
     final hasData = _schedule != null;
     final silent = background || hasData;
 
@@ -1124,6 +1133,10 @@ class AppModel extends ChangeNotifier {
       }
       _loadTermsQuietly();
       _identitySync = _syncIdentityQuietly();
+      if (triggerAcademic && schedule.termId.isNotEmpty) {
+        _academicSync = _syncAcademicQuietly(schedule.termId);
+        unawaited(_academicSync);
+      }
     } on AcademicError catch (error) {
       _refreshing = false;
       if (silent) {
@@ -1259,7 +1272,16 @@ class AppModel extends ChangeNotifier {
     _notifyPrefs();
   }
 
-  Future<void> refresh() => _loadSchedule(background: true);
+  /// 静默同步课表与学业数据（后台/回到前台自动更新）。
+  ///
+  /// 先静默更新课表；课程查询成功后，异步非阻塞派发考试与成绩查询，
+  /// 完成学业同步后不弹出或下发通知，避免增加自动同步课表时通知的延迟与负担。
+  Future<void> syncSilently() =>
+      _loadSchedule(background: true, triggerAcademic: true);
+
+  /// 课表页手动刷新：仅刷新课表本身，严格不派发学业数据（考试与成绩）查询。
+  Future<void> refresh() =>
+      _loadSchedule(background: true, triggerAcademic: false);
 
   // -------------------------------------------------------------------------
   // 回到前台
@@ -1307,7 +1329,7 @@ class AppModel extends ChangeNotifier {
       intervalMinutes: _preferences.autoRefreshIntervalMinutes,
     );
     if (!allowed) return;
-    await refresh();
+    await syncSilently();
   }
 
   /// 「回到前台要不要静默刷新」的判定，抽成纯函数以便单测。
@@ -1610,6 +1632,30 @@ class AppModel extends ChangeNotifier {
     _notifyPrefs();
   }
 
+  Future<void>? _academicSync;
+
+  @visibleForTesting
+  Future<void>? get academicSyncForTest => _academicSync;
+
+  /// 课程查询完成后异步非阻塞触发考试与成绩查询。
+  ///
+  /// 完成后只更新缓存与界面状态，绝不弹出提示或下发通知，
+  /// 避免增加自动同步课表时通知的延迟与负担。
+  Future<void> _syncAcademicQuietly(String termId) async {
+    try {
+      await academicService.syncCurrentTermAsync(
+        termId: termId,
+        onDataUpdated: () {},
+      );
+      if (_disposed || _status == AppStatus.needLogin) return;
+      if (academicTermId == termId) {
+        await _restoreCachedAcademicData(termId);
+      }
+    } catch (_) {
+      // 绝不上抛或弹通知
+    }
+  }
+
   Future<void>? _identitySync;
 
   @visibleForTesting
@@ -1779,6 +1825,7 @@ class AppModel extends ChangeNotifier {
     _grades = const <GradeItem>[];
     _isNotEvaluated = false;
     _academicError = null;
+    _academicSync = null;
     academicNotifier.notifyListeners();
     _notifyPrefs();
     // 退出登录连缓存课表一起清：那是"这个账号"的数据，不该留下给下一个人看。

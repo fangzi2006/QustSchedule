@@ -121,6 +121,7 @@ class AcademicService {
     required String termId,
     required VoidCallback onDataUpdated,
   }) async {
+    if (termId.isEmpty) return;
     await Future.wait(<Future<dynamic>>[
       fetchExams(termId).catchError((_) => const <ExamItem>[]),
       fetchGrades(termId).catchError((_) => const <GradeItem>[]),
