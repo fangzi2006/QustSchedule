@@ -202,6 +202,14 @@ List<Term> filterTerms({
     }
 
     final parsed = parseTerm(term.id);
+    final rawSemester = term.semester ?? parsed?.semester;
+    final termSemester = resolveSemesterCode(rawSemester, term.id);
+
+    // 青科大实行两学期制：正方系统自带的 xqm=16 (第3学期/短学期) 不作为常规可选学期
+    if (termSemester != null && termSemester > 2) {
+      continue;
+    }
+
     final termYear = term.year ?? parsed?.year;
     if (termYear != null) {
       // 1. 不显示早于入学年份的学期
@@ -213,8 +221,6 @@ List<Term> filterTerms({
         continue;
       }
       if (termYear == maxYear) {
-        final rawSemester = term.semester ?? parsed?.semester;
-        final termSemester = resolveSemesterCode(rawSemester, term.id);
         if (termSemester != null && termSemester > maxSemester) {
           continue;
         }

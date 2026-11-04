@@ -263,6 +263,58 @@ void main() {
       final ids = filtered.map((t) => t.id).toList();
       expect(ids, <String>['2025-2026-1', '2024-2025-2', '2024-2025-1']);
     });
+
+    test('青科大两学期制：自动过滤教务系统自带的第3学期 (小学期/短学期)', () {
+      final termsWithShortSemester = <Term>[
+        const Term(
+          id: '2024-2025-3',
+          name: '2024-2025 第3学期',
+          year: 2024,
+          semester: 3,
+        ),
+        const Term(
+          id: '2023-2024-3',
+          name: '2023-2024 第3学期',
+          year: 2023,
+          semester: 3,
+        ),
+        ...terms,
+      ];
+      final filtered = filterTerms(
+        terms: termsWithShortSemester,
+        enrollmentYear: 2024,
+        currentAcademicYear: 2025,
+      );
+      final ids = filtered.map((t) => t.id).toList();
+      expect(ids, isNot(contains('2024-2025-3')));
+      expect(ids, isNot(contains('2023-2024-3')));
+      expect(ids, <String>[
+        '2025-2026-2',
+        '2025-2026-1',
+        '2024-2025-2',
+        '2024-2025-1',
+      ]);
+    });
+
+    test('当前选中学期若是第3学期时，做极端防御性兜底予以保留', () {
+      final termsWithShortSemester = <Term>[
+        const Term(
+          id: '2024-2025-3',
+          name: '2024-2025 第3学期',
+          year: 2024,
+          semester: 3,
+        ),
+        ...terms,
+      ];
+      final filtered = filterTerms(
+        terms: termsWithShortSemester,
+        enrollmentYear: 2024,
+        currentAcademicYear: 2025,
+        currentTermId: '2024-2025-3',
+      );
+      final ids = filtered.map((t) => t.id).toList();
+      expect(ids, contains('2024-2025-3'));
+    });
   });
 
   group('formatTermPrimaryLabel', () {
