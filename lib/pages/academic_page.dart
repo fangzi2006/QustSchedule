@@ -1,19 +1,17 @@
 /// 学业页面：学期考试日程与成绩绩点概览。
 ///
 /// 包含两大模块：
-///  1. 近期考试安排：下一场考试倒计时 Hero 焦点卡片、考场座位号、考试列表、导出至系统日历 (.ics)；
+///  1. 近期考试安排：下一场考试倒计时 Hero 焦点卡片、考场座位号、考试列表（排序置顶沉底）；
 ///  2. 学期成绩与绩点：平均学分绩点 (GPA)、总修学分/已获学分统计、评教拦截提醒、课程成绩明细。
 ///
 /// 采用独立状态订阅，滚动底部留足 [FloatingDock.contentInset] 避开悬浮胶囊。
 library;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:zf_academic/zf_academic.dart';
 
 import '../src/academic_service.dart';
 import '../src/app_model.dart';
-import '../src/calendar_export_service.dart';
 import '../src/term_selector_helper.dart';
 import '../widgets/app_menu.dart';
 import '../widgets/floating_dock.dart';
@@ -99,20 +97,6 @@ class _AcademicPageState extends State<AcademicPage> {
                 subtitle: model.exams.isNotEmpty
                     ? '共 ${model.exams.length} 门考试'
                     : null,
-                action: model.exams.isNotEmpty
-                    ? TextButton.icon(
-                        icon: const Icon(
-                          Icons.calendar_month_outlined,
-                          size: 16,
-                        ),
-                        label: const Text('导出日历'),
-                        style: TextButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 10),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        onPressed: () => _exportCalendar(context),
-                      )
-                    : null,
               ),
               const SizedBox(height: 8),
               _ExamSection(
@@ -143,90 +127,13 @@ class _AcademicPageState extends State<AcademicPage> {
       },
     );
   }
-
-  void _exportCalendar(BuildContext context) {
-    if (model.exams.isEmpty) return;
-    final exportableExams = model.exams
-        .where((e) => e.startTime != null)
-        .toList();
-    if (exportableExams.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('当前考试安排暂无具体时间，无法生成日历事件'),
-          duration: Duration(seconds: 2),
-        ),
-      );
-      return;
-    }
-    final ics = CalendarExportService.buildIcs(exportableExams);
-
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        final theme = Theme.of(ctx);
-        final scheme = theme.colorScheme;
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  '导出考试日程至系统日历',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  '将包含当前学期的 ${exportableExams.length} 门考试时间、考场、座位号及形式，已格式化为标准 RFC 5545 iCalendar (.ics) 日程。',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                    height: 1.4,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    icon: const Icon(Icons.copy_rounded),
-                    label: const Text('复制日历内容 (.ics)'),
-                    onPressed: () async {
-                      await Clipboard.setData(ClipboardData(text: ics));
-                      if (ctx.mounted) {
-                        Navigator.of(ctx).pop();
-                      }
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('已复制日历内容至剪贴板，可粘贴导入系统日历应用'),
-                            duration: Duration(seconds: 2),
-                          ),
-                        );
-                      }
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
 }
 
 class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({required this.title, this.subtitle, this.action});
+  const _SectionHeader({required this.title, this.subtitle});
 
   final String title;
   final String? subtitle;
-  final Widget? action;
 
   @override
   Widget build(BuildContext context) {
@@ -249,8 +156,6 @@ class _SectionHeader extends StatelessWidget {
             style: theme.textTheme.bodySmall?.copyWith(color: scheme.outline),
           ),
         ],
-        const Spacer(),
-        ?action,
       ],
     );
   }

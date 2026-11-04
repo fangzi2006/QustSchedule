@@ -95,31 +95,6 @@ void main() {
     expect(find.textContaining('本学期教学质量评价未完成'), findsOneWidget);
   });
 
-  testWidgets('AcademicPage opens calendar export bottom sheet', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(800, 1800);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-
-    final backend = FakeBackend();
-    final model = _buildTestModel(backend: backend);
-
-    await tester.pumpWidget(_wrap(AcademicPage(model: model)));
-    await tester.pumpAndSettle();
-
-    // Tap "导出日历" button
-    final exportBtn = find.text('导出日历');
-    expect(exportBtn, findsWidgets);
-    await tester.tap(exportBtn.first);
-    await tester.pumpAndSettle();
-
-    // Verify bottom sheet appears
-    expect(find.text('导出考试日程至系统日历'), findsOneWidget);
-    expect(find.text('复制日历内容 (.ics)'), findsOneWidget);
-  });
-
   testWidgets(
     'AcademicPage term selector displays human label and opens anchored menu',
     (tester) async {
