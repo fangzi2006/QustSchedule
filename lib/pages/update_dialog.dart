@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../src/formatted_text_span.dart';
 import '../src/updater/app_installer.dart';
 import '../src/updater/update_models.dart';
 import '../src/updater/update_service.dart';
@@ -643,7 +644,7 @@ class _ReleaseNotesView extends StatelessWidget {
     final trimmed = content.trim();
 
     if (trimmed.isEmpty) {
-      return SelectableText(
+      return Text(
         '青科课表通 v$version 现已发布，包含性能优化与体验改进。',
         style: TextStyle(
           fontSize: 13,
@@ -655,14 +656,16 @@ class _ReleaseNotesView extends StatelessWidget {
 
     final sections = _parseNotes(trimmed);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (int i = 0; i < sections.length; i++) ...[
-          if (i > 0) const SizedBox(height: 12),
-          _buildSection(context, sections[i]),
+    return SelectionArea(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (int i = 0; i < sections.length; i++) ...[
+            if (i > 0) const SizedBox(height: 12),
+            _buildSection(context, sections[i]),
+          ],
         ],
-      ],
+      ),
     );
   }
 
@@ -695,11 +698,14 @@ class _ReleaseNotesView extends StatelessWidget {
                     ),
                   ),
                 Expanded(
-                  child: SelectableText.rich(
-                    _buildFormattedSpan(context, item.text),
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontSize: 13,
-                      height: 1.45,
+                  child: Text.rich(
+                    buildFormattedTextSpan(
+                      context,
+                      item.text,
+                      baseStyle: theme.textTheme.bodyMedium?.copyWith(
+                        fontSize: 13,
+                        height: 1.45,
+                      ),
                     ),
                   ),
                 ),
@@ -756,45 +762,6 @@ class _ReleaseNotesView extends StatelessWidget {
         ],
       ),
     );
-  }
-
-  /// 将带 `**加粗**` 或 `` `代码` `` 的 Markdown 行解析为 TextSpan
-  TextSpan _buildFormattedSpan(BuildContext context, String text) {
-    final spans = <InlineSpan>[];
-    final pattern = RegExp(r'(\*\*.*?\*\*|`.*?`)');
-    int lastIndex = 0;
-
-    for (final match in pattern.allMatches(text)) {
-      if (match.start > lastIndex) {
-        spans.add(TextSpan(text: text.substring(lastIndex, match.start)));
-      }
-      final matched = match.group(0)!;
-      if (matched.startsWith('**') && matched.endsWith('**')) {
-        spans.add(
-          TextSpan(
-            text: matched.substring(2, matched.length - 2),
-            style: const TextStyle(fontWeight: FontWeight.bold),
-          ),
-        );
-      } else if (matched.startsWith('`') && matched.endsWith('`')) {
-        spans.add(
-          TextSpan(
-            text: matched.substring(1, matched.length - 1),
-            style: const TextStyle(
-              fontFamily: 'monospace',
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        );
-      }
-      lastIndex = match.end;
-    }
-
-    if (lastIndex < text.length) {
-      spans.add(TextSpan(text: text.substring(lastIndex)));
-    }
-
-    return TextSpan(children: spans);
   }
 
   List<_NoteSection> _parseNotes(String markdown) {

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../src/app_version.dart';
+import '../src/formatted_text_span.dart';
 
 /// 更新日志页面。
 class ChangelogPage extends StatefulWidget {
@@ -93,129 +94,137 @@ class _ChangelogPageState extends State<ChangelogPage> {
       return const Center(child: Text('暂无更新日志记录'));
     }
 
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-      itemCount: _releases!.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 12),
-      itemBuilder: (context, index) {
-        final release = _releases![index];
-        final isCurrentVersion = release.version == appVersion;
+    return SelectionArea(
+      child: ListView.separated(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        itemCount: _releases!.length,
+        separatorBuilder: (_, _) => const SizedBox(height: 12),
+        itemBuilder: (context, index) {
+          final release = _releases![index];
+          final isCurrentVersion = release.version == appVersion;
 
-        return Card(
-          elevation: isCurrentVersion ? 1.5 : 0.5,
-          color: isCurrentVersion
-              ? theme.colorScheme.primaryContainer.withValues(alpha: 0.25)
-              : null,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: isCurrentVersion
-                ? BorderSide(
-                    color: theme.colorScheme.primary.withValues(alpha: 0.5),
-                    width: 1.2,
-                  )
-                : BorderSide(
-                    color: theme.colorScheme.outlineVariant.withValues(
-                      alpha: 0.4,
-                    ),
-                  ),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 版本标题栏
-                Row(
-                  children: [
-                    Text(
-                      'v${release.version}',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: isCurrentVersion
-                            ? theme.colorScheme.primary
-                            : theme.colorScheme.onSurface,
+          return Card(
+            elevation: isCurrentVersion ? 1.5 : 0.5,
+            color: isCurrentVersion
+                ? theme.colorScheme.primaryContainer.withValues(alpha: 0.25)
+                : null,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: isCurrentVersion
+                  ? BorderSide(
+                      color: theme.colorScheme.primary.withValues(alpha: 0.5),
+                      width: 1.2,
+                    )
+                  : BorderSide(
+                      color: theme.colorScheme.outlineVariant.withValues(
+                        alpha: 0.4,
                       ),
                     ),
-                    if (isCurrentVersion) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 版本标题栏
+                  Row(
+                    children: [
+                      Text(
+                        'v${release.version}',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: isCurrentVersion
+                              ? theme.colorScheme.primary
+                              : theme.colorScheme.onSurface,
                         ),
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.primary,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          '当前版本',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: theme.colorScheme.onPrimary,
+                      ),
+                      if (isCurrentVersion) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
                           ),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primary,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            '当前版本',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: theme.colorScheme.onPrimary,
+                            ),
+                          ),
+                        ),
+                      ],
+                      const Spacer(),
+                      if (release.date.isNotEmpty)
+                        Text(
+                          release.date,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.hintColor,
+                          ),
+                        ),
+                    ],
+                  ),
+                  if (release.description.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text.rich(
+                      buildFormattedTextSpan(
+                        context,
+                        release.description,
+                        baseStyle: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          height: 1.45,
+                        ),
+                      ),
+                    ),
+                  ],
+                  // 各小节分类 (新增 / 优化 / 修复 等)
+                  for (final section in release.sections) ...[
+                    const SizedBox(height: 12),
+                    _buildSectionHeader(context, section.title),
+                    const SizedBox(height: 6),
+                    for (final item in section.items) ...[
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 5),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.only(top: 6, right: 8),
+                              child: Container(
+                                width: 5,
+                                height: 5,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                            Expanded(
+                              child: Text.rich(
+                                buildFormattedTextSpan(
+                                  context,
+                                  item,
+                                  baseStyle: theme.textTheme.bodyMedium
+                                      ?.copyWith(height: 1.45),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
-                    const Spacer(),
-                    if (release.date.isNotEmpty)
-                      Text(
-                        release.date,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.hintColor,
-                        ),
-                      ),
-                  ],
-                ),
-                if (release.description.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    release.description,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-                // 各小节分类 (新增 / 优化 / 修复 等)
-                for (final section in release.sections) ...[
-                  const SizedBox(height: 12),
-                  _buildSectionHeader(context, section.title),
-                  const SizedBox(height: 6),
-                  for (final item in section.items) ...[
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 5),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.only(top: 6, right: 8),
-                            child: Container(
-                              width: 5,
-                              height: 5,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            child: SelectableText(
-                              item,
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                height: 1.45,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                   ],
                 ],
-              ],
+              ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
@@ -351,15 +360,21 @@ List<_ReleaseLog> _parseChangelog(String markdown) {
       continue;
     }
 
-    if (line.startsWith('- ')) {
+    if (line.startsWith('- ') ||
+        line.startsWith('* ') ||
+        line.startsWith('+ ')) {
       final itemText = line.substring(2).trim();
       if (itemText.isNotEmpty) {
         currentSectionItems.add(itemText);
       }
     } else if (line.isNotEmpty && !line.startsWith('#')) {
       if (currentSectionTitle == null) {
-        if (descBuffer.isNotEmpty) descBuffer.write(' ');
-        descBuffer.write(line);
+        // 去除 Markdown 引用前导符号 `>`，并保留换行排版
+        final cleanLine = line.replaceFirst(RegExp(r'^>\s*'), '').trim();
+        if (cleanLine.isNotEmpty) {
+          if (descBuffer.isNotEmpty) descBuffer.write('\n');
+          descBuffer.write(cleanLine);
+        }
       } else if (currentSectionItems.isNotEmpty) {
         // 多行条目追加
         final last = currentSectionItems.removeLast();
