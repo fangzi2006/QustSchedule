@@ -106,7 +106,7 @@ void main() {
       final keys = _generateKeyPair(1024);
       final modulus = base64.encode(bigIntToBytes(keys.publicKey.modulus!));
       final exponent = base64.encode(bigIntToBytes(keys.publicKey.exponent!));
-      const password = 'p@ssw0rd-20060304';
+      const password = 'p@ssw0rd-Synthetic123';
       final cipher = zfFormEncryptPassword(modulus, exponent, password);
       expect(
         cipher.length,

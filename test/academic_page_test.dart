@@ -244,7 +244,7 @@ void main() {
       );
 
       final model = _buildTestModel(backend: backend);
-      await model.signIn('2407720102', 'pw');
+      await model.signIn('2412345678', 'pw');
       model.setAcademicTerm('2026-2027-1');
 
       await tester.pumpWidget(_wrap(AcademicPage(model: model)));
@@ -311,7 +311,7 @@ void main() {
       );
 
       final model = _buildTestModel(backend: backend);
-      await model.signIn('2407720102', 'pw');
+      await model.signIn('2412345678', 'pw');
       model.setAcademicTerm('2024-2025-1');
 
       await tester.pumpWidget(_wrap(AcademicPage(model: model)));

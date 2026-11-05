@@ -6,10 +6,10 @@ void main() {
   group('parseEnrollmentYear', () {
     final refDate = DateTime(2025, 9, 1);
 
-    test('解析青科大真实10位学号 (如 2407720102 -> 2024)', () {
-      expect(parseEnrollmentYear('2407720102', now: refDate), 2024);
-      expect(parseEnrollmentYear('2307720102', now: refDate), 2023);
-      expect(parseEnrollmentYear('2107720102', now: refDate), 2021);
+    test('解析青科大真实10位学号 (如 2412345678 -> 2024)', () {
+      expect(parseEnrollmentYear('2412345678', now: refDate), 2024);
+      expect(parseEnrollmentYear('2312345678', now: refDate), 2023);
+      expect(parseEnrollmentYear('2112345678', now: refDate), 2021);
       expect(parseEnrollmentYear('2501010101', now: refDate), 2025);
     });
 
@@ -22,16 +22,16 @@ void main() {
     });
 
     test('解析青科大标准10位学号 (YY+CC+MM+NN+SS，前2位严格为入学年)', () {
-      expect(parseEnrollmentYear('2007720102', now: refDate), 2020);
+      expect(parseEnrollmentYear('2012345678', now: refDate), 2020);
       expect(
-        parseEnrollmentYear('2007720102', now: DateTime(2021, 9, 1)),
+        parseEnrollmentYear('2012345678', now: DateTime(2021, 9, 1)),
         2020,
       );
       // 2020级 21学院学生：此前曾因 mid2 >= 21 被误判为 2021 级，现严格解析为 2020 级
       expect(parseEnrollmentYear('2021010101', now: refDate), 2020);
       expect(parseEnrollmentYear('2015010101', now: refDate), 2020);
       expect(parseEnrollmentYear('2020000001', now: refDate), 2020);
-      expect(parseEnrollmentYear('2407720102', now: refDate), 2024);
+      expect(parseEnrollmentYear('2412345678', now: refDate), 2024);
     });
 
     test('纯年份字符 (2024 -> 2024, 24 -> 2024)', () {
@@ -521,7 +521,7 @@ void main() {
             year: 2024,
             semester: 1,
           ),
-          studentId: '2407720102',
+          studentId: '2412345678',
           now: DateTime(2025, 9, 1),
         ),
         '大一 上学期',
@@ -556,7 +556,7 @@ void main() {
       expect(
         formatTermPrimaryLabelById(
           termId: '2024-2025-1',
-          studentId: '2407720102',
+          studentId: '2412345678',
           now: DateTime(2025, 9, 1),
         ),
         '大一 上学期',
@@ -564,7 +564,7 @@ void main() {
       expect(
         formatTermPrimaryLabelById(
           termId: '2024-2025-12',
-          studentId: '2407720102',
+          studentId: '2412345678',
           now: DateTime(2025, 9, 1),
         ),
         '大一 下学期',
