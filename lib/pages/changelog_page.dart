@@ -9,28 +9,70 @@ import '../src/formatted_text_span.dart';
 
 /// 更新日志页面。
 class ChangelogPage extends StatefulWidget {
-  const ChangelogPage({super.key});
+  const ChangelogPage({super.key, this.initialReleases});
+
+  /// 可选的预加载更新日志列表（用于点击时直传首帧渲染，彻底消除转场突变与掉帧）
+  final List<ReleaseLog>? initialReleases;
+
+  /// 单例静态缓存：首次解析后内存保留，再次进入 0 毫秒首帧直出
+  static List<ReleaseLog>? _cachedReleases;
+
+  /// 测试清理静态缓存
+  @visibleForTesting
+  static void resetCache() => _cachedReleases = null;
+
+  /// 加载并解析 CHANGELOG.md（若已缓存直接返回，否则仅在调用时读取）
+  static Future<List<ReleaseLog>> loadReleases({
+    bool forceRefresh = false,
+  }) async {
+    if (!forceRefresh && _cachedReleases != null) return _cachedReleases!;
+    final content = await rootBundle.loadString('CHANGELOG.md');
+    final parsed = parseChangelog(content);
+    _cachedReleases = parsed;
+    return parsed;
+  }
+
+  /// 点击「更新日志」时的即时导航快捷方法：
+  /// 点击瞬间读取本地内置资产并直接跳转，切页动画从第 0 帧开始就是完整内容。
+  static Future<void> open(
+    BuildContext context, {
+    bool forceRefresh = false,
+  }) async {
+    final releases = await loadReleases(forceRefresh: forceRefresh);
+    if (!context.mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ChangelogPage(initialReleases: releases),
+      ),
+    );
+  }
 
   @override
   State<ChangelogPage> createState() => _ChangelogPageState();
 }
 
 class _ChangelogPageState extends State<ChangelogPage> {
-  List<_ReleaseLog>? _releases;
+  List<ReleaseLog>? _releases;
   String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
-    _loadChangelog();
+    if (widget.initialReleases != null) {
+      _releases = widget.initialReleases;
+    } else if (ChangelogPage._cachedReleases != null) {
+      _releases = ChangelogPage._cachedReleases;
+    } else {
+      _loadChangelog();
+    }
   }
 
   Future<void> _loadChangelog() async {
     try {
-      final content = await rootBundle.loadString('CHANGELOG.md');
+      final releases = await ChangelogPage.loadReleases();
       if (!mounted) return;
       setState(() {
-        _releases = _parseChangelog(content);
+        _releases = releases;
       });
     } catch (e) {
       if (!mounted) return;
@@ -101,24 +143,21 @@ class _ChangelogPageState extends State<ChangelogPage> {
         separatorBuilder: (_, _) => const SizedBox(height: 12),
         itemBuilder: (context, index) {
           final release = _releases![index];
-          final isCurrentVersion = release.version == appVersion;
+          final isCurrentVersion =
+              appVersion != '-' && release.version == appVersion;
 
           return Card(
-            elevation: isCurrentVersion ? 1.5 : 0.5,
-            color: isCurrentVersion
-                ? theme.colorScheme.primaryContainer.withValues(alpha: 0.25)
-                : null,
+            elevation: isCurrentVersion ? 2.0 : 0.5,
+            color: theme.colorScheme.surface,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
               side: isCurrentVersion
-                  ? BorderSide(
-                      color: theme.colorScheme.primary.withValues(alpha: 0.5),
-                      width: 1.2,
-                    )
+                  ? BorderSide(color: theme.colorScheme.primary, width: 1.5)
                   : BorderSide(
                       color: theme.colorScheme.outlineVariant.withValues(
                         alpha: 0.4,
                       ),
+                      width: 1.0,
                     ),
             ),
             child: Padding(
@@ -142,18 +181,27 @@ class _ChangelogPageState extends State<ChangelogPage> {
                         const SizedBox(width: 8),
                         Container(
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
+                            horizontal: 8,
+                            vertical: 2.5,
                           ),
                           decoration: BoxDecoration(
                             color: theme.colorScheme.primary,
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: [
+                              BoxShadow(
+                                color: theme.colorScheme.primary.withValues(
+                                  alpha: 0.25,
+                                ),
+                                blurRadius: 4,
+                                offset: const Offset(0, 1),
+                              ),
+                            ],
                           ),
                           child: Text(
                             '当前版本',
                             style: TextStyle(
                               fontSize: 11,
-                              fontWeight: FontWeight.w600,
+                              fontWeight: FontWeight.bold,
                               color: theme.colorScheme.onPrimary,
                             ),
                           ),
@@ -169,38 +217,68 @@ class _ChangelogPageState extends State<ChangelogPage> {
                         ),
                     ],
                   ),
+                  // 核心亮点速览 Callout 引用框
                   if (release.description.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Text.rich(
-                      buildFormattedTextSpan(
-                        context,
-                        release.description,
-                        baseStyle: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                          height: 1.45,
+                    Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(top: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isCurrentVersion
+                            ? theme.colorScheme.primary.withValues(alpha: 0.05)
+                            : theme.colorScheme.surfaceContainerHighest
+                                  .withValues(alpha: 0.35),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: isCurrentVersion
+                              ? theme.colorScheme.primary.withValues(alpha: 0.2)
+                              : theme.colorScheme.outlineVariant.withValues(
+                                  alpha: 0.3,
+                                ),
+                        ),
+                      ),
+                      child: Text.rich(
+                        buildFormattedTextSpan(
+                          context,
+                          release.description,
+                          baseStyle: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                            height: 1.5,
+                          ),
                         ),
                       ),
                     ),
                   ],
                   // 各小节分类 (新增 / 优化 / 修复 等)
                   for (final section in release.sections) ...[
-                    const SizedBox(height: 12),
-                    _buildSectionHeader(context, section.title),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 14),
+                    if (section.title.isNotEmpty) ...[
+                      _buildCategoryBadge(context, section.title),
+                      const SizedBox(height: 8),
+                    ],
                     for (final item in section.items) ...[
                       Padding(
-                        padding: const EdgeInsets.only(bottom: 5),
+                        padding: const EdgeInsets.only(bottom: 6),
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Padding(
-                              padding: const EdgeInsets.only(top: 6, right: 8),
+                              padding: const EdgeInsets.only(
+                                top: 7,
+                                right: 8,
+                                left: 2,
+                              ),
                               child: Container(
                                 width: 5,
                                 height: 5,
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
-                                  color: theme.colorScheme.onSurfaceVariant,
+                                  color: theme.colorScheme.primary.withValues(
+                                    alpha: 0.7,
+                                  ),
                                 ),
                               ),
                             ),
@@ -228,48 +306,56 @@ class _ChangelogPageState extends State<ChangelogPage> {
     );
   }
 
-  Widget _buildSectionHeader(BuildContext context, String title) {
+  Widget _buildCategoryBadge(BuildContext context, String title) {
     final theme = Theme.of(context);
     Color color;
     IconData icon;
 
-    switch (title) {
-      case '新增':
-        color = const Color(0xFF2E7D32); // Green
-        icon = Icons.add_circle_outline_rounded;
-        break;
-      case '优化':
-        color = const Color(0xFF1976D2); // Blue
-        icon = Icons.auto_awesome_outlined;
-        break;
-      case '修复':
-        color = const Color(0xFFE65100); // Orange
-        icon = Icons.build_circle_outlined;
-        break;
-      default:
-        color = theme.colorScheme.primary;
-        icon = Icons.label_outline_rounded;
+    if (title.contains('新增')) {
+      color = const Color(0xFF2E7D32);
+      icon = Icons.add_circle_outline_rounded;
+    } else if (title.contains('优化')) {
+      color = const Color(0xFF1976D2);
+      icon = Icons.auto_awesome_outlined;
+    } else if (title.contains('修复')) {
+      color = const Color(0xFFE65100);
+      icon = Icons.build_circle_outlined;
+    } else if (title.contains('碎碎念')) {
+      color = const Color(0xFF7B1FA2);
+      icon = Icons.chat_bubble_outline_rounded;
+    } else {
+      color = theme.colorScheme.primary;
+      icon = Icons.label_outline_rounded;
     }
 
-    return Row(
-      children: [
-        Icon(icon, size: 16, color: color),
-        const SizedBox(width: 6),
-        Text(
-          title,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.bold,
-            color: color,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 5),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
 
-class _ReleaseLog {
-  const _ReleaseLog({
+class ReleaseLog {
+  const ReleaseLog({
     required this.version,
     required this.date,
     required this.description,
@@ -279,33 +365,33 @@ class _ReleaseLog {
   final String version;
   final String date;
   final String description;
-  final List<_LogSection> sections;
+  final List<LogSection> sections;
 }
 
-class _LogSection {
-  const _LogSection({required this.title, required this.items});
+class LogSection {
+  const LogSection({required this.title, required this.items});
 
   final String title;
   final List<String> items;
 }
 
 /// 解析 CHANGELOG.md 为结构化数据
-List<_ReleaseLog> _parseChangelog(String markdown) {
+List<ReleaseLog> parseChangelog(String markdown) {
   final lines = markdown.split(RegExp(r'\r?\n'));
-  final releases = <_ReleaseLog>[];
+  final releases = <ReleaseLog>[];
 
   String? currentVersion;
   String currentDate = '';
   final descBuffer = StringBuffer();
   String? currentSectionTitle;
   final currentSectionItems = <String>[];
-  final currentSections = <_LogSection>[];
+  final currentSections = <LogSection>[];
 
   void commitCurrentSection() {
-    if (currentSectionTitle != null && currentSectionItems.isNotEmpty) {
+    if (currentSectionItems.isNotEmpty || currentSectionTitle != null) {
       currentSections.add(
-        _LogSection(
-          title: currentSectionTitle!,
+        LogSection(
+          title: currentSectionTitle ?? '',
           items: List.unmodifiable(currentSectionItems),
         ),
       );
@@ -318,7 +404,7 @@ List<_ReleaseLog> _parseChangelog(String markdown) {
     commitCurrentSection();
     if (currentVersion != null) {
       releases.add(
-        _ReleaseLog(
+        ReleaseLog(
           version: currentVersion!,
           date: currentDate,
           description: descBuffer.toString().trim(),

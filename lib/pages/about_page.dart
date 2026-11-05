@@ -282,11 +282,7 @@ class _AboutPageState extends State<AboutPage> {
                       title: const Text('更新日志'),
                       subtitle: const Text('各版本详细说明与改进记录'),
                       trailing: const Icon(Icons.chevron_right_rounded),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const ChangelogPage(),
-                        ),
-                      ),
+                      onTap: () => ChangelogPage.open(context),
                     ),
                     const Divider(height: 0, indent: 56),
                     ListTile(
