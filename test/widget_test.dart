@@ -2243,7 +2243,46 @@ void main() {
       expect(longW, lessThanOrEqualTo(200));
       expect(longW, greaterThan(150), reason: '长提示应扩展到接近上限');
     });
+    testWidgets('提示气泡页面作用域隔离：课表提示只在课表页显示，学业提示只在学业页显示，全局提示两页均显示', (
+      tester,
+    ) async {
+      final rig = buildModel();
+      rig.hydrateForTest(
+        schedule: sparseSchedule(),
+        week: 1,
+        termStart: DateTime(2026, 3, 2),
+      );
+      await tester.pumpWidget(wrap(HomeShell(model: rig)));
 
+      // 1. 处于课表页（Tab 0）：课表提示可见，学业提示不可见
+      rig.setHintForTest('课表更新中…', scope: HintScope.schedule);
+      await tester.pump();
+      expect(find.text('课表更新中…'), findsOneWidget);
+
+      rig.setHintForTest('学业更新中…', scope: HintScope.academic);
+      await tester.pump();
+      expect(find.text('学业更新中…'), findsNothing, reason: '学业提示在课表页不显示');
+
+      rig.setHintForTest('正在重新登录…', scope: HintScope.global);
+      await tester.pump();
+      expect(find.text('正在重新登录…'), findsOneWidget, reason: '全局提示在课表页显示');
+
+      // 2. 切到学业页（Tab 1）
+      await tester.tap(find.text('学业'));
+      await tester.pumpAndSettle();
+
+      rig.setHintForTest('课表更新中…', scope: HintScope.schedule);
+      await tester.pump();
+      expect(find.text('课表更新中…'), findsNothing, reason: '课表提示在学业页不显示');
+
+      rig.setHintForTest('学业更新中…', scope: HintScope.academic);
+      await tester.pump();
+      expect(find.text('学业更新中…'), findsOneWidget, reason: '学业提示在学业页显示');
+
+      rig.setHintForTest('正在重新登录…', scope: HintScope.global);
+      await tester.pumpAndSettle();
+      expect(find.text('正在重新登录…'), findsOneWidget, reason: '全局提示在学业页显示');
+    });
   });
 
   group('设置页账号区', () {

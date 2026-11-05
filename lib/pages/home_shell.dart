@@ -143,8 +143,11 @@ class _HomeShellState extends State<HomeShell> {
             right: 10,
             child: ListenableBuilder(
               listenable: widget.model,
-              builder: (context, _) =>
-                  StatusPopup(model: widget.model, onOpenDebug: _openDebug),
+              builder: (context, _) => StatusPopup(
+                model: widget.model,
+                currentTabIndex: _index,
+                onOpenDebug: _openDebug,
+              ),
             ),
           ),
         ],

@@ -13,9 +13,15 @@ import 'package:flutter/material.dart';
 import '../src/app_model.dart';
 
 class StatusPopup extends StatelessWidget {
-  const StatusPopup({super.key, required this.model, this.onOpenDebug});
+  const StatusPopup({
+    super.key,
+    required this.model,
+    this.currentTabIndex,
+    this.onOpenDebug,
+  });
 
   final AppModel model;
+  final int? currentTabIndex;
   final VoidCallback? onOpenDebug;
 
   @override
@@ -46,13 +52,19 @@ class StatusPopup extends StatelessWidget {
           : _Bubble(
               key: ValueKey<String>('status-${data.text}-${data.error}'),
               data: data,
-              canRetry: model.schedule != null,
+              canRetry:
+                  model.schedule != null ||
+                  (model.hintScope == HintScope.academic &&
+                      currentTabIndex == 1),
               onDismiss: model.status == AppStatus.failed
                   ? model.dismissError
                   : model.clearHint,
               onRetry: model.errorCode == 'SESSION_EXPIRED'
                   ? model.retryAfterSessionLoss
-                  : model.refresh,
+                  : (model.hintScope == HintScope.academic &&
+                            currentTabIndex == 1
+                        ? model.refreshAcademicData
+                        : model.refresh),
               retryLabel: model.errorCode == 'SESSION_EXPIRED' ? '重新登录' : '重试',
               onOpenDebug: onOpenDebug,
             ),
@@ -78,10 +90,18 @@ class StatusPopup extends StatelessWidget {
       return const _PopupData(text: '登录中…', busy: true);
     }
     if (model.hint.isNotEmpty) {
+      if (currentTabIndex != null) {
+        if (model.hintScope == HintScope.schedule && currentTabIndex != 0) {
+          return null;
+        }
+        if (model.hintScope == HintScope.academic && currentTabIndex != 1) {
+          return null;
+        }
+      }
       final error = model.hintIsError;
       return _PopupData(
         text: model.hint,
-        busy: model.refreshing && !error,
+        busy: (model.refreshing || model.academicLoading) && !error,
         error: error,
       );
     }

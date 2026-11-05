@@ -55,6 +55,18 @@ enum AppStatus {
   failed,
 }
 
+/// 提示气泡的页面作用域。
+enum HintScope {
+  /// 全局通用（如重新登录、登录中、会话失效等）。
+  global,
+
+  /// 课表专属（如课表拉取中、已更新、课表刷新失败等）。
+  schedule,
+
+  /// 学业专属（如学业刷新中、已更新、学业刷新失败等）。
+  academic,
+}
+
 /// 周次通知源：在 [ValueNotifier] 基础上支持同值强制重发。
 ///
 /// 手势翻页途中只改顶栏 `shownWeek`，停稳才回写 `model.week`。
@@ -806,6 +818,9 @@ class AppModel extends ChangeNotifier {
   bool _hintIsError = false;
   bool get hintIsError => _hintIsError;
 
+  HintScope _hintScope = HintScope.global;
+  HintScope get hintScope => _hintScope;
+
   Timer? _hintTimer;
 
   bool _disposed = false;
@@ -947,6 +962,7 @@ class AppModel extends ChangeNotifier {
   Future<void> loadAcademicData({
     String? termId,
     bool forceRefresh = false,
+    bool showHint = false,
   }) async {
     if (_academicLoading) return;
     var target = termId ?? academicTermId;
@@ -992,6 +1008,9 @@ class AppModel extends ChangeNotifier {
     _academicLoading = true;
     _academicError = null;
     academicNotifier.notifyListeners();
+    if (showHint) {
+      _showHint('正在更新学业数据…', scope: HintScope.academic);
+    }
 
     try {
       Future<dynamic> safeRun(Future<dynamic> f) async {
@@ -1037,6 +1056,22 @@ class AppModel extends ChangeNotifier {
     } finally {
       _academicLoading = false;
       academicNotifier.notifyListeners();
+      if (showHint) {
+        if (_academicError != null) {
+          _showHint(
+            '更新失败：$_academicError',
+            error: true,
+            clearAfter: const Duration(seconds: 4),
+            scope: HintScope.academic,
+          );
+        } else {
+          _showHint(
+            '已更新',
+            clearAfter: const Duration(milliseconds: 1500),
+            scope: HintScope.academic,
+          );
+        }
+      }
     }
   }
 
@@ -1064,8 +1099,11 @@ class AppModel extends ChangeNotifier {
   }
 
   /// 手动刷新当前学业数据。
-  Future<void> refreshAcademicData() =>
-      loadAcademicData(termId: academicTermId, forceRefresh: true);
+  Future<void> refreshAcademicData({bool showHint = true}) => loadAcademicData(
+    termId: academicTermId,
+    forceRefresh: true,
+    showHint: showHint,
+  );
 
   /// 距上次成功抓课表是否已经超过用户设置的最小间隔。
   bool _shouldSilentRefresh(DateTime fetchedAt) =>
@@ -1095,10 +1133,10 @@ class AppModel extends ChangeNotifier {
 
     _refreshing = true;
     if (silent) {
-      _showHint('更新中…');
+      _showHint('更新中…', scope: HintScope.schedule);
     } else {
       _setStatus(AppStatus.loading);
-      _showHint('获取中…');
+      _showHint('获取中…', scope: HintScope.schedule);
     }
 
     _scheduleLoad = service.getSchedule(termId: termId);
@@ -1115,7 +1153,11 @@ class AppModel extends ChangeNotifier {
       _refreshing = false;
       _setStatus(AppStatus.ready);
       if (silent) {
-        _showHint('已更新', clearAfter: const Duration(milliseconds: 1500));
+        _showHint(
+          '已更新',
+          clearAfter: const Duration(milliseconds: 1500),
+          scope: HintScope.schedule,
+        );
       } else {
         clearHint();
       }
@@ -1132,6 +1174,7 @@ class AppModel extends ChangeNotifier {
           '更新失败：${_humanize(error)}',
           error: true,
           clearAfter: const Duration(seconds: 3),
+          scope: HintScope.schedule,
         );
       } else {
         _fail(error);
@@ -1143,6 +1186,7 @@ class AppModel extends ChangeNotifier {
           '更新失败：$error',
           error: true,
           clearAfter: const Duration(seconds: 3),
+          scope: HintScope.schedule,
         );
       } else {
         _fail(error);
@@ -1630,6 +1674,8 @@ class AppModel extends ChangeNotifier {
   /// 完成后只更新缓存与界面状态，绝不弹出提示或下发通知，
   /// 避免增加自动同步课表时通知的延迟与负担。
   Future<void> _syncAcademicQuietly(String termId) async {
+    final oldSuppress = _suppressStageHints;
+    _suppressStageHints = true;
     try {
       await academicService.syncCurrentTermAsync(termId: termId);
       if (_disposed || _status == AppStatus.needLogin) return;
@@ -1638,6 +1684,8 @@ class AppModel extends ChangeNotifier {
       }
     } catch (_) {
       // 绝不上抛或弹通知
+    } finally {
+      _suppressStageHints = oldSuppress;
     }
   }
 
@@ -1770,8 +1818,12 @@ class AppModel extends ChangeNotifier {
 
   /// 仅测试用：直接设置右上角提示（验证浮层不遮挡课表）。
   @visibleForTesting
-  void setHintForTest(String message, {bool error = false}) {
-    _showHint(message, error: error);
+  void setHintForTest(
+    String message, {
+    bool error = false,
+    HintScope scope = HintScope.global,
+  }) {
+    _showHint(message, error: error, scope: scope);
   }
 
   /// 仅测试用：按"首次加载"路径取一次课表（不经过 boot 的目录/凭据初始化）。
@@ -1870,21 +1922,30 @@ class AppModel extends ChangeNotifier {
     service.rebindCookieStorage(repository);
   }
 
+  bool _suppressStageHints = false;
+
   /// 编排层进入"重新登录"或"重新登录后拉取课表"时更新提示语——用户能看到真实进度流转，但课表不会被遮住。
   void _onServiceStage(String stage) {
+    if (_disposed || _suppressStageHints) return;
     if (stage == ScheduleService.stageRelogin) {
       _refreshing = true;
-      _showHint('正在重新登录…');
+      _showHint('正在重新登录…', scope: HintScope.global);
     } else if (stage == ScheduleService.stageFetchingSchedule) {
       _refreshing = true;
       final hasData = _schedule != null;
-      _showHint(hasData ? '更新中…' : '获取中…');
+      _showHint(hasData ? '更新中…' : '获取中…', scope: HintScope.schedule);
     }
   }
 
-  void _showHint(String message, {bool error = false, Duration? clearAfter}) {
+  void _showHint(
+    String message, {
+    bool error = false,
+    Duration? clearAfter,
+    HintScope scope = HintScope.global,
+  }) {
     _hint = message;
     _hintIsError = error;
+    _hintScope = scope;
     _hintTimer?.cancel();
     if (clearAfter != null) {
       _hintTimer = Timer(clearAfter, () {
