@@ -455,12 +455,8 @@ List<ReleaseLog> parseChangelog(String markdown) {
       }
     } else if (line.isNotEmpty && !line.startsWith('#')) {
       if (currentSectionTitle == null) {
-        // 去除 Markdown 引用前导符号 `>`，并保留换行排版
-        final cleanLine = line.replaceFirst(RegExp(r'^>\s*'), '').trim();
-        if (cleanLine.isNotEmpty) {
-          if (descBuffer.isNotEmpty) descBuffer.write('\n');
-          descBuffer.write(cleanLine);
-        }
+        if (descBuffer.isNotEmpty) descBuffer.write('\n');
+        descBuffer.write(line);
       } else if (currentSectionItems.isNotEmpty) {
         // 多行条目追加
         final last = currentSectionItems.removeLast();

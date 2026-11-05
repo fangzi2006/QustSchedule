@@ -124,15 +124,15 @@ void main() {
   });
 
   group('parseChangelog 纯逻辑解析测试', () {
-    test('正确解析版本、剥离引用符 > 并提取结构化小节与条目', () {
+    test('正确解析标准版本描述并提取结构化小节与条目', () {
       const mockMarkdown = '''
 # 更新日志
 
 ## [1.5.0] - 2026-11-05
 
-> **核心亮点速览**：
-> 1. **新增学业仪表盘**：考试与绩点。
-> 2. **网络超时缩短**：全链路采用 `10s` 超时机制。
+**核心亮点速览**：
+1. **新增学业仪表盘**：考试与绩点。
+2. **网络超时缩短**：全链路采用 `10s` 超时机制。
 
 ### 新增
 
@@ -150,8 +150,6 @@ void main() {
       final release = releases.first;
       expect(release.version, '1.5.0');
       expect(release.date, '2026-11-05');
-      // 验证 > 被剔除，保留换行
-      expect(release.description.contains('>'), isFalse);
       expect(release.description.contains('\n'), isTrue);
       expect(release.description, contains('核心亮点速览'));
 
