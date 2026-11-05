@@ -2885,6 +2885,7 @@ void main() {
       expect(rig.model.reminderEnabled, isTrue);
       expect(rig.gateway.syncedPayloads, isNotEmpty);
       expect(rig.gateway.lastPayload['leadMinutes'], 10);
+      expect(rig.gateway.toasts, isEmpty, reason: '开关上课提醒静默生效，不应弹出 Toast');
 
       rig.service.dispose();
       debugDefaultTargetPlatformOverride = null;
@@ -2931,6 +2932,7 @@ void main() {
 
       expect(rig.model.reminderStyle, ReminderStyle.banner);
       expect(rig.gateway.stopFluidCount, 1);
+      expect(rig.gateway.toasts, isEmpty, reason: '开关流体云卡片静默生效，不应弹出 Toast');
 
       rig.service.dispose();
       debugDefaultTargetPlatformOverride = null;

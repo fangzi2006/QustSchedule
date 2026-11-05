@@ -73,8 +73,6 @@ class _ReminderPageState extends State<ReminderPage>
     await widget.model.setReminderEnabled(value);
     await widget.service.syncNow(force: true);
     await _refreshStatus();
-    if (!mounted) return;
-    _toast(value ? '已开启课程提醒' : '已关闭并取消全部提醒');
   });
 
   Future<void> _commitLead(int minutes) async {
@@ -94,8 +92,6 @@ class _ReminderPageState extends State<ReminderPage>
     }
     await widget.service.syncNow(force: true);
     await _refreshStatus();
-    if (!mounted) return;
-    _toast(enabled ? '已开启流体云卡片' : '已改用横幅通知');
   });
 
   Future<void> _stopFluid() => _run(() async {
@@ -362,8 +358,8 @@ class _ReminderSettingsCardState extends State<_ReminderSettingsCard> {
                 title: const Text('流体云卡片'),
                 subtitle: Text(
                   model.reminderStyle == ReminderStyle.fluid
-                      ? '开启后通知类型升级为实时通知，OPPO手机可显示为流体云卡片'
-                      : '确保通知设置中打开了 ⌈流体云显示实时活动⌋ 选项',
+                      ? '确保通知设置中打开了 ⌈流体云显示实时活动⌋ 选项'
+                      : '开启后通知类型升级为实时通知，OPPO手机可显示为流体云卡片',
                 ),
                 value: model.reminderStyle == ReminderStyle.fluid,
                 onChanged: widget.onToggleFluid,
