@@ -362,8 +362,8 @@ class _ReminderSettingsCardState extends State<_ReminderSettingsCard> {
                 title: const Text('流体云卡片'),
                 subtitle: Text(
                   model.reminderStyle == ReminderStyle.fluid
-                      ? '上课前用常驻卡片倒计时（上课准时收起）'
-                      : '关闭时为普通横幅通知，点开回到 App',
+                      ? '开启后通知类型升级为实时通知，OPPO手机可显示为流体云卡片'
+                      : '确保通知设置中打开了 ⌈流体云显示实时活动⌋ 选项',
                 ),
                 value: model.reminderStyle == ReminderStyle.fluid,
                 onChanged: widget.onToggleFluid,
