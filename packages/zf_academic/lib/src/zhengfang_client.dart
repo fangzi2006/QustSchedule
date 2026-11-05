@@ -1318,11 +1318,9 @@ class ZhengfangClient {
     final list = unique.values.toList();
     final configured =
         list.where((route) => route.code == _endpoints.scheduleGnmkdm).toList();
-    final route = firstOf(configured.length == 1
-        ? configured
-        : list.length == 1
-            ? list
-            : const <ZfRoute>[]);
+    final route = configured.firstOrNull ??
+        list.where((r) => r.personal).firstOrNull ??
+        (list.length == 1 ? list.first : null);
     if (route == null) changed('无法确定学校可用的个人课表入口');
     return route;
   }
