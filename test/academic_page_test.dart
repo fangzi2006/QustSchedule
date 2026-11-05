@@ -65,6 +65,7 @@ void main() {
     expect(refreshBtn, findsOneWidget);
     await tester.tap(refreshBtn);
     await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 5));
 
     // Verify exams are displayed (from sampleExams: '大学物理B')
     expect(find.text('大学物理B'), findsWidgets);
@@ -74,7 +75,7 @@ void main() {
 
     // Verify grades are displayed (from sampleGrades: '高等数学A(1)')
     expect(find.text('高等数学A(1)'), findsWidgets);
-    expect(find.text('平均学分绩点 (GPA)'), findsWidgets);
+    expect(find.text('学期平均学分绩点 (GPA)'), findsWidgets);
     expect(find.text('已获 / 总学分'), findsWidgets);
   });
 
@@ -115,6 +116,8 @@ void main() {
       // Tap refresh to trigger network call
       await tester.tap(find.byTooltip('刷新学业数据'));
       await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump(const Duration(seconds: 5));
 
       expect(find.text('无法连接教务网，请检查网络或连接校园网后重试'), findsOneWidget);
       expect(find.text('重试'), findsOneWidget);
@@ -137,6 +140,7 @@ void main() {
       await tester.pumpWidget(_wrap(AcademicPage(model: model)));
       await tester.tap(find.byTooltip('刷新学业数据'));
       await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 5));
 
       expect(find.text('网络请求超时，请检查网络后重试'), findsOneWidget);
       expect(find.text('重试'), findsOneWidget);
@@ -177,6 +181,7 @@ void main() {
       await tester.pumpWidget(_wrap(AcademicPage(model: model)));
       await tester.tap(find.byTooltip('刷新学业数据'));
       await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 5));
 
       expect(find.text('形势与政策'), findsOneWidget);
       expect(find.text('通过'), findsOneWidget);
@@ -363,6 +368,7 @@ void main() {
     final refreshBtn = find.byTooltip('刷新学业数据');
     await tester.tap(refreshBtn);
     await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 5));
 
     // Next upcoming exam appears in hero card
     expect(find.text('下一门待考科目'), findsWidgets);

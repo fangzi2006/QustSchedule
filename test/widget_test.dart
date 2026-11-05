@@ -141,6 +141,7 @@ void main() {
       await tester.pumpWidget(wrap(LoginPage(model: model)));
 
       expect(find.text('青科课表通'), findsOneWidget);
+      expect(find.byType(Image), findsOneWidget);
       expect(find.widgetWithText(TextFormField, '账号'), findsOneWidget);
       expect(find.widgetWithText(TextFormField, '密码'), findsOneWidget);
       expect(find.widgetWithText(FilledButton, '登录'), findsOneWidget);
@@ -2242,6 +2243,7 @@ void main() {
       expect(longW, lessThanOrEqualTo(200));
       expect(longW, greaterThan(150), reason: '长提示应扩展到接近上限');
     });
+
   });
 
   group('设置页账号区', () {

@@ -509,6 +509,8 @@ void main() {
       expect(weeks('第3-5周'), <int>[3, 4, 5]);
       expect(weeks('1,3,5周'), <int>[1, 3, 5]);
       expect(weeks('[1-16周]'), List<int>.generate(16, (i) => i + 1));
+      expect(weeks('1-30周'), List<int>.generate(30, (i) => i + 1));
+      expect(weeks('第28周'), <int>[28]);
       expect(tryParseWeeks('1~16周'), List<int>.generate(16, (i) => i + 1));
       expect(tryParseWeeks('1至16周'), List<int>.generate(16, (i) => i + 1));
       expect(tryParseWeeks('1-8周(全)'), <int>[1, 2, 3, 4, 5, 6, 7, 8]);

@@ -162,7 +162,7 @@ List<int> tryParseWeeks(String value) {
       final start = parts[0]!;
       final end = parts.length > 1 ? parts[1]! : start;
       final mode = match.group(2) ?? match.group(3);
-      if (start < 1 || end < start || end > 25) continue;
+      if (start < 1 || end < start || end > 60 || (end - start) > 53) continue;
       for (var week = start; week <= end; week++) {
         if (mode == null || week % 2 == (mode == '单' ? 1 : 0)) {
           result.add(week);
@@ -173,20 +173,11 @@ List<int> tryParseWeeks(String value) {
   return result.toList()..sort();
 }
 
-/// `1-4周(单)`、`第3-5周`、`1,3,5周`、`[1-16周]` → 周次数组。上限 25 周，超出视为页面结构变化。
+/// `1-4周(单)`、`第3-5周`、`1,3,5周`、`[1-16周]` → 周次数组。缺少可识别周次时视为页面结构变化。
 List<int> weeks(String value) {
   if (value.trim().isEmpty) return const <int>[];
   final list = tryParseWeeks(value);
   if (list.isEmpty) {
-    final raw = value.replaceAll(RegExp(r'\s+'), '');
-    final match = RegExp(r'(\d+)(?:[—－~～\-]|至|到)(\d+)').firstMatch(raw);
-    if (match != null) {
-      final start = int.tryParse(match.group(1) ?? '') ?? 0;
-      final end = int.tryParse(match.group(2) ?? '') ?? 0;
-      if (start < 1 || end < start || end > 25) {
-        changed('学校课表周次超出当前支持的 1–25 周');
-      }
-    }
     changed('学校课表缺少可识别的周次');
   }
   return list;

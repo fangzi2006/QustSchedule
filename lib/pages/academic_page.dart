@@ -2,7 +2,7 @@
 ///
 /// 包含两大模块：
 ///  1. 近期考试安排：下一场考试倒计时 Hero 焦点卡片、考场座位号、考试列表（排序置顶沉底）；
-///  2. 学期成绩与绩点：平均学分绩点 (GPA)、总修学分/已获学分统计、评教拦截提醒、课程成绩明细。
+///  2. 学期成绩与绩点：学期平均学分绩点 (GPA)、总修学分/已获学分统计、评教拦截提醒、课程成绩明细。
 ///
 /// 采用独立状态订阅，滚动底部留足 [FloatingDock.contentInset] 避开悬浮胶囊。
 library;
@@ -869,7 +869,7 @@ class _GpaStatsCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   Text(
-                    '平均学分绩点 (GPA)',
+                    '学期平均学分绩点 (GPA)',
                     style: theme.textTheme.labelSmall?.copyWith(
                       color: scheme.onSecondaryContainer,
                     ),
