@@ -134,8 +134,8 @@ class _HomeShellState extends State<HomeShell> {
               onPressStart: _ensureLazyPages,
             ),
           ),
-          // 状态弹窗挂在两页之上：登录 / 取课表 / 重登 / 报错都在这里出。
-          // 它在外壳里，不在页面的 ListenableBuilder 内，所以要自己订阅状态。
+          // 全局系统状态弹窗挂在外壳顶层：登录中 / 重新登录 / 连接中 / 报错都在这里出。
+          // 悬浮于所有页面之上，切页时不跟随平移，始终置顶可见。
           //
           // 紧贴 AppBar 下方、靠右：通知要短小、别挡到左上的周次条。
           Positioned(
@@ -145,7 +145,7 @@ class _HomeShellState extends State<HomeShell> {
               listenable: widget.model,
               builder: (context, _) => StatusPopup(
                 model: widget.model,
-                currentTabIndex: _index,
+                scope: HintScope.global,
                 onOpenDebug: _openDebug,
               ),
             ),

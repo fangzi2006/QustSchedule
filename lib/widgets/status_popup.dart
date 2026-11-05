@@ -16,12 +16,12 @@ class StatusPopup extends StatelessWidget {
   const StatusPopup({
     super.key,
     required this.model,
-    this.currentTabIndex,
+    this.scope = HintScope.global,
     this.onOpenDebug,
   });
 
   final AppModel model;
-  final int? currentTabIndex;
+  final HintScope scope;
   final VoidCallback? onOpenDebug;
 
   @override
@@ -50,72 +50,114 @@ class StatusPopup extends StatelessWidget {
       child: data == null
           ? const SizedBox.shrink(key: ValueKey<String>('status-none'))
           : _Bubble(
-              key: ValueKey<String>('status-${data.text}-${data.error}'),
+              key: ValueKey<String>(
+                'status-${scope.name}-${data.text}-${data.error}',
+              ),
               data: data,
-              canRetry:
-                  model.schedule != null ||
-                  (model.hintScope == HintScope.academic &&
-                      currentTabIndex == 1),
-              onDismiss: model.status == AppStatus.failed
-                  ? model.dismissError
-                  : model.clearHint,
-              onRetry: model.errorCode == 'SESSION_EXPIRED'
-                  ? model.retryAfterSessionLoss
-                  : (model.hintScope == HintScope.academic &&
-                            currentTabIndex == 1
-                        ? model.refreshAcademicData
-                        : model.refresh),
+              canRetry: scope == HintScope.academic
+                  ? true
+                  : (model.schedule != null),
+              onDismiss: () {
+                switch (scope) {
+                  case HintScope.global:
+                    if (model.status == AppStatus.failed) {
+                      model.dismissError();
+                    } else {
+                      model.clearGlobalHint();
+                    }
+                    break;
+                  case HintScope.schedule:
+                    model.clearScheduleHint();
+                    break;
+                  case HintScope.academic:
+                    model.clearAcademicHint();
+                    break;
+                }
+              },
+              onRetry: () {
+                if (scope == HintScope.academic) {
+                  model.refreshAcademicData();
+                } else if (model.errorCode == 'SESSION_EXPIRED') {
+                  model.retryAfterSessionLoss();
+                } else {
+                  model.refresh();
+                }
+              },
               retryLabel: model.errorCode == 'SESSION_EXPIRED' ? '重新登录' : '重试',
               onOpenDebug: onOpenDebug,
             ),
     );
   }
 
-  /// 优先级：错误 > 登录页/验证码页（不弹）> 登录中 > 提示语 > 加载 > 启动。
+  /// 依据作用域解析当前弹窗数据：
+  /// - 全局作用域 (global)：处理应用级状态（failed、signingIn、loading、booting、globalHint）；
+  /// - 课表作用域 (schedule)：附着课表页。若全局正在忙碌或报错则退避隐藏，否则显示 scheduleHint；
+  /// - 学业作用域 (academic)：附着学业页。若全局正在忙碌或报错则退避隐藏，否则显示 academicHint。
   _PopupData? _resolve() {
-    if (model.status == AppStatus.failed) {
-      return _PopupData(
-        text: model.message.isEmpty ? '加载失败' : model.message,
-        error: true,
-        showActions: true,
-      );
-    }
-    // 登录页与验证码页自己就是"当前任务"，弹窗只会挡住表单。
-    // 而且这几页的状态切换很频繁，残留的 hint 容易变成一个永远转的圈。
-    if (model.status == AppStatus.needLogin ||
-        model.status == AppStatus.needCaptcha) {
-      return null;
-    }
-    if (model.status == AppStatus.signingIn) {
-      return const _PopupData(text: '登录中…', busy: true);
-    }
-    if (model.hint.isNotEmpty) {
-      if (currentTabIndex != null) {
-        if (model.hintScope == HintScope.schedule && currentTabIndex != 0) {
+    switch (scope) {
+      case HintScope.global:
+        if (model.status == AppStatus.failed) {
+          return _PopupData(
+            text: model.message.isEmpty ? '加载失败' : model.message,
+            error: true,
+            showActions: true,
+          );
+        }
+        // 登录页与验证码页自己就是"当前任务"，弹窗只会挡住表单。
+        // 而且这几页的状态切换很频繁，残留的 hint 容易变成一个永远转的圈。
+        if (model.status == AppStatus.needLogin ||
+            model.status == AppStatus.needCaptcha) {
           return null;
         }
-        if (model.hintScope == HintScope.academic && currentTabIndex != 1) {
+        if (model.status == AppStatus.signingIn) {
+          return const _PopupData(text: '登录中…', busy: true);
+        }
+        if (model.globalHint.isNotEmpty) {
+          final error = model.globalHintIsError;
+          return _PopupData(text: model.globalHint, busy: !error, error: error);
+        }
+        if (model.status == AppStatus.loading) {
+          // 有具体文案就用它（例如"正在切换到「线路 2」…"），没写才退回通用文案。
+          return _PopupData(
+            text: model.message.isEmpty ? '获取中…' : model.message,
+            busy: true,
+          );
+        }
+        if (model.status == AppStatus.booting) {
+          return const _PopupData(text: '连接中…', busy: true);
+        }
+        return null;
+
+      case HintScope.schedule:
+        // 全局弹窗优先：若当前有全局忙碌或错误状态，局部气泡退避隐藏，避免右上角叠字冲突
+        if (model.isGlobalPopupActive) {
           return null;
         }
-      }
-      final error = model.hintIsError;
-      return _PopupData(
-        text: model.hint,
-        busy: (model.refreshing || model.academicLoading) && !error,
-        error: error,
-      );
+        if (model.scheduleHint.isNotEmpty) {
+          final error = model.scheduleHintIsError;
+          return _PopupData(
+            text: model.scheduleHint,
+            busy: model.refreshing && !error,
+            error: error,
+          );
+        }
+        return null;
+
+      case HintScope.academic:
+        // 全局弹窗优先：若当前有全局忙碌或错误状态，局部气泡退避隐藏，避免右上角叠字冲突
+        if (model.isGlobalPopupActive) {
+          return null;
+        }
+        if (model.academicHint.isNotEmpty) {
+          final error = model.academicHintIsError;
+          return _PopupData(
+            text: model.academicHint,
+            busy: model.academicLoading && !error,
+            error: error,
+          );
+        }
+        return null;
     }
-    if (model.status == AppStatus.loading) {
-      // 有具体文案就用它（例如"正在切换到「线路 2」…"），没写才退回通用文案。
-      return _PopupData(
-        text: model.message.isEmpty ? '获取中…' : model.message,
-        busy: true,
-      );
-    }
-    if (model.status == AppStatus.booting) {
-      return const _PopupData(text: '连接中…', busy: true);
-    }
-    return null;
   }
 }
 

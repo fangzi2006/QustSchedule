@@ -2222,10 +2222,17 @@ void main() {
 
       // AnimatedSwitcher 的尺寸即弹窗尺寸（Stack 包着 _Bubble，宽度取内容宽）。
       Future<double> widthFor(String hint) async {
-        rig.setHintForTest(hint);
+        rig.setHintForTest(hint, scope: HintScope.schedule);
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 250)); // 等切换过渡结束
-        return tester.getSize(find.byType(AnimatedSwitcher)).width;
+        return tester
+            .getSize(
+              find.descendant(
+                of: find.byType(SchedulePage),
+                matching: find.byType(AnimatedSwitcher),
+              ),
+            )
+            .width;
       }
 
       final shortW = await widthFor('已更新');
@@ -2243,7 +2250,7 @@ void main() {
       expect(longW, lessThanOrEqualTo(200));
       expect(longW, greaterThan(150), reason: '长提示应扩展到接近上限');
     });
-    testWidgets('提示气泡页面作用域隔离：课表提示只在课表页显示，学业提示只在学业页显示，全局提示两页均显示', (
+    testWidgets('提示气泡页面作用域隔离与随页面平移：课表提示随课表页平移，学业提示随学业页平移，全局提示置顶固定', (
       tester,
     ) async {
       final rig = buildModel();
@@ -2254,34 +2261,53 @@ void main() {
       );
       await tester.pumpWidget(wrap(HomeShell(model: rig)));
 
-      // 1. 处于课表页（Tab 0）：课表提示可见，学业提示不可见
+      // 1. 处于课表页（Tab 0）：课表提示在屏幕内可见
       rig.setHintForTest('课表更新中…', scope: HintScope.schedule);
       await tester.pump();
       expect(find.text('课表更新中…'), findsOneWidget);
+      final schedulePos0 = tester.getTopLeft(find.text('课表更新中…'));
+      expect(schedulePos0.dx, greaterThanOrEqualTo(0));
+      expect(schedulePos0.dx, lessThan(800));
 
+      // 学业尚未挂载，学业提示不可见
       rig.setHintForTest('学业更新中…', scope: HintScope.academic);
       await tester.pump();
-      expect(find.text('学业更新中…'), findsNothing, reason: '学业提示在课表页不显示');
+      expect(find.text('学业更新中…'), findsNothing, reason: '学业页尚未渲染，学业提示不展示');
 
+      // 全局系统提示激活：优先显示全局提示，页面局部提示退避
       rig.setHintForTest('正在重新登录…', scope: HintScope.global);
       await tester.pump();
-      expect(find.text('正在重新登录…'), findsOneWidget, reason: '全局提示在课表页显示');
+      expect(find.text('正在重新登录…'), findsOneWidget, reason: '全局提示在屏幕顶层可见');
+
+      // 清除全局提示，页面提示恢复
+      rig.clearGlobalHint();
+      await tester.pump();
+      expect(find.text('正在重新登录…'), findsNothing);
+      expect(find.text('课表更新中…'), findsOneWidget);
 
       // 2. 切到学业页（Tab 1）
-      await tester.tap(find.text('学业'));
-      await tester.pumpAndSettle();
-
-      rig.setHintForTest('课表更新中…', scope: HintScope.schedule);
+      final dock = find.byType(FloatingDock);
+      await tester.tap(find.descendant(of: dock, matching: find.text('学业')));
       await tester.pump();
-      expect(find.text('课表更新中…'), findsNothing, reason: '课表提示在学业页不显示');
+      await tester.pump(const Duration(milliseconds: 300));
 
-      rig.setHintForTest('学业更新中…', scope: HintScope.academic);
-      await tester.pump();
-      expect(find.text('学业更新中…'), findsOneWidget, reason: '学业提示在学业页显示');
+      // 课表页平移到屏幕左侧（dx < 0），课表提示随之滑出屏幕外
+      final schedulePos1 = tester.getTopLeft(find.text('课表更新中…'));
+      expect(schedulePos1.dx, lessThan(0), reason: '课表提示随课表页滑出屏幕左侧');
 
+      // 学业页平移进屏幕（0 <= dx < 800），学业提示随之滑入屏幕可见
+      expect(find.text('学业更新中…'), findsOneWidget);
+      final academicPos1 = tester.getTopLeft(find.text('学业更新中…'));
+      expect(academicPos1.dx, greaterThanOrEqualTo(0), reason: '学业提示随学业页滑入屏幕');
+      expect(academicPos1.dx, lessThan(800));
+
+      // 在学业页触发全局提示：依然在屏幕顶层可见
       rig.setHintForTest('正在重新登录…', scope: HintScope.global);
-      await tester.pumpAndSettle();
-      expect(find.text('正在重新登录…'), findsOneWidget, reason: '全局提示在学业页显示');
+      await tester.pump();
+      expect(find.text('正在重新登录…'), findsOneWidget, reason: '全局提示在学业页同样顶层悬浮展示');
+      final globalPos = tester.getTopLeft(find.text('正在重新登录…'));
+      expect(globalPos.dx, greaterThanOrEqualTo(0));
+      expect(globalPos.dx, lessThan(800));
     });
   });
 

@@ -811,17 +811,56 @@ class AppModel extends ChangeNotifier {
   bool _refreshing = false;
   bool get refreshing => _refreshing;
 
-  /// 右上角提示语。空字符串表示不显示。
-  String _hint = '';
-  String get hint => _hint;
+  /// 课表专属提示（附着于课表页，随横向平移移动）。
+  String _scheduleHint = '';
+  String get scheduleHint => _scheduleHint;
+  bool _scheduleHintIsError = false;
+  bool get scheduleHintIsError => _scheduleHintIsError;
+  Timer? _scheduleHintTimer;
 
-  bool _hintIsError = false;
-  bool get hintIsError => _hintIsError;
+  /// 学业专属提示（附着于学业页，随横向平移移动）。
+  String _academicHint = '';
+  String get academicHint => _academicHint;
+  bool _academicHintIsError = false;
+  bool get academicHintIsError => _academicHintIsError;
+  Timer? _academicHintTimer;
 
-  HintScope _hintScope = HintScope.global;
-  HintScope get hintScope => _hintScope;
+  /// 全局系统提示（悬浮于外壳顶层，跨页面固定显示）。
+  String _globalHint = '';
+  String get globalHint => _globalHint;
+  bool _globalHintIsError = false;
+  bool get globalHintIsError => _globalHintIsError;
+  Timer? _globalHintTimer;
 
-  Timer? _hintTimer;
+  /// 全局是否有进行中的状态或错误阻断（用于局部气泡自动退避压制，防止叠字）。
+  bool get isGlobalPopupActive =>
+      _status == AppStatus.failed ||
+      _status == AppStatus.signingIn ||
+      _status == AppStatus.loading ||
+      _status == AppStatus.booting ||
+      _globalHint.isNotEmpty;
+
+  /// 兼容旧接口：当前处于活跃态的提示（优先级：全局 > 课表 > 学业）。
+  String get hint {
+    if (_globalHint.isNotEmpty) return _globalHint;
+    if (_scheduleHint.isNotEmpty) return _scheduleHint;
+    if (_academicHint.isNotEmpty) return _academicHint;
+    return '';
+  }
+
+  bool get hintIsError {
+    if (_globalHint.isNotEmpty) return _globalHintIsError;
+    if (_scheduleHint.isNotEmpty) return _scheduleHintIsError;
+    if (_academicHint.isNotEmpty) return _academicHintIsError;
+    return false;
+  }
+
+  HintScope get hintScope {
+    if (_globalHint.isNotEmpty) return HintScope.global;
+    if (_scheduleHint.isNotEmpty) return HintScope.schedule;
+    if (_academicHint.isNotEmpty) return HintScope.academic;
+    return HintScope.global;
+  }
 
   bool _disposed = false;
 
@@ -1152,6 +1191,7 @@ class AppModel extends ChangeNotifier {
       _lastFetchedAt = DateTime.now();
       _refreshing = false;
       _setStatus(AppStatus.ready);
+      clearGlobalHint();
       if (silent) {
         _showHint(
           '已更新',
@@ -1932,6 +1972,7 @@ class AppModel extends ChangeNotifier {
       _showHint('正在重新登录…', scope: HintScope.global);
     } else if (stage == ScheduleService.stageFetchingSchedule) {
       _refreshing = true;
+      clearGlobalHint();
       final hasData = _schedule != null;
       _showHint(hasData ? '更新中…' : '获取中…', scope: HintScope.schedule);
     }
@@ -1943,26 +1984,95 @@ class AppModel extends ChangeNotifier {
     Duration? clearAfter,
     HintScope scope = HintScope.global,
   }) {
-    _hint = message;
-    _hintIsError = error;
-    _hintScope = scope;
-    _hintTimer?.cancel();
-    if (clearAfter != null) {
-      _hintTimer = Timer(clearAfter, () {
-        if (_disposed) return;
-        _hint = '';
-        notifyListeners();
-      });
+    switch (scope) {
+      case HintScope.schedule:
+        _scheduleHint = message;
+        _scheduleHintIsError = error;
+        _scheduleHintTimer?.cancel();
+        if (clearAfter != null) {
+          _scheduleHintTimer = Timer(clearAfter, () {
+            if (_disposed) return;
+            _scheduleHint = '';
+            notifyListeners();
+          });
+        }
+        break;
+      case HintScope.academic:
+        _academicHint = message;
+        _academicHintIsError = error;
+        _academicHintTimer?.cancel();
+        if (clearAfter != null) {
+          _academicHintTimer = Timer(clearAfter, () {
+            if (_disposed) return;
+            _academicHint = '';
+            notifyListeners();
+          });
+        }
+        break;
+      case HintScope.global:
+        _globalHint = message;
+        _globalHintIsError = error;
+        _globalHintTimer?.cancel();
+        if (clearAfter != null) {
+          _globalHintTimer = Timer(clearAfter, () {
+            if (_disposed) return;
+            _globalHint = '';
+            notifyListeners();
+          });
+        }
+        break;
     }
     notifyListeners();
   }
 
-  /// 手动关掉右上角提示（用户点一下）。
-  void clearHint() {
-    _hintTimer?.cancel();
-    if (_hint.isEmpty) return;
-    _hint = '';
+  void clearScheduleHint() {
+    _scheduleHintTimer?.cancel();
+    if (_scheduleHint.isEmpty) return;
+    _scheduleHint = '';
     notifyListeners();
+  }
+
+  void clearAcademicHint() {
+    _academicHintTimer?.cancel();
+    if (_academicHint.isEmpty) return;
+    _academicHint = '';
+    notifyListeners();
+  }
+
+  void clearGlobalHint() {
+    _globalHintTimer?.cancel();
+    if (_globalHint.isEmpty) return;
+    _globalHint = '';
+    notifyListeners();
+  }
+
+  /// 手动关掉提示：若指定了 [scope] 则关掉对应作用域；不指定则清除所有提示。
+  void clearHint([HintScope? scope]) {
+    if (scope == null) {
+      _scheduleHintTimer?.cancel();
+      _academicHintTimer?.cancel();
+      _globalHintTimer?.cancel();
+      final hasAny =
+          _scheduleHint.isNotEmpty ||
+          _academicHint.isNotEmpty ||
+          _globalHint.isNotEmpty;
+      _scheduleHint = '';
+      _academicHint = '';
+      _globalHint = '';
+      if (hasAny) notifyListeners();
+    } else {
+      switch (scope) {
+        case HintScope.schedule:
+          clearScheduleHint();
+          break;
+        case HintScope.academic:
+          clearAcademicHint();
+          break;
+        case HintScope.global:
+          clearGlobalHint();
+          break;
+      }
+    }
   }
 
   void _setStatus(AppStatus status, {String message = '', String code = ''}) {
@@ -1975,8 +2085,7 @@ class AppModel extends ChangeNotifier {
   void _fail(Object error) {
     final academic = asAcademicError(error);
     _refreshing = false;
-    _hint = '';
-    _hintTimer?.cancel();
+    clearHint();
     _setStatus(
       AppStatus.failed,
       message: _humanize(academic),
@@ -2053,7 +2162,9 @@ class AppModel extends ChangeNotifier {
     weekNotifier.dispose();
     prefsNotifier.dispose();
     academicNotifier.dispose();
-    _hintTimer?.cancel();
+    _scheduleHintTimer?.cancel();
+    _academicHintTimer?.cancel();
+    _globalHintTimer?.cancel();
     cancelAutoUpdate();
     _appearanceTimer?.cancel();
     // 面板没点"完成"就被关掉（比如返回手势）时，别把刚拖好的值丢掉。

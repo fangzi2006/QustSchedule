@@ -15,6 +15,7 @@ import '../src/app_model.dart';
 import '../src/term_selector_helper.dart';
 import '../widgets/app_menu.dart';
 import '../widgets/floating_dock.dart';
+import '../widgets/status_popup.dart';
 
 class AcademicPage extends StatefulWidget {
   const AcademicPage({super.key, required this.model});
@@ -77,49 +78,65 @@ class _AcademicPageState extends State<AcademicPage> {
               const SizedBox(width: 4),
             ],
           ),
-          body: ListView(
-            padding: EdgeInsets.fromLTRB(
-              16,
-              8,
-              16,
-              FloatingDock.contentInset(context),
-            ),
+          body: Stack(
             children: <Widget>[
-              if (model.academicError != null) ...<Widget>[
-                _ErrorBanner(
-                  message: model.academicError!,
-                  onRetry: () => model.refreshAcademicData(),
+              Positioned.fill(
+                child: ListView(
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    8,
+                    16,
+                    FloatingDock.contentInset(context),
+                  ),
+                  children: <Widget>[
+                    if (model.academicError != null) ...<Widget>[
+                      _ErrorBanner(
+                        message: model.academicError!,
+                        onRetry: () => model.refreshAcademicData(),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    _SectionHeader(
+                      title: '考试安排',
+                      subtitle: model.exams.isNotEmpty
+                          ? '共 ${model.exams.length} 门考试'
+                          : null,
+                    ),
+                    const SizedBox(height: 8),
+                    _ExamSection(
+                      exams: model.exams,
+                      loading: model.academicLoading && model.exams.isEmpty,
+                    ),
+                    const SizedBox(height: 20),
+                    _SectionHeader(
+                      title: '成绩与绩点',
+                      subtitle: model.grades.isNotEmpty
+                          ? '共 ${model.grades.length} 门成绩'
+                          : null,
+                    ),
+                    const SizedBox(height: 8),
+                    if (model.isNotEvaluated) ...<Widget>[
+                      const _EvaluationWarningBanner(),
+                      const SizedBox(height: 12),
+                    ],
+                    _GradeSection(
+                      grades: model.grades,
+                      stats: model.gradeStats,
+                      isNotEvaluated: model.isNotEvaluated,
+                      loading: model.academicLoading && model.grades.isEmpty,
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 12),
-              ],
-              _SectionHeader(
-                title: '考试安排',
-                subtitle: model.exams.isNotEmpty
-                    ? '共 ${model.exams.length} 门考试'
-                    : null,
               ),
-              const SizedBox(height: 8),
-              _ExamSection(
-                exams: model.exams,
-                loading: model.academicLoading && model.exams.isEmpty,
-              ),
-              const SizedBox(height: 20),
-              _SectionHeader(
-                title: '成绩与绩点',
-                subtitle: model.grades.isNotEmpty
-                    ? '共 ${model.grades.length} 门成绩'
-                    : null,
-              ),
-              const SizedBox(height: 8),
-              if (model.isNotEvaluated) ...<Widget>[
-                const _EvaluationWarningBanner(),
-                const SizedBox(height: 12),
-              ],
-              _GradeSection(
-                grades: model.grades,
-                stats: model.gradeStats,
-                isNotEvaluated: model.isNotEvaluated,
-                loading: model.academicLoading && model.grades.isEmpty,
+              // 学业专属提示气泡：附着于学业页，随横向平移手势一同滑入/滑出。
+              Positioned(
+                top: 6,
+                right: 10,
+                child: ListenableBuilder(
+                  listenable: model,
+                  builder: (context, _) =>
+                      StatusPopup(model: model, scope: HintScope.academic),
+                ),
               ),
             ],
           ),

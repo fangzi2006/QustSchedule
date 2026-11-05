@@ -30,6 +30,7 @@ import '../widgets/app_menu.dart';
 import '../widgets/course_detail_sheet.dart';
 import '../widgets/course_tile.dart';
 import '../widgets/floating_dock.dart';
+import '../widgets/status_popup.dart';
 import '../widgets/time_wheel_picker.dart';
 import '../widgets/week_pager.dart';
 import 'appearance_sheet.dart';
@@ -128,6 +129,12 @@ class _SchedulePageState extends State<SchedulePage> {
             Positioned.fill(child: _body(context)),
             // "今"：只在看非本周时浮出来（替代原来占位置的"回到本周"按钮）。
             _TodayFab(model: model, week: _shownWeek),
+            // 课表专属提示气泡：附着于课表页，随横向平移手势一同滑入/滑出。
+            Positioned(
+              top: 6,
+              right: 10,
+              child: StatusPopup(model: model, scope: HintScope.schedule),
+            ),
           ],
         ),
       ),
