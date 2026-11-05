@@ -1075,7 +1075,7 @@ class _EvaluationWarningBanner extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '教务系统提示：本学期教学质量评价未完成，暂不开放成绩查询。请前往青科教务系统网页端完成学生评教后再查询。',
+                    '教务系统提示：本学期教学质量评价未完成，请前往青科教务系统网页端完成学生评教后再查询。',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: Colors.amber.shade900,
                       height: 1.35,
