@@ -182,7 +182,7 @@ class AcademicHttpClient {
         _protocol = options.protocol,
         _maxRedirects = options.maxRedirects ?? _defaultMaxRedirects,
         _maxBodyBytes = options.maxBodyBytes ?? _defaultMaxBodyBytes,
-        _timeoutMs = options.timeoutMs ?? 30000,
+        _timeoutMs = options.timeoutMs ?? 10000,
         _paceHosts = <String, int>{
           ..._defaultPaceHosts,
           ...(options.paceHosts ?? const <String, int>{}),

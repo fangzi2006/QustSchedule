@@ -67,6 +67,7 @@ void main() {
       expect(schedule.entries, isNotEmpty);
       expect(h.backend.fetchCount, 1);
       expect(h.backend.loginCount, 0, reason: 'Cookie 有效就不该登录');
+      expect(h.config?.requestTimeoutMs, 10000, reason: '客户端超时应统一设为 10 秒');
     });
 
     test('有快照时 bootstrap 原样返回；快照的 Cookie 会被带进客户端', () async {
@@ -436,6 +437,33 @@ void main() {
       await h.service.getSchedule();
 
       expect(stages, isEmpty);
+    });
+
+    test('考试与成绩查询遇 Cookie 失效重登时同样触发 relogin 阶段（行为一致性）', () async {
+      final h = _Harness();
+      final stages = <String>[];
+      h.service.onStage = stages.add;
+      await h.credentials.save(
+        _Harness.accountKey,
+        const Credentials('20240001', 'pw'),
+      );
+
+      h.backend.examsBehavior = (call, termId) async {
+        if (call == 1) throw expired();
+        return const <ExamItem>[];
+      };
+
+      await h.service.fetchExams();
+      expect(stages, contains(ScheduleService.stageRelogin));
+
+      stages.clear();
+      h.backend.gradesBehavior = (call, termId) async {
+        if (call == 1) throw expired();
+        return const <GradeItem>[];
+      };
+
+      await h.service.fetchGrades();
+      expect(stages, contains(ScheduleService.stageRelogin));
     });
   });
 

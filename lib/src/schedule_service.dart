@@ -210,6 +210,7 @@ class ScheduleService {
   Future<void> _reloginWithSavedCredentials() {
     final pending = _reloginFlight;
     if (pending != null) return pending;
+    onStage?.call(stageRelogin);
     final task = _loginWithSavedCredentials();
     _reloginFlight = task;
     return task.whenComplete(() {
@@ -333,7 +334,6 @@ class ScheduleService {
     }
     // 走到这里：Cookie 失效。回退到账密登录。
     final rollback = client.exportCookies();
-    onStage?.call(stageRelogin);
     await _reloginWithSavedCredentials();
     onStage?.call(stageFetchingSchedule);
 
@@ -463,6 +463,7 @@ class ScheduleService {
         baseUrl: _baseUrl,
         endpoints: qustZfEndpoints,
         cookies: snapshot,
+        requestTimeoutMs: 10000,
         onRequest: _recordRequest,
       ),
     );
