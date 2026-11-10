@@ -370,17 +370,18 @@ void main() {
     await tester.pumpAndSettle();
     await tester.pump(const Duration(seconds: 5));
 
-    // Next upcoming exam appears in hero card
-    expect(find.text('下一门待考科目'), findsWidgets);
-    expect(find.text('明天考试'), findsWidgets);
+    // Next upcoming exam appears in hero card and is NOT duplicated in bottom list
+    expect(find.text('下一门待考科目'), findsOneWidget);
+    expect(find.text('明天考试'), findsNWidgets(2)); // countdown badge + rawTimeStr in hero card
+    expect(find.byKey(const Key('academic-exam-list-card')), findsOneWidget);
 
     // Finished exam has '已结束' badge
     expect(find.text('已结束科目'), findsOneWidget);
     expect(find.text('已结束'), findsOneWidget);
 
-    // Vertical position ordering in list view:
-    // 下一门待考科目 (top) -> 较晚未来科目 -> 时间未定科目 -> 已结束科目 (bottom)
-    final yNext = tester.getTopLeft(find.text('下一门待考科目').last).dy;
+    // Vertical position ordering:
+    // 下一门待考科目 (top Hero card) -> 较晚未来科目 (list) -> 时间未定科目 (list) -> 已结束科目 (list bottom)
+    final yNext = tester.getTopLeft(find.text('下一门待考科目')).dy;
     final yLater = tester.getTopLeft(find.text('较晚未来科目')).dy;
     final yUndated = tester.getTopLeft(find.text('时间未定科目')).dy;
     final yFinished = tester.getTopLeft(find.text('已结束科目')).dy;
@@ -613,6 +614,55 @@ void main() {
         ),
       );
       expect(find.text('今天考试'), findsOneWidget);
+    });
+
+    testWidgets('NextExamHeroCard does not render examType but renders seatNumber', (
+      tester,
+    ) async {
+      final exam = ExamItem(
+        courseName: '高数',
+        examType: '2024-2025-1期末考试',
+        startTime: DateTime(2026, 11, 6, 8, 0),
+        seatNumber: '42',
+      );
+      await tester.pumpWidget(
+        _wrap(NextExamHeroCard(exam: exam, now: DateTime(2026, 11, 4))),
+      );
+      expect(find.text('高数'), findsOneWidget);
+      expect(find.text('座位号：42'), findsOneWidget);
+      expect(find.text('2024-2025-1期末考试'), findsNothing);
+    });
+
+    testWidgets('AcademicPage with single upcoming exam renders Hero card only and hides bottom list card', (
+      tester,
+    ) async {
+      final now = DateTime.now();
+      final backend = FakeBackend();
+      backend.examsBehavior = (_, _) async => <ExamItem>[
+        ExamItem(
+          courseName: '唯一考试科目',
+          startTime: now.add(const Duration(days: 2)),
+          endTime: now.add(const Duration(days: 2, hours: 2)),
+          rawTimeStr: '后天考试',
+          seatNumber: '15',
+        ),
+      ];
+
+      final model = _buildTestModel(backend: backend);
+      await tester.pumpWidget(_wrap(AcademicPage(model: model)));
+
+      final refreshBtn = find.byTooltip('刷新学业数据');
+      await tester.tap(refreshBtn);
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 5));
+
+      // 唯一考试只在顶部 Hero 卡片中展示 1 次，不重复出现在下方列表中
+      expect(find.text('唯一考试科目'), findsOneWidget);
+      expect(find.text('座位号：15'), findsOneWidget);
+      expect(find.byType(NextExamHeroCard), findsOneWidget);
+
+      // 下方没有剩余考试，不渲染下方的列表卡片
+      expect(find.byKey(const Key('academic-exam-list-card')), findsNothing);
     });
   });
 }

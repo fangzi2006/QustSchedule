@@ -460,37 +460,43 @@ class _ExamSection extends StatelessWidget {
       }
     }
 
+    final remainingExams = nextUpcoming != null
+        ? sortedExams.where((e) => e != nextUpcoming).toList()
+        : sortedExams;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         if (nextUpcoming != null) ...<Widget>[
           NextExamHeroCard(exam: nextUpcoming, now: current),
-          const SizedBox(height: 12),
+          if (remainingExams.isNotEmpty) const SizedBox(height: 12),
         ],
-        Card(
-          elevation: 0,
-          clipBehavior: Clip.antiAlias,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: BorderSide(
-              color: scheme.outlineVariant.withValues(alpha: 0.5),
+        if (remainingExams.isNotEmpty)
+          Card(
+            key: const Key('academic-exam-list-card'),
+            elevation: 0,
+            clipBehavior: Clip.antiAlias,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(
+                color: scheme.outlineVariant.withValues(alpha: 0.5),
+              ),
+            ),
+            child: ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: remainingExams.length,
+              separatorBuilder: (_, _) => const Divider(height: 0, indent: 16),
+              itemBuilder: (context, index) {
+                final exam = remainingExams[index];
+                return _ExamListTile(
+                  exam: exam,
+                  isNext: false,
+                  isPast: isExamPast(exam, current),
+                );
+              },
             ),
           ),
-          child: ListView.separated(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: sortedExams.length,
-            separatorBuilder: (_, _) => const Divider(height: 0, indent: 16),
-            itemBuilder: (context, index) {
-              final exam = sortedExams[index];
-              return _ExamListTile(
-                exam: exam,
-                isNext: exam == nextUpcoming,
-                isPast: isExamPast(exam, current),
-              );
-            },
-          ),
-        ),
       ],
     );
   }
@@ -575,14 +581,6 @@ class NextExamHeroCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
-                if (exam.examType.isNotEmpty)
-                  Text(
-                    exam.examType,
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
                 const Spacer(),
                 if (exam.seatNumber.isNotEmpty)
                   Container(
