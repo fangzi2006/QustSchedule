@@ -181,6 +181,61 @@ class _OverviewTab extends StatelessWidget {
             ),
           ),
         ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  '学业数据与通知调试',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  '清除当前学期的学业本地缓存与内存数据。清除后在学业页刷新，可重新比对并触发全局更新气泡通知。',
+                  style: TextStyle(fontSize: 12),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: <Widget>[
+                    FilledButton.tonalIcon(
+                      icon: const Icon(
+                        Icons.cleaning_services_rounded,
+                        size: 16,
+                      ),
+                      label: const Text('清除学业数据'),
+                      onPressed: () async {
+                        await model.clearAcademicDataForDebug();
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('已清除学业缓存与内存数据，更新学业数据可查看通知'),
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                        }
+                      },
+                    ),
+                    OutlinedButton.icon(
+                      icon: const Icon(
+                        Icons.notifications_active_outlined,
+                        size: 16,
+                      ),
+                      label: const Text('测试更新通知气泡'),
+                      onPressed: () {
+                        model.triggerAcademicUpdateHintForDebug('学业数据有更新');
+                      },
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
       ],
     );
   }

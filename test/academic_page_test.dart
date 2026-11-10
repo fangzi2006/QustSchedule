@@ -784,5 +784,39 @@ void main() {
       expect(model.globalHint, isEmpty);
       expect(model.isAcademicUpdateHint, isFalse);
     });
+
+    test('调试清除学业数据后刷新，可触发全局更新提示', () async {
+      final examCache = InMemoryExamCache();
+      await examCache.save('2026-2027-1', <ExamItem>[
+        const ExamItem(courseName: '现有高数'),
+      ]);
+
+      final backend = FakeBackend();
+      backend.examsBehavior = (_, _) async => <ExamItem>[
+        const ExamItem(courseName: '现有高数'),
+      ];
+
+      final model = _buildTestModel(backend: backend, examCache: examCache);
+      await model.signIn('2412345678', 'pw');
+      await model.loadAcademicData(termId: '2026-2027-1');
+
+      // 清除学业缓存与内存数据
+      await model.clearAcademicDataForDebug();
+      expect(model.exams, isEmpty);
+      expect(await examCache.load('2026-2027-1'), isNull);
+
+      // 刷新学业数据：因为处于调试清除状态，重新拉取后与基准对比发生更新，触发全局通知
+      await model.refreshAcademicData();
+
+      expect(model.globalHint, '学业数据有更新');
+      expect(model.isAcademicUpdateHint, isTrue);
+    });
+
+    test('triggerAcademicUpdateHintForDebug 可直接触发全局更新气泡', () {
+      final model = _buildTestModel();
+      model.triggerAcademicUpdateHintForDebug('测试更新通知');
+      expect(model.globalHint, '测试更新通知');
+      expect(model.isAcademicUpdateHint, isTrue);
+    });
   });
 }

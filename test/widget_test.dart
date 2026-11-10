@@ -2611,6 +2611,38 @@ void main() {
       expect(find.text('期初课'), findsOneWidget);
       expect(find.textContaining('1-2 周'), findsOneWidget);
     });
+
+    testWidgets('调试页提供清除学业数据与测试通知按钮', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(DebugPage(model: model)));
+
+      // 向上滚动概览列表展示底部的调试操作卡片
+      await tester.drag(find.byType(ListView).first, const Offset(0, -400));
+      await tester.pumpAndSettle();
+
+      final clearBtn = find.widgetWithText(FilledButton, '清除学业数据');
+      final testBubbleBtn = find.widgetWithText(OutlinedButton, '测试更新通知气泡');
+
+      // 概览页签下可以看到「学业数据与通知调试」模块
+      expect(find.text('学业数据与通知调试'), findsOneWidget);
+      expect(clearBtn, findsOneWidget);
+      expect(testBubbleBtn, findsOneWidget);
+
+      // 点击测试气泡按钮
+      await tester.tap(testBubbleBtn);
+      await tester.pump();
+      expect(model.globalHint, '学业数据有更新');
+      expect(model.isAcademicUpdateHint, isTrue);
+
+      // 点击清除学业数据按钮并弹出 SnackBar
+      await tester.tap(clearBtn);
+      await tester.pump();
+      expect(find.text('已清除学业缓存与内存数据，更新学业数据可查看通知'), findsOneWidget);
+
+      // 清理气泡与 SnackBar 的自动消失计时器
+      await tester.pump(const Duration(seconds: 4));
+    });
   });
 
   group('"今"按钮', () {

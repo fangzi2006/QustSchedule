@@ -1046,6 +1046,8 @@ class AppModel extends ChangeNotifier {
 
     final existingExams = await _examCache.load(target);
     final existingGrades = await _gradesCache.load(target);
+    final bool isDebugCleared = _academicDataClearedForDebug;
+    _academicDataClearedForDebug = false;
 
     _academicLoading = true;
     _academicError = null;
@@ -1096,13 +1098,13 @@ class AppModel extends ChangeNotifier {
       }
 
       final bool examsChanged =
-          existingExams != null &&
+          (existingExams != null || isDebugCleared) &&
           examRes is List<ExamItem> &&
-          !listEquals(existingExams.items, examRes);
+          !listEquals(existingExams?.items ?? const <ExamItem>[], examRes);
       final bool gradesChanged =
-          existingGrades != null &&
+          (existingGrades != null || isDebugCleared) &&
           gradeRes is List<GradeItem> &&
-          !listEquals(existingGrades.items, gradeRes);
+          !listEquals(existingGrades?.items ?? const <GradeItem>[], gradeRes);
 
       if (examsChanged && gradesChanged) {
         changeMsg = '学业数据有更新';
@@ -1742,6 +1744,8 @@ class AppModel extends ChangeNotifier {
     try {
       final existingExams = await _examCache.load(termId);
       final existingGrades = await _gradesCache.load(termId);
+      final bool isDebugCleared = _academicDataClearedForDebug;
+      _academicDataClearedForDebug = false;
 
       await academicService.syncCurrentTermAsync(termId: termId);
       if (_disposed || _status == AppStatus.needLogin) return;
@@ -1753,13 +1757,19 @@ class AppModel extends ChangeNotifier {
       final freshGrades = await _gradesCache.load(termId);
 
       final bool examsChanged =
-          existingExams != null &&
+          (existingExams != null || isDebugCleared) &&
           freshExams != null &&
-          !listEquals(existingExams.items, freshExams.items);
+          !listEquals(
+            existingExams?.items ?? const <ExamItem>[],
+            freshExams.items,
+          );
       final bool gradesChanged =
-          existingGrades != null &&
+          (existingGrades != null || isDebugCleared) &&
           freshGrades != null &&
-          !listEquals(existingGrades.items, freshGrades.items);
+          !listEquals(
+            existingGrades?.items ?? const <GradeItem>[],
+            freshGrades.items,
+          );
 
       String? changeMsg;
       if (examsChanged && gradesChanged) {
@@ -2030,6 +2040,7 @@ class AppModel extends ChangeNotifier {
   }
 
   bool _isAcademicUpdateHint = false;
+  bool _academicDataClearedForDebug = false;
 
   /// 当前展示的全局提示是否为学业数据更新提示。
   bool get isAcademicUpdateHint =>
@@ -2047,6 +2058,26 @@ class AppModel extends ChangeNotifier {
   @visibleForTesting
   void showAcademicUpdateHintForTest(String message) =>
       _showAcademicUpdateHint(message);
+
+  /// 手动触发一次学业更新全局气泡提示（调试专用）。
+  void triggerAcademicUpdateHintForDebug([String message = '学业数据有更新']) {
+    _showAcademicUpdateHint(message);
+  }
+
+  /// 清除当前学期的学业数据与缓存（调试专用）。
+  ///
+  /// 清空本地缓存与内存数据并标记调试清除状态，确保随后的学业数据获取能重新拉取网络并触发全局更新气泡通知。
+  Future<void> clearAcademicDataForDebug() async {
+    _exams = const <ExamItem>[];
+    _grades = const <GradeItem>[];
+    _isNotEvaluated = false;
+    _loadedAcademicTerm = '';
+    await _examCache.clear();
+    await _gradesCache.clear();
+    _academicDataClearedForDebug = true;
+    academicNotifier.notifyListeners();
+    notifyListeners();
+  }
 
   void _showHint(
     String message, {
