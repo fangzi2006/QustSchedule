@@ -60,7 +60,7 @@ SnackBar buildAppSnackBar(
     behavior: SnackBarBehavior.floating,
     margin: margin,
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-    backgroundColor: scheme.surfaceContainerHighest,
+    backgroundColor: scheme.surface,
     elevation: 3,
     shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(20),

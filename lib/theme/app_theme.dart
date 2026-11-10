@@ -103,7 +103,7 @@ ThemeData buildLightTheme() {
           width: 1,
         ),
       ),
-      backgroundColor: scheme.surfaceContainerHighest,
+      backgroundColor: scheme.surface,
       contentTextStyle: TextStyle(
         color: scheme.onSurface,
         fontSize: 14,
