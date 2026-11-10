@@ -57,6 +57,7 @@ class _HomeShellState extends State<HomeShell> {
   ];
 
   int _index = 0;
+  final GlobalKey<FloatingDockState> _dockKey = GlobalKey<FloatingDockState>();
 
   /// 课表页的 widget 实例**只创建一次**。
   ///
@@ -127,6 +128,7 @@ class _HomeShellState extends State<HomeShell> {
             right: 0,
             bottom: 0,
             child: FloatingDock(
+              key: _dockKey,
               index: _index,
               items: _items,
               onPillProgress: _onPillProgress,
@@ -161,7 +163,12 @@ class _HomeShellState extends State<HomeShell> {
     if (_index == targetIndex) return;
     if (targetIndex == 1) _ensureAcademicPage();
     if (targetIndex == 2) _ensureSettingsPage();
-    setState(() => _index = targetIndex);
+    final dockState = _dockKey.currentState;
+    if (dockState != null && dockState.canAnimate) {
+      dockState.animateToIndex(targetIndex);
+    } else {
+      setState(() => _index = targetIndex);
+    }
   }
 
   /// 页面吸附到位、真的换页了（由翻页器在到位时通知）。

@@ -1128,6 +1128,7 @@ class AppModel extends ChangeNotifier {
           );
         }
       } else if (changeMsg != null) {
+        clearAcademicHint();
         _showAcademicUpdateHint(changeMsg);
       } else if (showHint) {
         _showHint(
@@ -2059,11 +2060,6 @@ class AppModel extends ChangeNotifier {
   void showAcademicUpdateHintForTest(String message) =>
       _showAcademicUpdateHint(message);
 
-  /// 手动触发一次学业更新全局气泡提示（调试专用）。
-  void triggerAcademicUpdateHintForDebug([String message = '学业数据有更新']) {
-    _showAcademicUpdateHint(message);
-  }
-
   /// 清除当前学期的学业数据与缓存（调试专用）。
   ///
   /// 清空本地缓存与内存数据并标记调试清除状态，确保随后的学业数据获取能重新拉取网络并触发全局更新气泡通知。
@@ -2075,6 +2071,7 @@ class AppModel extends ChangeNotifier {
     await _examCache.clear();
     await _gradesCache.clear();
     _academicDataClearedForDebug = true;
+    clearAcademicHint();
     academicNotifier.notifyListeners();
     notifyListeners();
   }

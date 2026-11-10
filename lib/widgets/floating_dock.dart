@@ -71,10 +71,10 @@ class FloatingDock extends StatefulWidget {
       height + 16 + MediaQuery.of(context).padding.bottom + 12;
 
   @override
-  State<FloatingDock> createState() => _FloatingDockState();
+  State<FloatingDock> createState() => FloatingDockState();
 }
 
-class _FloatingDockState extends State<FloatingDock>
+class FloatingDockState extends State<FloatingDock>
     with TickerProviderStateMixin {
   final GlobalKey _stackKey = GlobalKey();
   final List<GlobalKey> _itemKeys = <GlobalKey>[];
@@ -148,13 +148,31 @@ class _FloatingDockState extends State<FloatingDock>
       if (_preview != widget.index) {
         _preview = widget.index;
         if (_rects.length == widget.items.length) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
-            _snapTo(_rects[widget.index]);
-          });
+          _placePill(_rects[widget.index]);
+          _reportPillProgress();
         }
       }
     }
+  }
+
+  /// 按钮矩形是否均已测量就绪，可供动画驱动。
+  bool get canAnimate => _rects.length == widget.items.length;
+
+  /// 编程式平滑滑动到指定项（例如点击通知气泡时由外壳驱动）。
+  void animateToIndex(int target) {
+    if (target < 0 || target >= widget.items.length) return;
+    if (_rects.length != widget.items.length) {
+      _preview = target;
+      return;
+    }
+    setState(() {
+      _pressed = false;
+      _dragging = false;
+      _preview = target;
+      _snapTo(_rects[target]);
+    });
+    _syncLift();
+    _reportPillProgress();
   }
 
   @override

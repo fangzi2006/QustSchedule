@@ -198,39 +198,20 @@ class _OverviewTab extends StatelessWidget {
                   style: TextStyle(fontSize: 12),
                 ),
                 const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: <Widget>[
-                    FilledButton.tonalIcon(
-                      icon: const Icon(
-                        Icons.cleaning_services_rounded,
-                        size: 16,
-                      ),
-                      label: const Text('清除学业数据'),
-                      onPressed: () async {
-                        await model.clearAcademicDataForDebug();
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('已清除学业缓存与内存数据，更新学业数据可查看通知'),
-                              duration: Duration(seconds: 2),
-                            ),
-                          );
-                        }
-                      },
-                    ),
-                    OutlinedButton.icon(
-                      icon: const Icon(
-                        Icons.notifications_active_outlined,
-                        size: 16,
-                      ),
-                      label: const Text('测试更新通知气泡'),
-                      onPressed: () {
-                        model.triggerAcademicUpdateHintForDebug('学业数据有更新');
-                      },
-                    ),
-                  ],
+                FilledButton.tonalIcon(
+                  icon: const Icon(Icons.cleaning_services_rounded, size: 16),
+                  label: const Text('清除学业数据'),
+                  onPressed: () async {
+                    await model.clearAcademicDataForDebug();
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('已清除学业缓存与内存数据，更新学业数据可查看通知'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    }
+                  },
                 ),
               ],
             ),

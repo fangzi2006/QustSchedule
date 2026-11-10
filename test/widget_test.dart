@@ -2330,13 +2330,31 @@ void main() {
       // 点击该全局气泡
       await tester.tap(find.text('考试安排有更新'));
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
 
       // 气泡被消除
       expect(find.text('考试安排有更新'), findsNothing);
 
-      // 页面已自动切换到学业页
+      // 页面已自动切换到学业页并处于激活状态
       expect(find.text('学业概览'), findsOneWidget);
+      final page0Ignore = tester.widget<IgnorePointer>(
+        find
+            .ancestor(
+              of: find.byKey(const ValueKey<String>('shell-page-0')),
+              matching: find.byType(IgnorePointer),
+            )
+            .first,
+      );
+      final page1Ignore = tester.widget<IgnorePointer>(
+        find
+            .ancestor(
+              of: find.byKey(const ValueKey<String>('shell-page-1')),
+              matching: find.byType(IgnorePointer),
+            )
+            .first,
+      );
+      expect(page0Ignore.ignoring, isTrue);
+      expect(page1Ignore.ignoring, isFalse);
     });
   });
 
@@ -2612,7 +2630,7 @@ void main() {
       expect(find.textContaining('1-2 周'), findsOneWidget);
     });
 
-    testWidgets('调试页提供清除学业数据与测试通知按钮', (tester) async {
+    testWidgets('调试页提供清除学业数据按钮', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(DebugPage(model: model)));
@@ -2622,25 +2640,17 @@ void main() {
       await tester.pumpAndSettle();
 
       final clearBtn = find.widgetWithText(FilledButton, '清除学业数据');
-      final testBubbleBtn = find.widgetWithText(OutlinedButton, '测试更新通知气泡');
 
       // 概览页签下可以看到「学业数据与通知调试」模块
       expect(find.text('学业数据与通知调试'), findsOneWidget);
       expect(clearBtn, findsOneWidget);
-      expect(testBubbleBtn, findsOneWidget);
-
-      // 点击测试气泡按钮
-      await tester.tap(testBubbleBtn);
-      await tester.pump();
-      expect(model.globalHint, '学业数据有更新');
-      expect(model.isAcademicUpdateHint, isTrue);
 
       // 点击清除学业数据按钮并弹出 SnackBar
       await tester.tap(clearBtn);
       await tester.pump();
       expect(find.text('已清除学业缓存与内存数据，更新学业数据可查看通知'), findsOneWidget);
 
-      // 清理气泡与 SnackBar 的自动消失计时器
+      // 清理 SnackBar 的自动消失计时器
       await tester.pump(const Duration(seconds: 4));
     });
   });

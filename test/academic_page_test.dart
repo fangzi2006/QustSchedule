@@ -748,6 +748,7 @@ void main() {
 
       expect(model.globalHint, '学业数据有更新');
       expect(model.isAcademicUpdateHint, isTrue);
+      expect(model.academicHint, isEmpty);
     });
 
     test('数据与缓存一致时，不触发全局提示，显示局部「已更新」', () async {
@@ -810,13 +811,7 @@ void main() {
 
       expect(model.globalHint, '学业数据有更新');
       expect(model.isAcademicUpdateHint, isTrue);
-    });
-
-    test('triggerAcademicUpdateHintForDebug 可直接触发全局更新气泡', () {
-      final model = _buildTestModel();
-      model.triggerAcademicUpdateHintForDebug('测试更新通知');
-      expect(model.globalHint, '测试更新通知');
-      expect(model.isAcademicUpdateHint, isTrue);
+      expect(model.academicHint, isEmpty);
     });
   });
 }
