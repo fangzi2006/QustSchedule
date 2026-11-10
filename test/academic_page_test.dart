@@ -14,7 +14,11 @@ import 'support/fake_backend.dart';
 
 const _baseUrl = 'https://jw.example.edu.cn';
 
-AppModel _buildTestModel({FakeBackend? backend}) {
+AppModel _buildTestModel({
+  FakeBackend? backend,
+  ExamCache? examCache,
+  GradesCache? gradesCache,
+}) {
   final fake = backend ?? FakeBackend();
   final credentials = InMemoryCredentialStore();
   return AppModel(
@@ -25,8 +29,8 @@ AppModel _buildTestModel({FakeBackend? backend}) {
       baseUrl: _baseUrl,
     ),
     preferences: Preferences.inMemory(),
-    examCache: InMemoryExamCache(),
-    gradesCache: InMemoryGradesCache(),
+    examCache: examCache ?? InMemoryExamCache(),
+    gradesCache: gradesCache ?? InMemoryGradesCache(),
     schoolBaseUrl: _baseUrl,
   );
 }
@@ -372,7 +376,10 @@ void main() {
 
     // Next upcoming exam appears in hero card and is NOT duplicated in bottom list
     expect(find.text('下一门待考科目'), findsOneWidget);
-    expect(find.text('明天考试'), findsNWidgets(2)); // countdown badge + rawTimeStr in hero card
+    expect(
+      find.text('明天考试'),
+      findsNWidgets(2),
+    ); // countdown badge + rawTimeStr in hero card
     expect(find.byKey(const Key('academic-exam-list-card')), findsOneWidget);
 
     // Finished exam has '已结束' badge
@@ -616,53 +623,166 @@ void main() {
       expect(find.text('今天考试'), findsOneWidget);
     });
 
-    testWidgets('NextExamHeroCard does not render examType but renders seatNumber', (
-      tester,
-    ) async {
-      final exam = ExamItem(
-        courseName: '高数',
-        examType: '2024-2025-1期末考试',
-        startTime: DateTime(2026, 11, 6, 8, 0),
-        seatNumber: '42',
-      );
-      await tester.pumpWidget(
-        _wrap(NextExamHeroCard(exam: exam, now: DateTime(2026, 11, 4))),
-      );
-      expect(find.text('高数'), findsOneWidget);
-      expect(find.text('座位号：42'), findsOneWidget);
-      expect(find.text('2024-2025-1期末考试'), findsNothing);
-    });
+    testWidgets(
+      'NextExamHeroCard does not render examType but renders seatNumber',
+      (tester) async {
+        final exam = ExamItem(
+          courseName: '高数',
+          examType: '2024-2025-1期末考试',
+          startTime: DateTime(2026, 11, 6, 8, 0),
+          seatNumber: '42',
+        );
+        await tester.pumpWidget(
+          _wrap(NextExamHeroCard(exam: exam, now: DateTime(2026, 11, 4))),
+        );
+        expect(find.text('高数'), findsOneWidget);
+        expect(find.text('座位号：42'), findsOneWidget);
+        expect(find.text('2024-2025-1期末考试'), findsNothing);
+      },
+    );
 
-    testWidgets('AcademicPage with single upcoming exam renders Hero card only and hides bottom list card', (
-      tester,
-    ) async {
-      final now = DateTime.now();
+    testWidgets(
+      'AcademicPage with single upcoming exam renders Hero card only and hides bottom list card',
+      (tester) async {
+        final now = DateTime.now();
+        final backend = FakeBackend();
+        backend.examsBehavior = (_, _) async => <ExamItem>[
+          ExamItem(
+            courseName: '唯一考试科目',
+            startTime: now.add(const Duration(days: 2)),
+            endTime: now.add(const Duration(days: 2, hours: 2)),
+            rawTimeStr: '后天考试',
+            seatNumber: '15',
+          ),
+        ];
+
+        final model = _buildTestModel(backend: backend);
+        await tester.pumpWidget(_wrap(AcademicPage(model: model)));
+
+        final refreshBtn = find.byTooltip('刷新学业数据');
+        await tester.tap(refreshBtn);
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(seconds: 5));
+
+        // 唯一考试只在顶部 Hero 卡片中展示 1 次，不重复出现在下方列表中
+        expect(find.text('唯一考试科目'), findsOneWidget);
+        expect(find.text('座位号：15'), findsOneWidget);
+        expect(find.byType(NextExamHeroCard), findsOneWidget);
+
+        // 下方没有剩余考试，不渲染下方的列表卡片
+        expect(find.byKey(const Key('academic-exam-list-card')), findsNothing);
+      },
+    );
+  });
+
+  group('学业更新差异比对与全局气泡通知', () {
+    test('本地已有考试缓存，刷新拉取到不同考试时触发「考试安排有更新」全局提示', () async {
+      final examCache = InMemoryExamCache();
+      await examCache.save('2026-2027-1', <ExamItem>[
+        const ExamItem(courseName: '旧高数'),
+      ]);
+
       final backend = FakeBackend();
       backend.examsBehavior = (_, _) async => <ExamItem>[
-        ExamItem(
-          courseName: '唯一考试科目',
-          startTime: now.add(const Duration(days: 2)),
-          endTime: now.add(const Duration(days: 2, hours: 2)),
-          rawTimeStr: '后天考试',
-          seatNumber: '15',
-        ),
+        const ExamItem(courseName: '新高数'),
+      ];
+
+      final model = _buildTestModel(backend: backend, examCache: examCache);
+      await model.signIn('2412345678', 'pw');
+      model.setAcademicTerm('2026-2027-1');
+
+      await model.refreshAcademicData();
+
+      expect(model.globalHint, '考试安排有更新');
+      expect(model.isAcademicUpdateHint, isTrue);
+    });
+
+    test('本地已有成绩缓存，刷新拉取到不同成绩时触发「成绩有更新」全局提示', () async {
+      final gradesCache = InMemoryGradesCache();
+      await gradesCache.save('2026-2027-1', <GradeItem>[
+        const GradeItem(courseName: '高等数学', credit: 4.0, rawScore: '85'),
+      ]);
+
+      final backend = FakeBackend();
+      backend.gradesBehavior = (_, _) async => <GradeItem>[
+        const GradeItem(courseName: '高等数学', credit: 4.0, rawScore: '90'),
+      ];
+
+      final model = _buildTestModel(backend: backend, gradesCache: gradesCache);
+      await model.signIn('2412345678', 'pw');
+      model.setAcademicTerm('2026-2027-1');
+
+      await model.refreshAcademicData();
+
+      expect(model.globalHint, '成绩有更新');
+      expect(model.isAcademicUpdateHint, isTrue);
+    });
+
+    test('本地考试和成绩均有变动时触发「学业数据有更新」全局提示', () async {
+      final examCache = InMemoryExamCache();
+      await examCache.save('2026-2027-1', <ExamItem>[
+        const ExamItem(courseName: '旧高数'),
+      ]);
+      final gradesCache = InMemoryGradesCache();
+      await gradesCache.save('2026-2027-1', <GradeItem>[
+        const GradeItem(courseName: '旧英语', credit: 2.0, rawScore: '80'),
+      ]);
+
+      final backend = FakeBackend();
+      backend.examsBehavior = (_, _) async => <ExamItem>[
+        const ExamItem(courseName: '新高数'),
+      ];
+      backend.gradesBehavior = (_, _) async => <GradeItem>[
+        const GradeItem(courseName: '新英语', credit: 2.0, rawScore: '95'),
+      ];
+
+      final model = _buildTestModel(
+        backend: backend,
+        examCache: examCache,
+        gradesCache: gradesCache,
+      );
+      await model.signIn('2412345678', 'pw');
+      model.setAcademicTerm('2026-2027-1');
+
+      await model.refreshAcademicData();
+
+      expect(model.globalHint, '学业数据有更新');
+      expect(model.isAcademicUpdateHint, isTrue);
+    });
+
+    test('数据与缓存一致时，不触发全局提示，显示局部「已更新」', () async {
+      final sameExams = <ExamItem>[const ExamItem(courseName: '高等数学')];
+      final examCache = InMemoryExamCache();
+      await examCache.save('2026-2027-1', sameExams);
+
+      final backend = FakeBackend();
+      backend.examsBehavior = (_, _) async => sameExams;
+
+      final model = _buildTestModel(backend: backend, examCache: examCache);
+      await model.signIn('2412345678', 'pw');
+      model.setAcademicTerm('2026-2027-1');
+
+      await model.refreshAcademicData();
+
+      expect(model.globalHint, isEmpty);
+      expect(model.isAcademicUpdateHint, isFalse);
+      expect(model.academicHint, '已更新');
+    });
+
+    test('本地原本无缓存（初次加载），不触发全局更新气泡', () async {
+      final backend = FakeBackend();
+      backend.examsBehavior = (_, _) async => <ExamItem>[
+        const ExamItem(courseName: '初次拉取的科目'),
       ];
 
       final model = _buildTestModel(backend: backend);
-      await tester.pumpWidget(_wrap(AcademicPage(model: model)));
+      await model.signIn('2412345678', 'pw');
+      model.setAcademicTerm('2026-2027-1');
 
-      final refreshBtn = find.byTooltip('刷新学业数据');
-      await tester.tap(refreshBtn);
-      await tester.pumpAndSettle();
-      await tester.pump(const Duration(seconds: 5));
+      await model.refreshAcademicData();
 
-      // 唯一考试只在顶部 Hero 卡片中展示 1 次，不重复出现在下方列表中
-      expect(find.text('唯一考试科目'), findsOneWidget);
-      expect(find.text('座位号：15'), findsOneWidget);
-      expect(find.byType(NextExamHeroCard), findsOneWidget);
-
-      // 下方没有剩余考试，不渲染下方的列表卡片
-      expect(find.byKey(const Key('academic-exam-list-card')), findsNothing);
+      expect(model.globalHint, isEmpty);
+      expect(model.isAcademicUpdateHint, isFalse);
     });
   });
 }

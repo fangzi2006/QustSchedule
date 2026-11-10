@@ -2309,6 +2309,35 @@ void main() {
       expect(globalPos.dx, greaterThanOrEqualTo(0));
       expect(globalPos.dx, lessThan(800));
     });
+
+    testWidgets('点击学业更新全局气泡，自动平移切换到学业页并清除提示', (tester) async {
+      final rig = buildModel();
+      rig.hydrateForTest(
+        schedule: sparseSchedule(),
+        week: 1,
+        termStart: DateTime(2026, 3, 2),
+      );
+      await tester.pumpWidget(wrap(HomeShell(model: rig)));
+
+      // 默认在课表页 (Tab 0)
+      expect(find.text('课表'), findsWidgets);
+
+      // 触发学业更新全局气泡
+      rig.showAcademicUpdateHintForTest('考试安排有更新');
+      await tester.pump();
+      expect(find.text('考试安排有更新'), findsOneWidget);
+
+      // 点击该全局气泡
+      await tester.tap(find.text('考试安排有更新'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // 气泡被消除
+      expect(find.text('考试安排有更新'), findsNothing);
+
+      // 页面已自动切换到学业页
+      expect(find.text('学业概览'), findsOneWidget);
+    });
   });
 
   group('设置页账号区', () {

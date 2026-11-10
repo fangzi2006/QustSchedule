@@ -18,11 +18,13 @@ class StatusPopup extends StatelessWidget {
     required this.model,
     this.scope = HintScope.global,
     this.onOpenDebug,
+    this.onNavigateToAcademic,
   });
 
   final AppModel model;
   final HintScope scope;
   final VoidCallback? onOpenDebug;
+  final VoidCallback? onNavigateToAcademic;
 
   @override
   Widget build(BuildContext context) {
@@ -63,7 +65,11 @@ class StatusPopup extends StatelessWidget {
                     if (model.status == AppStatus.failed) {
                       model.dismissError();
                     } else {
+                      final wasAcademicUpdate = model.isAcademicUpdateHint;
                       model.clearGlobalHint();
+                      if (wasAcademicUpdate) {
+                        onNavigateToAcademic?.call();
+                      }
                     }
                     break;
                   case HintScope.schedule:
@@ -114,7 +120,12 @@ class StatusPopup extends StatelessWidget {
         }
         if (model.globalHint.isNotEmpty) {
           final error = model.globalHintIsError;
-          return _PopupData(text: model.globalHint, busy: !error, error: error);
+          final isAcademicUpdate = model.isAcademicUpdateHint;
+          return _PopupData(
+            text: model.globalHint,
+            busy: !error && !isAcademicUpdate,
+            error: error,
+          );
         }
         if (model.status == AppStatus.loading) {
           // 有具体文案就用它（例如"正在切换到「线路 2」…"），没写才退回通用文案。

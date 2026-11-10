@@ -1044,12 +1044,16 @@ class AppModel extends ChangeNotifier {
       _loadedAcademicTerm = target;
     }
 
+    final existingExams = await _examCache.load(target);
+    final existingGrades = await _gradesCache.load(target);
+
     _academicLoading = true;
     _academicError = null;
     academicNotifier.notifyListeners();
     if (showHint) {
       _showHint('正在更新学业数据…', scope: HintScope.academic);
     }
+    String? changeMsg;
 
     try {
       Future<dynamic> safeRun(Future<dynamic> f) async {
@@ -1090,26 +1094,45 @@ class AppModel extends ChangeNotifier {
       } else if (gradeRes != null) {
         _academicError ??= _describeAcademicError(gradeRes);
       }
+
+      final bool examsChanged =
+          existingExams != null &&
+          examRes is List<ExamItem> &&
+          !listEquals(existingExams.items, examRes);
+      final bool gradesChanged =
+          existingGrades != null &&
+          gradeRes is List<GradeItem> &&
+          !listEquals(existingGrades.items, gradeRes);
+
+      if (examsChanged && gradesChanged) {
+        changeMsg = '学业数据有更新';
+      } else if (examsChanged) {
+        changeMsg = '考试安排有更新';
+      } else if (gradesChanged) {
+        changeMsg = '成绩有更新';
+      }
     } catch (e) {
       _academicError ??= _describeAcademicError(e);
     } finally {
       _academicLoading = false;
       academicNotifier.notifyListeners();
-      if (showHint) {
-        if (_academicError != null) {
+      if (_academicError != null) {
+        if (showHint) {
           _showHint(
             '更新失败：$_academicError',
             error: true,
             clearAfter: const Duration(seconds: 4),
             scope: HintScope.academic,
           );
-        } else {
-          _showHint(
-            '已更新',
-            clearAfter: const Duration(milliseconds: 1500),
-            scope: HintScope.academic,
-          );
         }
+      } else if (changeMsg != null) {
+        _showAcademicUpdateHint(changeMsg);
+      } else if (showHint) {
+        _showHint(
+          '已更新',
+          clearAfter: const Duration(milliseconds: 1500),
+          scope: HintScope.academic,
+        );
       }
     }
   }
@@ -1717,13 +1740,41 @@ class AppModel extends ChangeNotifier {
     final oldSuppress = _suppressStageHints;
     _suppressStageHints = true;
     try {
+      final existingExams = await _examCache.load(termId);
+      final existingGrades = await _gradesCache.load(termId);
+
       await academicService.syncCurrentTermAsync(termId: termId);
       if (_disposed || _status == AppStatus.needLogin) return;
       if (academicTermId == termId) {
         await _restoreCachedAcademicData(termId);
       }
+
+      final freshExams = await _examCache.load(termId);
+      final freshGrades = await _gradesCache.load(termId);
+
+      final bool examsChanged =
+          existingExams != null &&
+          freshExams != null &&
+          !listEquals(existingExams.items, freshExams.items);
+      final bool gradesChanged =
+          existingGrades != null &&
+          freshGrades != null &&
+          !listEquals(existingGrades.items, freshGrades.items);
+
+      String? changeMsg;
+      if (examsChanged && gradesChanged) {
+        changeMsg = '学业数据有更新';
+      } else if (examsChanged) {
+        changeMsg = '考试安排有更新';
+      } else if (gradesChanged) {
+        changeMsg = '成绩有更新';
+      }
+
+      if (changeMsg != null) {
+        _showAcademicUpdateHint(changeMsg);
+      }
     } catch (_) {
-      // 绝不上抛或弹通知
+      // 绝不上抛或弹网络错误通知
     } finally {
       _suppressStageHints = oldSuppress;
     }
@@ -1978,9 +2029,29 @@ class AppModel extends ChangeNotifier {
     }
   }
 
+  bool _isAcademicUpdateHint = false;
+
+  /// 当前展示的全局提示是否为学业数据更新提示。
+  bool get isAcademicUpdateHint =>
+      _isAcademicUpdateHint && _globalHint.isNotEmpty;
+
+  void _showAcademicUpdateHint(String message) {
+    _showHint(
+      message,
+      isAcademicUpdate: true,
+      scope: HintScope.global,
+      clearAfter: const Duration(seconds: 2),
+    );
+  }
+
+  @visibleForTesting
+  void showAcademicUpdateHintForTest(String message) =>
+      _showAcademicUpdateHint(message);
+
   void _showHint(
     String message, {
     bool error = false,
+    bool isAcademicUpdate = false,
     Duration? clearAfter,
     HintScope scope = HintScope.global,
   }) {
@@ -2012,11 +2083,13 @@ class AppModel extends ChangeNotifier {
       case HintScope.global:
         _globalHint = message;
         _globalHintIsError = error;
+        _isAcademicUpdateHint = isAcademicUpdate;
         _globalHintTimer?.cancel();
         if (clearAfter != null) {
           _globalHintTimer = Timer(clearAfter, () {
             if (_disposed) return;
             _globalHint = '';
+            _isAcademicUpdateHint = false;
             notifyListeners();
           });
         }
@@ -2041,6 +2114,7 @@ class AppModel extends ChangeNotifier {
 
   void clearGlobalHint() {
     _globalHintTimer?.cancel();
+    _isAcademicUpdateHint = false;
     if (_globalHint.isEmpty) return;
     _globalHint = '';
     notifyListeners();

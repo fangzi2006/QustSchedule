@@ -147,12 +147,21 @@ class _HomeShellState extends State<HomeShell> {
                 model: widget.model,
                 scope: HintScope.global,
                 onOpenDebug: _openDebug,
+                onNavigateToAcademic: () => _switchToPage(1),
               ),
             ),
           ),
         ],
       ),
     );
+  }
+
+  void _switchToPage(int targetIndex) {
+    if (targetIndex < 0 || targetIndex >= _items.length) return;
+    if (_index == targetIndex) return;
+    if (targetIndex == 1) _ensureAcademicPage();
+    if (targetIndex == 2) _ensureSettingsPage();
+    setState(() => _index = targetIndex);
   }
 
   /// 页面吸附到位、真的换页了（由翻页器在到位时通知）。
@@ -242,6 +251,15 @@ class _ShellPagerState extends State<_ShellPager>
   void initState() {
     super.initState();
     _controller.addListener(_onTick);
+  }
+
+  @override
+  void didUpdateWidget(_ShellPager oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.index != widget.index &&
+        _controller.value != widget.index.toDouble()) {
+      _controller.value = widget.index.toDouble();
+    }
   }
 
   @override
