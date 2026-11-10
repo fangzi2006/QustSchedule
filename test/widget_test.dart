@@ -18,6 +18,7 @@ import 'package:qustschedule/pages/timetable_edit_page.dart';
 import 'package:qustschedule/pages/timetable_list_page.dart';
 import 'package:qustschedule/widgets/course_tile.dart';
 import 'package:qustschedule/widgets/floating_dock.dart';
+import 'package:qustschedule/widgets/app_snack_bar.dart';
 import 'package:qustschedule/src/app_model.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
 import 'package:qustschedule/src/reminder_gateway.dart';
@@ -3205,6 +3206,120 @@ void main() {
 
       rig.service.dispose();
       debugDefaultTargetPlatformOverride = null;
+    });
+  });
+
+  group('AppSnackBar 现代悬浮胶囊', () {
+    testWidgets('showAppSnackBar 渲染图标、文字与操作按钮', (tester) async {
+      bool actionPressed = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => ElevatedButton(
+                onPressed: () {
+                  showAppSnackBar(
+                    context,
+                    message: '测试轻量胶囊',
+                    type: AppSnackBarType.success,
+                    action: SnackBarAction(
+                      label: '撤销',
+                      onPressed: () => actionPressed = true,
+                    ),
+                  );
+                },
+                child: const Text('触发提示'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('触发提示'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('测试轻量胶囊'), findsOneWidget);
+      expect(find.byIcon(Icons.check_circle_rounded), findsOneWidget);
+      expect(find.text('撤销'), findsOneWidget);
+
+      await tester.tap(find.text('撤销'));
+      await tester.pumpAndSettle();
+      expect(actionPressed, isTrue);
+
+      await tester.pump(const Duration(seconds: 3));
+    });
+
+    testWidgets('showAppSnackBar 支持避让 Dock (aboveDock)', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => ElevatedButton(
+                onPressed: () {
+                  showAppSnackBar(
+                    context,
+                    message: 'Dock 避让测试',
+                    type: AppSnackBarType.info,
+                    aboveDock: true,
+                  );
+                },
+                child: const Text('触发避让提示'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('触发避让提示'));
+      await tester.pump();
+
+      expect(find.text('Dock 避让测试'), findsOneWidget);
+      expect(find.byIcon(Icons.info_outline_rounded), findsOneWidget);
+
+      final snackBarFinder = find.byType(SnackBar);
+      final SnackBar snackBar = tester.widget(snackBarFinder);
+      expect(snackBar.margin, isNotNull);
+      final margin = snackBar.margin as EdgeInsets;
+      // 避让底栏，底部边距应明显大于普通边距（大于 60）
+      expect(margin.bottom, greaterThan(60));
+
+      await tester.pump(const Duration(seconds: 3));
+    });
+
+    testWidgets('连续调用 showAppSnackBar 自动清理上一个，不排队阻塞', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Column(
+                children: [
+                  ElevatedButton(
+                    onPressed: () => showAppSnackBar(context, message: '第一条消息'),
+                    child: const Text('消息1'),
+                  ),
+                  ElevatedButton(
+                    onPressed: () => showAppSnackBar(context, message: '第二条消息'),
+                    child: const Text('消息2'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('消息1'));
+      await tester.pump();
+      expect(find.text('第一条消息'), findsOneWidget);
+
+      // 紧接着发第二条
+      await tester.tap(find.text('消息2'));
+      await tester.pump();
+
+      expect(find.text('第二条消息'), findsOneWidget);
+      expect(find.text('第一条消息'), findsNothing);
+
+      await tester.pump(const Duration(seconds: 3));
     });
   });
 }

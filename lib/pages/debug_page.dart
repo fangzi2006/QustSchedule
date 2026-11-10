@@ -17,6 +17,7 @@ import 'package:zf_academic/zf_academic.dart';
 import '../src/app_model.dart';
 import '../widgets/course_detail_sheet.dart'
     show compressWeeks, showEntryDetails;
+import '../widgets/app_snack_bar.dart';
 
 class DebugPage extends StatelessWidget {
   const DebugPage({super.key, required this.model});
@@ -204,11 +205,10 @@ class _OverviewTab extends StatelessWidget {
                   onPressed: () async {
                     await model.clearAcademicDataForDebug();
                     if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('已清除学业缓存与内存数据，更新学业数据可查看通知'),
-                          duration: Duration(seconds: 2),
-                        ),
+                      showAppSnackBar(
+                        context,
+                        message: '已清除学业缓存与内存数据，更新学业数据可查看通知',
+                        type: AppSnackBarType.success,
                       );
                     }
                   },
@@ -596,7 +596,5 @@ class _CollapsibleTextState extends State<_CollapsibleText> {
 
 void _copyText(BuildContext context, String text, String message) {
   Clipboard.setData(ClipboardData(text: text));
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
-  );
+  showAppSnackBar(context, message: message, type: AppSnackBarType.copy);
 }

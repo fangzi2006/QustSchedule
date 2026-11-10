@@ -96,7 +96,20 @@ ThemeData buildLightTheme() {
     ),
     snackBarTheme: SnackBarThemeData(
       behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(
+          color: scheme.outlineVariant.withValues(alpha: 0.6),
+          width: 1,
+        ),
+      ),
+      backgroundColor: scheme.surfaceContainerHighest,
+      contentTextStyle: TextStyle(
+        color: scheme.onSurface,
+        fontSize: 14,
+        fontWeight: FontWeight.w500,
+      ),
+      elevation: 3,
     ),
   );
 }

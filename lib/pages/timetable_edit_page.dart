@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import '../src/app_model.dart';
 import '../src/timetable.dart';
 import '../widgets/time_wheel_picker.dart';
+import '../widgets/app_snack_bar.dart';
 
 class TimetableEditPage extends StatefulWidget {
   const TimetableEditPage({
@@ -541,9 +542,7 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
 
   void _toast(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    showAppSnackBar(context, message: message);
   }
 }
 

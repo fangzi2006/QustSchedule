@@ -15,6 +15,7 @@ import 'changelog_page.dart';
 import 'debug_page.dart';
 import 'update_dialog.dart';
 import 'update_proxy_page.dart';
+import '../widgets/app_snack_bar.dart';
 
 /// 项目主页（源码与发行版）：写入「项目主页与源码」，满足 GPL 的源码获取告知要求。
 const String kProjectHomeUrl = 'https://github.com/fangzi2006/QustSchedule';
@@ -47,8 +48,6 @@ class _AboutPageState extends State<AboutPage> {
       _lastCheckHadError = false;
     });
 
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
-
     try {
       final service = UpdateService();
       final result = await service.checkForUpdatesWithFallback(
@@ -75,12 +74,10 @@ class _AboutPageState extends State<AboutPage> {
           setState(() {
             _updateStatusText = '青科课表通已是最新版本 (v$appVersion)';
           });
-          scaffoldMessenger.showSnackBar(
-            SnackBar(
-              content: Text('已是最新版本 (v$appVersion)'),
-              behavior: SnackBarBehavior.floating,
-              duration: const Duration(seconds: 2),
-            ),
+          showAppSnackBar(
+            context,
+            message: '已是最新版本 (v$appVersion)',
+            type: AppSnackBarType.success,
           );
           break;
         case UpdateStatus.rateLimited:
@@ -88,22 +85,21 @@ class _AboutPageState extends State<AboutPage> {
             _lastCheckHadError = true;
             _updateStatusText = 'API 访问受限，请稍后再试';
           });
-          scaffoldMessenger.showSnackBar(
-            SnackBar(
-              content: Text(result.errorMessage ?? '检查更新过于频繁，请稍后再试'),
-              behavior: SnackBarBehavior.floating,
-              action: SnackBarAction(
-                label: '代理设置',
-                onPressed: () {
-                  if (mounted) {
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => UpdateProxyPage(model: widget.model),
-                      ),
-                    );
-                  }
-                },
-              ),
+          showAppSnackBar(
+            context,
+            message: result.errorMessage ?? '检查更新过于频繁，请稍后再试',
+            type: AppSnackBarType.error,
+            action: SnackBarAction(
+              label: '代理设置',
+              onPressed: () {
+                if (mounted) {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => UpdateProxyPage(model: widget.model),
+                    ),
+                  );
+                }
+              },
             ),
           );
           break;
@@ -112,22 +108,21 @@ class _AboutPageState extends State<AboutPage> {
             _lastCheckHadError = true;
             _updateStatusText = '网络超时或节点不可用';
           });
-          scaffoldMessenger.showSnackBar(
-            SnackBar(
-              content: Text(result.errorMessage ?? '网络连接超时，可尝试切换加速节点'),
-              behavior: SnackBarBehavior.floating,
-              action: SnackBarAction(
-                label: '切换代理',
-                onPressed: () {
-                  if (mounted) {
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => UpdateProxyPage(model: widget.model),
-                      ),
-                    );
-                  }
-                },
-              ),
+          showAppSnackBar(
+            context,
+            message: result.errorMessage ?? '网络连接超时，可尝试切换加速节点',
+            type: AppSnackBarType.error,
+            action: SnackBarAction(
+              label: '切换代理',
+              onPressed: () {
+                if (mounted) {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => UpdateProxyPage(model: widget.model),
+                    ),
+                  );
+                }
+              },
             ),
           );
           break;
@@ -137,11 +132,10 @@ class _AboutPageState extends State<AboutPage> {
             _lastCheckHadError = true;
             _updateStatusText = result.errorMessage ?? '检查更新失败';
           });
-          scaffoldMessenger.showSnackBar(
-            SnackBar(
-              content: Text(result.errorMessage ?? '检查更新失败，请重试'),
-              behavior: SnackBarBehavior.floating,
-            ),
+          showAppSnackBar(
+            context,
+            message: result.errorMessage ?? '检查更新失败，请重试',
+            type: AppSnackBarType.error,
           );
           break;
       }
@@ -156,9 +150,7 @@ class _AboutPageState extends State<AboutPage> {
     final uri = Uri.parse(kProjectHomeUrl);
     final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!context.mounted || opened) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(content: Text('无法打开链接')));
+    showAppSnackBar(context, message: '无法打开链接', type: AppSnackBarType.error);
   }
 
   @override

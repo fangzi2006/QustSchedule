@@ -14,6 +14,7 @@ import '../src/app_model.dart';
 import '../src/reminder_gateway.dart';
 import '../src/reminder_planner.dart';
 import '../src/reminder_service.dart';
+import '../widgets/app_snack_bar.dart';
 
 class ReminderPage extends StatefulWidget {
   const ReminderPage({super.key, required this.model, required this.service});
@@ -166,14 +167,11 @@ class _ReminderPageState extends State<ReminderPage>
       unawaited(widget.service.showToast(message, longDuration: longDuration));
     } else {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: Text(message),
-            duration: Duration(seconds: longDuration ? 3 : 2),
-          ),
-        );
+      showAppSnackBar(
+        context,
+        message: message,
+        duration: Duration(seconds: longDuration ? 3 : 2),
+      );
     }
   }
 

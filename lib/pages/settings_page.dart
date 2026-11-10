@@ -20,6 +20,7 @@ import '../src/preferences_repository.dart';
 import '../src/reminder_service.dart';
 import '../src/timetable.dart' show formatMonthDayDate;
 import '../widgets/floating_dock.dart';
+import '../widgets/app_snack_bar.dart';
 import 'about_page.dart';
 import 'reminder_page.dart';
 import 'schedule_page.dart' show showCalibrateSheet;
@@ -308,9 +309,12 @@ class SettingsPage extends StatelessWidget {
     try {
       await model.changePassword(password);
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(const SnackBar(content: Text('密码已更新')));
+      showAppSnackBar(
+        context,
+        message: '密码已更新',
+        type: AppSnackBarType.success,
+        aboveDock: true,
+      );
     } on AcademicError catch (error) {
       if (!context.mounted) return;
       await showDialog<void>(

@@ -7,6 +7,7 @@ import '../src/app_model.dart';
 import '../src/preferences_repository.dart';
 import '../src/updater/update_models.dart';
 import '../src/updater/update_service.dart';
+import '../widgets/app_snack_bar.dart';
 
 class UpdateProxyPage extends StatefulWidget {
   const UpdateProxyPage({super.key, required this.model});
@@ -63,11 +64,10 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
     if (result != null && result.isNotEmpty) {
       await widget.model.addCustomUpdateProxy(result);
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('已添加代理: $result'),
-          behavior: SnackBarBehavior.floating,
-        ),
+      showAppSnackBar(
+        context,
+        message: '已添加代理: $result',
+        type: AppSnackBarType.success,
       );
       // 添加后立即进行一次测速
       _testProxy(result);
