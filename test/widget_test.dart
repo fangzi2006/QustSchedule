@@ -3321,5 +3321,40 @@ void main() {
 
       await tester.pump(const Duration(seconds: 3));
     });
+
+    testWidgets('showAppSnackBar 支持左右滑动关闭且点击不误关', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => ElevatedButton(
+                onPressed: () => showAppSnackBar(
+                  context,
+                  message: '滑动关闭测试',
+                  duration: const Duration(seconds: 10),
+                ),
+                child: const Text('触发滑动提示'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('触发滑动提示'));
+      await tester.pumpAndSettle();
+
+      final SnackBar snackBar = tester.widget(find.byType(SnackBar));
+      expect(snackBar.dismissDirection, DismissDirection.horizontal);
+
+      // 点击胶囊内容区不应误关
+      await tester.tap(find.text('滑动关闭测试'));
+      await tester.pump();
+      expect(find.text('滑动关闭测试'), findsOneWidget);
+
+      // 横向划走
+      await tester.fling(find.text('滑动关闭测试'), const Offset(500, 0), 1000);
+      await tester.pumpAndSettle();
+      expect(find.text('滑动关闭测试'), findsNothing);
+    });
   });
 }

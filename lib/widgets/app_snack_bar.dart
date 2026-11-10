@@ -58,6 +58,7 @@ SnackBar buildAppSnackBar(
 
   return SnackBar(
     behavior: SnackBarBehavior.floating,
+    dismissDirection: DismissDirection.horizontal,
     margin: margin,
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
     backgroundColor: scheme.surface,

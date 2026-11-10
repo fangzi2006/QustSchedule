@@ -96,6 +96,7 @@ ThemeData buildLightTheme() {
     ),
     snackBarTheme: SnackBarThemeData(
       behavior: SnackBarBehavior.floating,
+      dismissDirection: DismissDirection.horizontal,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
         side: BorderSide(
