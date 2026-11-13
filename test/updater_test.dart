@@ -10,6 +10,7 @@ import 'package:qustschedule/pages/update_dialog.dart';
 import 'package:qustschedule/pages/update_proxy_page.dart';
 import 'package:qustschedule/src/app_model.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
+import 'package:qustschedule/src/updater/app_installer.dart';
 import 'package:qustschedule/src/updater/update_flow_controller.dart';
 import 'package:qustschedule/src/updater/update_models.dart';
 import 'package:qustschedule/src/updater/update_service.dart';
@@ -1066,6 +1067,78 @@ void main() {
       });
       service.completeSuccess(tmpFile);
       await future;
+    });
+  });
+
+  group('Windows 更新脚本与遗留清理 (AppInstaller)', () {
+    test('便携版热更新脚本等待旧 PID 退出、按退出码清理暂存并保持纯 ASCII', () {
+      final script = AppInstaller.buildWindowsPortableScript(
+        exeName: 'qustschedule.exe',
+        processId: 4321,
+      );
+
+      expect(script.codeUnits.every((c) => c < 128), isTrue);
+      expect(script, contains('tasklist /FI "PID eq 4321" /FO CSV /NH'));
+      expect(script, contains('if not errorlevel 8'));
+      expect(script, contains('rd /s /q ".update_staging"'));
+      expect(script, contains('start "" "qustschedule.exe"'));
+      expect(script, contains(AppInstaller.portableVbsFileName));
+      expect(script, contains('del /f /q "%~f0"'));
+    });
+
+    test('安装版脚本等待旧 PID 退出后传参静默升级并自动重启', () {
+      final script = AppInstaller.buildWindowsSetupLauncherScript(
+        setupFileName: 'QustSchedule_v1.6.0-windows-x64-setup.exe',
+        processId: 9876,
+      );
+
+      expect(script.codeUnits.every((c) => c < 128), isTrue);
+      expect(script, contains('tasklist /FI "PID eq 9876" /FO CSV /NH'));
+      expect(script, contains('/VERYSILENT'));
+      expect(script, contains('/SUPPRESSMSGBOXES'));
+      expect(script, contains('/NORESTART'));
+      expect(script, contains('/CLOSEAPPLICATIONS'));
+      expect(script, contains('/AUTOSTART=1'));
+      expect(script, contains('QustSchedule_v1.6.0-windows-x64-setup.exe'));
+      expect(script, contains(AppInstaller.setupVbsFileName));
+    });
+
+    test('隐藏 VBS 启动器使用单反斜杠拼接脚本路径且窗口模式为 0', () {
+      final vbs = AppInstaller.buildHiddenVbsLauncher(
+        AppInstaller.portableCmdFileName,
+      );
+
+      expect(vbs, contains(r'"\qustschedule_updater.cmd"'));
+      expect(vbs, isNot(contains(r'\\qustschedule_updater.cmd')));
+      expect(vbs, endsWith('0, False'));
+    });
+
+    test('cleanLegacyUpdaterScript 清理应用目录与临时目录残留更新脚本', () {
+      final sandbox = Directory.systemTemp.createTempSync('qust_cleanup_test_');
+      addTearDown(() {
+        if (sandbox.existsSync()) sandbox.deleteSync(recursive: true);
+      });
+      final appDir = Directory('${sandbox.path}/app')..createSync();
+      final tempDir = Directory('${sandbox.path}/temp')..createSync();
+
+      final files = <File>[
+        File('${appDir.path}/${AppInstaller.portableCmdFileName}'),
+        File('${appDir.path}/${AppInstaller.portableVbsFileName}'),
+        File('${tempDir.path}/${AppInstaller.setupCmdFileName}'),
+        File('${tempDir.path}/${AppInstaller.setupVbsFileName}'),
+      ];
+      for (final f in files) {
+        f.writeAsStringSync('stub');
+      }
+      final staging = Directory('${appDir.path}/.update_staging')..createSync();
+      File('${staging.path}/qustschedule.exe').writeAsStringSync('bin');
+
+      AppInstaller.cleanLegacyUpdaterScript(appDir: appDir, tempDir: tempDir);
+
+      for (final f in files) {
+        expect(f.existsSync(), isFalse);
+      }
+      expect(staging.existsSync(), isFalse);
     });
   });
 }

@@ -26,6 +26,7 @@
 
 ; AppId 必须固定不变，否则升级时会装成两份而不是覆盖
 AppId={{A7F3E2D1-6B4C-4E8A-9D52-1C3B5E7F9A24}
+AppMutex=Local\com.fangzi.qustschedule.SingleInstance
 AppName={#MyAppName}
 AppVersion={#AppVersion}
 AppVerName={#MyAppName} {#AppVersion}
@@ -71,8 +72,14 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "立即启动 {#MyAppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait skipifnotsilent; Check: ShouldAutoStart
 
 [Code]
+function ShouldAutoStart(): Boolean;
+begin
+  Result := (ExpandConstant('{param:AUTOSTART|0}') = '1');
+end;
+
 // VC++ 2015-2022 x64 运行库检测：缺了它程序双击没反应，所以装完要提示
 function IsVCRedistInstalled(): Boolean;
 var
@@ -94,8 +101,8 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   ErrorCode: Integer;
 begin
-  // 装完再提示：不阻断安装，只提醒去装运行库
-  if (CurStep = ssPostInstall) and (not IsVCRedistInstalled()) then
+  // 装完再提示：不阻断安装，只提醒去装运行库（静默升级跳过交互弹窗）
+  if (CurStep = ssPostInstall) and (not WizardSilent()) and (not IsVCRedistInstalled()) then
   begin
     if MsgBox('未检测到 VC++ 2015-2022 运行库（x64），青科课表通可能无法启动。' + #13#10 + #13#10 +
               '是否现在打开微软官方下载页获取 vc_redist.x64.exe？',

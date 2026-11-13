@@ -65,8 +65,8 @@ class UpdateService {
     try {
       final curVer = currentVersion ?? appVersion;
       if (curVer.isEmpty || curVer == '-') return 0;
-      AppInstaller.cleanLegacyUpdaterScript();
       final tempDir = targetDirectory ?? await getTemporaryDirectory();
+      AppInstaller.cleanLegacyUpdaterScript(tempDir: tempDir);
       final entities = tempDir.listSync();
       final verRegex = RegExp(r'^QustSchedule_v?([0-9A-Za-z\.\+\-]+?)(?:-|\.)');
 
