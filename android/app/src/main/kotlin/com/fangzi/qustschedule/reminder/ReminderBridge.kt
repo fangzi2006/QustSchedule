@@ -88,7 +88,7 @@ class ReminderBridge(
                 result.success(null)
             }
 
-            // 返回 true = 跳到了厂商自启动页；false = 退到应用详情页。
+            // 返回 true = 跳到了厂商自启动页；false = 退到系统设置主页。
             "openAutostartSettings" -> {
                 result.success(ReminderPermissions.openAutostartSettings(activity))
             }

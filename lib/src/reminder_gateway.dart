@@ -11,7 +11,7 @@
 ///  - `requestNotificationPermission()`：申请通知权限（Android 13+）；
 ///  - `openExactAlarmSettings()`：跳到精确闹钟授权页；
 ///  - `openBatterySettings()`：跳到应用详情（耗电管理）；
-///  - `openAutostartSettings()`：跳到厂商自启动页，跳不动退应用详情；
+///  - `openAutostartSettings()`：跳到厂商自启动页，跳不动退系统设置主页；
 ///  - `testReminder({style, delaySeconds})`：延迟若干秒发一条示例提醒；
 ///  - `previewReminder({style, leadMinutes})`：不挂闹钟，立刻显示一条示例；
 ///  - `stopFluid()`：立刻收起流体云卡片。
@@ -202,9 +202,9 @@ abstract class ReminderGateway {
 
   Future<void> openBatterySettings();
 
-  /// 打开自启动设置，返回是否真的落到厂商自启动页（false = 退到应用详情）。
+  /// 打开自启动设置，返回是否真的落到厂商自启动页（false = 退到系统设置主页）。
   ///
-  /// 自启动没有公共 API 也不能申请：只能尽力跳厂商页，跳不动就跳应用详情。
+  /// 自启动没有公共 API 也不能申请：只能尽力跳厂商页，跳不动就退回系统设置主页。
   Future<bool> openAutostartSettings();
 
   /// 延迟发一条示例提醒（走真实闹钟链路），返回是否排上。

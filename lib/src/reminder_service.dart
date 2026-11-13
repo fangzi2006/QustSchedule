@@ -172,7 +172,7 @@ class ReminderService {
     await refreshStatus();
   }
 
-  /// 打开自启动设置；返回是否真的落到厂商自启动页（false = 应用详情）。
+  /// 打开自启动设置；返回是否真的落到厂商自启动页（false = 系统设置主页）。
   Future<bool> openAutostartSettings() async {
     final vendor = await _gateway.openAutostartSettings();
     await refreshStatus();

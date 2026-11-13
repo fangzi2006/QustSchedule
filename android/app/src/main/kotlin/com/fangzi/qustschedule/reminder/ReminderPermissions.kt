@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlarmManager
 import android.app.NotificationManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -100,33 +101,97 @@ object ReminderPermissions {
     /**
      * 厂商自启动管理页的候选入口。
      *
-     * 各家都是私有 Activity，且从 ColorOS 12 起这些页面**不导出**：
-     * `startActivity` 会直接抛 SecurityException。所以这里只当作"万一能跳"
-     * 的尝试，失败一律退到应用详情页。
+     * 各家都是私有页面：有的是自定义 Action，有的是明确包名+类名；且从 ColorOS 12
+     * 等新系统起部分页面不导出（`exported=false`），`startActivity` 会抛
+     * `SecurityException`。跳不动时一律退到手机系统设置主页，引导用户搜索"自启动"。
      */
-    private fun autostartCandidates(): List<Intent> = listOf(
-        // 小米 / 红米
+    private fun autostartCandidates(context: Context): List<Intent> = listOf(
+        // 小米 / 红米（MIUI / HyperOS）
         Intent("miui.intent.action.OP_AUTO_START")
             .addCategory(Intent.CATEGORY_DEFAULT),
+        componentIntent(
+            "com.miui.securitycenter",
+            "com.miui.permcenter.autostart.AutoStartManagementActivity",
+        ),
         // OPPO / realme / 一加（ColorOS）
-        Intent("com.coloros.safecenter.permission.startup.StartupAppListActivity"),
-        Intent("com.oppo.safe.permission.startup.StartupAppListActivity"),
+        componentIntent(
+            "com.coloros.safecenter",
+            "com.coloros.safecenter.permission.startup.StartupAppListActivity",
+        ),
+        componentIntent(
+            "com.coloros.safecenter",
+            "com.coloros.safecenter.startupapp.StartupAppListActivity",
+        ),
+        componentIntent(
+            "com.oppo.safe",
+            "com.oppo.safe.permission.startup.StartupAppListActivity",
+        ),
+        componentIntent(
+            "com.oneplus.security",
+            "com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity",
+        ),
         // vivo / iQOO
-        Intent("com.vivo.permissionmanager.activity.BgStartUpManagerActivity"),
-        // 华为 / 荣耀
+        componentIntent(
+            "com.vivo.permissionmanager",
+            "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
+        ),
+        componentIntent(
+            "com.iqoo.secure",
+            "com.iqoo.secure.ui.phoneoptimize.BgStartUpManagerActivity",
+        ),
+        // 华为 / 荣耀（EMUI / HarmonyOS / MagicOS）
         Intent("huawei.intent.action.HSM_BOOTAPP_MANAGER"),
-        // 魅族
-        Intent("com.meizu.safe.permission.SmartBGActivity"),
+        componentIntent(
+            "com.huawei.systemmanager",
+            "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
+        ),
+        componentIntent(
+            "com.huawei.systemmanager",
+            "com.huawei.systemmanager.optimize.process.ProtectActivity",
+        ),
+        componentIntent(
+            "com.hihonor.systemmanager",
+            "com.hihonor.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
+        ),
+        // 魅族（Flyme）
+        componentIntent(
+            "com.meizu.safe",
+            "com.meizu.safe.permission.SmartBGActivity",
+        ),
+        Intent("com.meizu.safe.permission.SHOW_APPSEC")
+            .addCategory(Intent.CATEGORY_DEFAULT)
+            .putExtra("packageName", context.packageName),
+        // 三星（国行 OneUI）
+        componentIntent(
+            "com.samsung.android.sm_cn",
+            "com.samsung.android.sm.autorun.ui.AutoRunActivity",
+        ),
     )
 
-    /** 本机是否存在可解析的自启动管理页（纯查询，不跳转）。 */
+    private fun componentIntent(packageName: String, className: String): Intent =
+        Intent().setComponent(ComponentName(packageName, className))
+
+    private fun isCandidateLaunchable(context: Context, candidate: Intent): Boolean {
+        val resolveInfo = runCatching {
+            context.packageManager.resolveActivity(candidate, 0)
+        }.getOrNull() ?: return false
+        val activityInfo = resolveInfo.activityInfo ?: return false
+        if (!activityInfo.exported) return false
+        val requiredPerm = activityInfo.permission
+        if (!requiredPerm.isNullOrEmpty() &&
+            context.checkSelfPermission(requiredPerm) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return false
+        }
+        return true
+    }
+
+    /** 本机是否存在可实际打开的自启动管理页（纯查询，不跳转）。 */
     fun hasAutostartSettings(context: Context): Boolean {
         val cached = autostartPageFound
         if (cached != null) return cached
-        val manager = context.packageManager
-        val found = autostartCandidates().any { candidate ->
-            runCatching { manager.resolveActivity(candidate, 0) != null }
-                .getOrDefault(false)
+        val found = autostartCandidates(context).any { candidate ->
+            isCandidateLaunchable(context, candidate)
         }
         autostartPageFound = found
         return found
@@ -135,21 +200,23 @@ object ReminderPermissions {
     /**
      * 打开自启动设置。
      *
-     * @return true = 真的跳到了厂商自启动页；false = 只能退到应用详情页。
+     * @return true = 真的跳到了厂商自启动页；false = 无法直达，已退回系统设置主页。
      */
     fun openAutostartSettings(context: Context): Boolean {
-        for (candidate in autostartCandidates()) {
-            val resolvable = runCatching {
-                context.packageManager.resolveActivity(candidate, 0) != null
-            }.getOrDefault(false)
-            if (!resolvable) continue
+        for (candidate in autostartCandidates(context)) {
+            if (!isCandidateLaunchable(context, candidate)) continue
             if (tryStart(context, Intent(candidate))) {
-                Log.i(TAG, "autostart page opened: ${candidate.action}")
+                Log.i(
+                    TAG,
+                    "autostart page opened: ${candidate.component?.flattenToShortString() ?: candidate.action}",
+                )
                 return true
             }
         }
         Log.i(TAG, "no usable autostart page, fall back to system settings")
-        tryStart(context, Intent(Settings.ACTION_SETTINGS))
+        if (!tryStart(context, Intent(Settings.ACTION_SETTINGS))) {
+            openAppDetailsFallback(context)
+        }
         return false
     }
 
