@@ -11,6 +11,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../src/app_model.dart';
+import '../theme/app_theme.dart';
 
 class StatusPopup extends StatelessWidget {
   const StatusPopup({
@@ -207,13 +208,14 @@ class _Bubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final colors = AppColors.of(context);
     final error = data.error;
-    final accent = error ? scheme.error : const Color(0xFF2E7D32);
+    final accent = error ? scheme.error : colors.success;
 
     return Container(
       constraints: const BoxConstraints(minWidth: 0, maxWidth: 200),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: scheme.surfaceContainerLowest,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: error

@@ -21,6 +21,7 @@ import 'package:flutter/material.dart';
 import 'package:zf_academic/zf_academic.dart';
 
 import '../src/course_text.dart';
+import '../theme/app_theme.dart';
 import '../theme/course_palette.dart';
 
 class CourseBlock extends StatelessWidget {
@@ -47,9 +48,6 @@ class CourseBlock extends StatelessWidget {
   /// 该课当天与别的课时间冲突（重修 / 分班并排）。为 true 时在**右上角**画一个
   /// 小圆点——它放在 Stack 覆盖层里，不占文字流位置，**不影响下面的行数分配**。
   final bool conflict;
-
-  /// 冲突小圆点的颜色（配一圈白边，保证在任何课程配色底上都看得清）。
-  static const Color conflictBadgeColor = Color(0xFFE53935);
 
   /// 显式锁定 letterSpacing: 0，避免合并 Material 3 DefaultTextStyle (bodyMedium)
   /// 时继承默认的 0.25 字间距导致测量与渲染宽度不一致。
@@ -193,9 +191,14 @@ class CourseBlock extends StatelessWidget {
                   width: 6,
                   height: 6,
                   decoration: BoxDecoration(
-                    color: CourseBlock.conflictBadgeColor,
+                    color: AppColors.of(context).conflictBadge,
                     shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 1),
+                    border: Border.all(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .surfaceContainerLowest,
+                      width: 1,
+                    ),
                   ),
                 ),
               ),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_theme.dart';
 import 'floating_dock.dart';
 
 /// 统一 SnackBar 语义类型。
@@ -40,8 +41,9 @@ SnackBar buildAppSnackBar(
         AppSnackBarType.info => Icons.info_outline_rounded,
       };
 
+  final colors = AppColors.of(context);
   final Color iconColor = switch (type) {
-    AppSnackBarType.success => const Color(0xFF1E8E3E), // 雅致翠绿
+    AppSnackBarType.success => colors.success,
     AppSnackBarType.error => scheme.error,
     AppSnackBarType.copy || AppSnackBarType.info => scheme.primary,
   };

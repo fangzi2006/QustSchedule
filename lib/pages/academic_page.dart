@@ -13,6 +13,7 @@ import 'package:zf_academic/zf_academic.dart';
 import '../src/academic_service.dart';
 import '../src/app_model.dart';
 import '../src/term_selector_helper.dart';
+import '../theme/app_theme.dart';
 import '../widgets/app_menu.dart';
 import '../widgets/floating_dock.dart';
 import '../widgets/status_popup.dart';
@@ -517,10 +518,12 @@ class NextExamHeroCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+    final colors = AppColors.of(context);
 
     final start = exam.startTime;
     String countdownLabel;
     Color badgeColor = scheme.primary;
+    Color badgeTextColor = scheme.onPrimary;
 
     if (start != null) {
       final hasSpecificTime = RegExp(r'\d{1,2}:\d{2}')
@@ -535,13 +538,16 @@ class NextExamHeroCard extends StatelessWidget {
 
       if (hasSpecificTime && now.isAfter(start) && now.isBefore(effectiveEnd)) {
         countdownLabel = '正在进行';
-        badgeColor = Colors.orange;
+        badgeColor = colors.examOngoingBg;
+        badgeTextColor = colors.onExamAccentBadge;
       } else if (dayDiff == 0) {
         countdownLabel = '今天考试';
-        badgeColor = Colors.redAccent;
+        badgeColor = colors.examUrgentBg;
+        badgeTextColor = colors.onExamAccentBadge;
       } else if (dayDiff == 1) {
         countdownLabel = '明天考试';
-        badgeColor = Colors.orangeAccent;
+        badgeColor = colors.examTomorrowBg;
+        badgeTextColor = colors.onExamAccentBadge;
       } else if (dayDiff > 1) {
         countdownLabel = '离下一场还剩 $dayDiff 天';
       } else {
@@ -580,7 +586,7 @@ class NextExamHeroCard extends StatelessWidget {
                   child: Text(
                     countdownLabel,
                     style: theme.textTheme.labelSmall?.copyWith(
-                      color: Colors.white,
+                      color: badgeTextColor,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -973,8 +979,9 @@ class _GradeListTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+    final colors = AppColors.of(context);
 
-    final scoreColor = _scoreColor(grade.rawScore, scheme);
+    final scoreColor = _scoreColor(grade.rawScore, scheme, colors);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -1027,15 +1034,15 @@ class _GradeListTile extends StatelessWidget {
     );
   }
 
-  Color _scoreColor(String score, ColorScheme scheme) {
+  Color _scoreColor(String score, ColorScheme scheme, AppColors colors) {
     final num = double.tryParse(score);
     if (num != null) {
-      if (num >= 90) return Colors.teal;
+      if (num >= 90) return colors.scoreExcellent;
       if (num >= 60) return scheme.primary;
       return scheme.error;
     }
     final trimmed = score.trim();
-    if (trimmed == '优秀') return Colors.teal;
+    if (trimmed == '优秀') return colors.scoreExcellent;
     if (GradeStats.passingScoreLabels.contains(trimmed)) {
       return scheme.primary;
     }
@@ -1052,13 +1059,14 @@ class _EvaluationWarningBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colors = AppColors.of(context);
 
     return Card(
       elevation: 0,
-      color: Colors.amber.withValues(alpha: 0.15),
+      color: colors.warningBannerBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(14),
-        side: BorderSide(color: Colors.amber.shade700.withValues(alpha: 0.4)),
+        side: BorderSide(color: colors.warningBannerBorder),
       ),
       child: Padding(
         padding: const EdgeInsets.all(14.0),
@@ -1067,7 +1075,7 @@ class _EvaluationWarningBanner extends StatelessWidget {
           children: <Widget>[
             Icon(
               Icons.warning_amber_rounded,
-              color: Colors.amber.shade800,
+              color: colors.onWarningBanner,
               size: 22,
             ),
             const SizedBox(width: 12),
@@ -1079,14 +1087,14 @@ class _EvaluationWarningBanner extends StatelessWidget {
                     '评教尚未完成',
                     style: theme.textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.bold,
-                      color: Colors.amber.shade900,
+                      color: colors.onWarningBanner,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     '教务系统提示：本学期教学质量评价未完成，请前往青科教务系统网页端完成学生评教后再查询。',
                     style: theme.textTheme.bodySmall?.copyWith(
-                      color: Colors.amber.shade900,
+                      color: colors.onWarningBanner,
                       height: 1.35,
                     ),
                   ),

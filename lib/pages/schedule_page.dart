@@ -27,6 +27,7 @@ import '../src/app_model.dart';
 import '../src/reschedule.dart';
 import '../src/term_calendar.dart';
 import '../src/updater/update_flow_controller.dart';
+import '../theme/app_theme.dart';
 import '../widgets/app_menu.dart';
 import '../widgets/course_detail_sheet.dart';
 import '../widgets/course_tile.dart';
@@ -310,8 +311,11 @@ class _UpdateStatusButton extends StatelessWidget {
                 : '正在下载更新 ${flow.progress!.percentage}%',
           ),
           UpdateFlowStage.readyToInstall => (
-            const _BadgedActionIcon(
-              icon: Icon(Icons.download_done_rounded, color: Color(0xFF1E8E3E)),
+            _BadgedActionIcon(
+              icon: Icon(
+                Icons.download_done_rounded,
+                color: AppColors.of(context).success,
+              ),
             ),
             '新版本已就绪，点击安装',
           ),
@@ -825,6 +829,7 @@ class _WeekView extends StatelessWidget {
                                     painter: _GridPainter(
                                       rows: rows,
                                       rowHeight: rowHeight,
+                                      lineColor: AppColors.of(context).gridLine,
                                     ),
                                   ),
                                 ),
@@ -893,8 +898,8 @@ class _WeekView extends StatelessWidget {
                     color: theme.colorScheme.onSurface,
                   ),
                 ),
-                if (start.isNotEmpty) _clock(start),
-                if (end.isNotEmpty) _clock(end),
+                if (start.isNotEmpty) _clock(context, start),
+                if (end.isNotEmpty) _clock(context, end),
               ],
             ),
           ),
@@ -908,14 +913,15 @@ class _WeekView extends StatelessWidget {
   ///
   /// 整列已经套了 `FittedBox`，这里的子项拿到的宽度无界、不会折行，
   /// 所以只需保持单行，具体缩放交给外层统一处理。
-  static Widget _clock(String text) =>
-      Text(text, maxLines: 1, softWrap: false, style: _timeAxisStyle);
-
-  /// 时间轴上的时刻：小一号、灰色，不跟节数抢注意力。
-  static const TextStyle _timeAxisStyle = TextStyle(
-    fontSize: 10,
-    height: 1.25,
-    color: Color(0xFF8C929B),
+  static Widget _clock(BuildContext context, String text) => Text(
+    text,
+    maxLines: 1,
+    softWrap: false,
+    style: TextStyle(
+      fontSize: 10,
+      height: 1.25,
+      color: AppColors.of(context).timeAxisText,
+    ),
   );
 
   List<Widget> _buildCourseBlocks(
@@ -990,14 +996,10 @@ class _DayHeader extends StatelessWidget {
   /// 本周哪些天有"课表时间冲突"（同一天多节课节次重叠、已并排显示）。表头也显示提示点。
   final Set<int> timetableConflictDays;
 
-  /// 调课冲突的提示点：琥珀色，浅色主题下也醒目。
-  /// （conflictHeaderColor 仍供冲突详情卡片 _ConflictCard 作背景使用。）
-  static const Color conflictHeaderColor = Color(0xFFFFE9A8);
-  static const Color conflictDotColor = Color(0xFFE6A700);
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colors = AppColors.of(context);
     final termStart = model.termStart;
     final today = DateTime.now();
     final showToday = week == model.currentWeekOfToday;
@@ -1067,8 +1069,8 @@ class _DayHeader extends StatelessWidget {
                             margin: const EdgeInsets.only(top: 2),
                             width: 5,
                             height: 5,
-                            decoration: const BoxDecoration(
-                              color: conflictDotColor,
+                            decoration: BoxDecoration(
+                              color: colors.conflictDot,
                               shape: BoxShape.circle,
                             ),
                           ),
@@ -1142,10 +1144,10 @@ class _DayConflictSheet extends StatelessWidget {
             children: <Widget>[
               Row(
                 children: <Widget>[
-                  const Icon(
+                  Icon(
                     Icons.warning_amber_rounded,
                     size: 20,
-                    color: _DayHeader.conflictDotColor,
+                    color: AppColors.of(context).conflictDot,
                   ),
                   const SizedBox(width: 8),
                   Text(
@@ -1204,7 +1206,7 @@ class _ConflictCard extends StatelessWidget {
                     vertical: 2,
                   ),
                   decoration: BoxDecoration(
-                    color: _DayHeader.conflictHeaderColor,
+                    color: AppColors.of(context).conflictCardBg,
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
@@ -1240,15 +1242,20 @@ class _ConflictCard extends StatelessWidget {
 }
 
 class _GridPainter extends CustomPainter {
-  _GridPainter({required this.rows, required this.rowHeight});
+  _GridPainter({
+    required this.rows,
+    required this.rowHeight,
+    required this.lineColor,
+  });
 
   final int rows;
   final double rowHeight;
+  final Color lineColor;
 
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = const Color(0xFFE4E6EB)
+      ..color = lineColor
       ..strokeWidth = 0.5;
     for (var row = 0; row <= rows; row++) {
       final y = row * rowHeight;
@@ -1269,7 +1276,9 @@ class _GridPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _GridPainter oldDelegate) =>
-      oldDelegate.rows != rows || oldDelegate.rowHeight != rowHeight;
+      oldDelegate.rows != rows ||
+      oldDelegate.rowHeight != rowHeight ||
+      oldDelegate.lineColor != lineColor;
 }
 
 class _EmptyWeek extends StatelessWidget {
@@ -1500,7 +1509,7 @@ class _RemarkCard extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: scheme.surfaceContainerLowest,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.7)),
       ),

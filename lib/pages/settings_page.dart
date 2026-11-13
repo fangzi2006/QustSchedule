@@ -19,8 +19,10 @@ import '../src/app_version.dart';
 import '../src/preferences_repository.dart';
 import '../src/reminder_service.dart';
 import '../src/timetable.dart' show formatMonthDayDate;
-import '../widgets/floating_dock.dart';
+import '../theme/app_theme.dart';
 import '../widgets/app_snack_bar.dart';
+import '../widgets/floating_dock.dart';
+import '../widgets/section_title.dart';
 import 'about_page.dart';
 import 'reminder_page.dart';
 import 'schedule_page.dart' show showCalibrateSheet;
@@ -60,7 +62,7 @@ class SettingsPage extends StatelessWidget {
               FloatingDock.contentInset(context),
             ),
             children: <Widget>[
-              _SectionTitle('课表'),
+              const SectionTitle('课表'),
               Card(
                 child: Column(
                   children: <Widget>[
@@ -171,7 +173,7 @@ class SettingsPage extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 18),
-              _SectionTitle('账号'),
+              const SectionTitle('账号'),
               Card(
                 child: Column(
                   children: <Widget>[
@@ -183,10 +185,10 @@ class SettingsPage extends StatelessWidget {
                       title: Text(_accountTitle),
                       subtitle: Text(_accountSubtitle),
                       trailing: model.signedIn
-                          ? const Icon(
+                          ? Icon(
                               Icons.check_circle_rounded,
                               size: 18,
-                              color: Color(0xFF2E7D32),
+                              color: AppColors.of(context).success,
                             )
                           : null,
                     ),
@@ -232,7 +234,7 @@ class SettingsPage extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 18),
-              _SectionTitle('关于与更新'),
+              const SectionTitle('关于与更新'),
               Card(
                 child: Column(
                   children: <Widget>[
@@ -317,18 +319,12 @@ class SettingsPage extends StatelessWidget {
       );
     } on AcademicError catch (error) {
       if (!context.mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('修改失败'),
-          content: Text(error.message),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('知道了'),
-            ),
-          ],
-        ),
+      showAppSnackBar(
+        context,
+        message: '修改失败：${error.message}',
+        type: AppSnackBarType.error,
+        aboveDock: true,
+        duration: const Duration(seconds: 4),
       );
     }
   }
@@ -417,28 +413,6 @@ class _PasswordDialogState extends State<_PasswordDialog> {
         ),
         FilledButton(onPressed: _submit, child: const Text('确定')),
       ],
-    );
-  }
-}
-
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle(this.text);
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w500,
-          color: Theme.of(context).hintColor,
-          letterSpacing: 0.3,
-        ),
-      ),
     );
   }
 }

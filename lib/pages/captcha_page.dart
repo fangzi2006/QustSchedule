@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import '../src/app_model.dart';
+import '../theme/app_theme.dart';
 
 class CaptchaPage extends StatefulWidget {
   const CaptchaPage({super.key, required this.model});
@@ -114,7 +115,7 @@ class _CaptchaPageState extends State<CaptchaPage> {
                         child: Container(
                           padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
-                            color: Colors.white,
+                            color: AppColors.of(context).captchaSurface,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(color: scheme.outlineVariant),
                           ),

@@ -14,7 +14,9 @@ import '../src/app_model.dart';
 import '../src/reminder_gateway.dart';
 import '../src/reminder_planner.dart';
 import '../src/reminder_service.dart';
+import '../theme/app_theme.dart';
 import '../widgets/app_snack_bar.dart';
+import '../widgets/section_title.dart';
 
 class ReminderPage extends StatefulWidget {
   const ReminderPage({super.key, required this.model, required this.service});
@@ -99,14 +101,17 @@ class _ReminderPageState extends State<ReminderPage>
     await widget.service.stopFluid();
     await _refreshStatus();
     if (!mounted) return;
-    _toast('已收起流体云卡片');
+    _feedbackSnackBar('已收起流体云卡片');
   });
 
   Future<void> _requestNotification() => _run(() async {
     final granted = await widget.service.requestNotificationPermission();
     await _refreshStatus();
     if (!mounted) return;
-    _toast(granted ? '通知权限已就绪' : '请开启通知权限，否则课前提醒无法发出');
+    _feedbackSnackBar(
+      granted ? '通知权限已就绪' : '请开启通知权限，否则课前提醒无法发出',
+      isError: !granted,
+    );
   });
 
   Future<void> _openNotificationSettings() => _run(() async {
@@ -115,23 +120,20 @@ class _ReminderPageState extends State<ReminderPage>
   });
 
   Future<void> _openExactAlarm() => _run(() async {
-    _toast('请开启「允许设置闹钟和提醒」以确保准时响铃', longDuration: true);
+    _guideToast('请开启「允许设置闹钟和提醒」以确保准时响铃');
     await widget.service.openExactAlarmSettings();
     await _refreshStatus();
   });
 
   Future<void> _openBattery() => _run(() async {
-    _toast('请在「耗电管理」或「省电策略」中允许后台运行', longDuration: true);
+    _guideToast('请在「耗电管理」或「省电策略」中允许后台运行');
     await widget.service.openBatterySettings();
     await _refreshStatus();
   });
 
   Future<void> _openAutostart() => _run(() async {
     final vendor = await widget.service.openAutostartSettings();
-    _toast(
-      vendor ? '请在列表中找到本应用并允许自启动' : '请在设置顶部搜索「自启动」，开启本应用开关',
-      longDuration: true,
-    );
+    _guideToast(vendor ? '请在列表中找到本应用并允许自启动' : '请在设置顶部搜索「自启动」，开启本应用开关');
     await _refreshStatus();
   });
 
@@ -139,13 +141,13 @@ class _ReminderPageState extends State<ReminderPage>
     await widget.service.syncNow(force: true);
     await _refreshStatus();
     if (!mounted) return;
-    _toast('已重新排程');
+    _feedbackSnackBar('已重新排程');
   });
 
   Future<void> _preview() => _run(() async {
     final ok = await widget.service.previewReminder();
     if (!mounted) return;
-    _toast(ok ? '已显示预览通知' : '预览失败：请先允许通知权限');
+    _feedbackSnackBar(ok ? '已显示预览通知' : '预览失败：请先允许通知权限', isError: !ok);
     await _refreshStatus();
   });
 
@@ -154,7 +156,10 @@ class _ReminderPageState extends State<ReminderPage>
       delaySeconds: delaySeconds,
     );
     if (!mounted) return;
-    _toast(ok ? '$delaySeconds 秒后会收到一条测试提醒' : '测试提醒未排上：请检查通知与精确闹钟权限');
+    _feedbackSnackBar(
+      ok ? '$delaySeconds 秒后会收到一条测试提醒' : '测试提醒未排上：请检查通知与精确闹钟权限',
+      isError: !ok,
+    );
     await _refreshStatus();
   });
 
@@ -162,17 +167,29 @@ class _ReminderPageState extends State<ReminderPage>
 
   Future<void> _testInOneMinute() => _testReminder(60);
 
-  void _toast(String message, {bool longDuration = false}) {
+  /// 跨应用跳转到系统设置页时的悬浮指路，避免切出本应用后页内胶囊被挡住。
+  void _guideToast(String message) {
     if (defaultTargetPlatform == TargetPlatform.android) {
-      unawaited(widget.service.showToast(message, longDuration: longDuration));
+      unawaited(widget.service.showToast(message, longDuration: true));
     } else {
       if (!mounted) return;
       showAppSnackBar(
         context,
         message: message,
-        duration: Duration(seconds: longDuration ? 3 : 2),
+        duration: const Duration(seconds: 3),
       );
     }
+  }
+
+  /// 页内操作结果与异常统一使用悬浮胶囊。
+  void _feedbackSnackBar(String message, {bool isError = false}) {
+    if (!mounted) return;
+    showAppSnackBar(
+      context,
+      message: message,
+      type: isError ? AppSnackBarType.error : AppSnackBarType.success,
+      duration: Duration(seconds: isError ? 3 : 2),
+    );
   }
 
   @override
@@ -183,7 +200,7 @@ class _ReminderPageState extends State<ReminderPage>
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
         children: <Widget>[
-          const _SectionTitle('提醒设置'),
+          const SectionTitle('提醒设置'),
           _ReminderSettingsCard(
             model: widget.model,
             statusNotifier: _statusNotifier,
@@ -193,7 +210,7 @@ class _ReminderPageState extends State<ReminderPage>
             onStopFluid: _stopFluid,
           ),
           const SizedBox(height: 18),
-          const _SectionTitle('权限与可靠性'),
+          const SectionTitle('权限与可靠性'),
           _PermissionsCard(
             statusNotifier: _statusNotifier,
             onRequestNotification: _requestNotification,
@@ -203,7 +220,7 @@ class _ReminderPageState extends State<ReminderPage>
             onOpenAutostart: _openAutostart,
           ),
           const SizedBox(height: 18),
-          const _SectionTitle('诊断'),
+          const SectionTitle('诊断'),
           _DiagnosticsCard(
             model: widget.model,
             service: widget.service,
@@ -586,26 +603,6 @@ String _timeText(int? ms) {
   return '${value.month}/${value.day} $hour:$minute';
 }
 
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle(this.text);
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
-      child: Text(
-        text,
-        style: theme.textTheme.labelLarge?.copyWith(
-          color: theme.colorScheme.primary,
-        ),
-      ),
-    );
-  }
-}
-
 class _PermissionTile extends StatelessWidget {
   const _PermissionTile({
     required this.icon,
@@ -626,10 +623,11 @@ class _PermissionTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colors = AppColors.of(context);
     final color = switch (ok) {
-      true => const Color(0xFF2E7D32),
+      true => colors.success,
       false => theme.colorScheme.error,
-      null => const Color(0xFFB26A00),
+      null => colors.warning,
     };
     return ListTile(
       leading: Icon(icon, size: 20),

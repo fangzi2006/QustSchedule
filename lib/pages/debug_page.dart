@@ -15,6 +15,7 @@ import 'package:flutter/services.dart';
 import 'package:zf_academic/zf_academic.dart';
 
 import '../src/app_model.dart';
+import '../theme/app_theme.dart';
 import '../widgets/course_detail_sheet.dart'
     show compressWeeks, showEntryDetails;
 import '../widgets/app_snack_bar.dart';
@@ -279,13 +280,20 @@ class _RequestsTab extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                const Icon(Icons.error_outline, size: 16, color: Colors.red),
+                Icon(
+                  Icons.error_outline,
+                  size: 16,
+                  color: Theme.of(context).colorScheme.error,
+                ),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
                     '本次失败：${model.errorCode.isEmpty ? '未分类' : model.errorCode}'
                     '${model.message.isEmpty ? '' : ' · ${model.message}'}',
-                    style: const TextStyle(fontSize: 12, color: Colors.red),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
                   ),
                 ),
               ],
@@ -318,14 +326,16 @@ class _RequestsTab extends StatelessWidget {
               // 4xx 是"这一跳的请求/权限问题"；5xx 与错误页才是服务端坏了。
               final bool serverSide =
                   issue != null && !issue.startsWith('HTTP 4');
+              final colors = AppColors.of(context);
+              final scheme = Theme.of(context).colorScheme;
               return ListTile(
                 dense: true,
                 leading: Icon(
                   ok ? Icons.check_circle_outline : Icons.error_outline,
                   size: 18,
                   color: ok
-                      ? Colors.green
-                      : (serverSide ? Colors.red : Colors.orange),
+                      ? colors.success
+                      : (serverSide ? scheme.error : colors.warning),
                 ),
                 title: Text(
                   '${item.method} ${item.status}'

@@ -15,15 +15,224 @@ const Color _seed = Color(0xFF3F5AA6);
 /// 页面底色：比纯白略灰，让白色卡片浮起来。
 const Color _canvas = Color(0xFFF6F7F9);
 
+/// 全工程语义色扩展，集中收口未纳入默认 [ColorScheme] 的业务与状态颜色。
+///
+/// 当前仅配置浅色令牌 [light]；后续接入深色主题时只需补充对应的深色实例即可。
+@immutable
+class AppColors extends ThemeExtension<AppColors> {
+  const AppColors({
+    required this.success,
+    required this.successContainer,
+    required this.warning,
+    required this.warningStrong,
+    required this.warningChipBg,
+    required this.warningBannerBg,
+    required this.warningBannerBorder,
+    required this.onWarningBanner,
+    required this.danger,
+    required this.dangerContainer,
+    required this.scoreExcellent,
+    required this.gridLine,
+    required this.timeAxisText,
+    required this.conflictCardBg,
+    required this.conflictDot,
+    required this.conflictBadge,
+    required this.examOngoingBg,
+    required this.examUrgentBg,
+    required this.examTomorrowBg,
+    required this.onExamAccentBadge,
+    required this.categoryAdd,
+    required this.categoryImprove,
+    required this.categoryFix,
+    required this.categoryNote,
+    required this.captchaSurface,
+  });
+
+  /// 浅色默认令牌表（与历史视觉完全一致，不随系统切换产生偏移）。
+  static const AppColors light = AppColors(
+    success: Color(0xFF2E7D32),
+    successContainer: Color(0xFFE8F5E9),
+    warning: Color(0xFFB26A00),
+    warningStrong: Color(0xFFE65100),
+    warningChipBg: Color(0xFFFFF3E0),
+    warningBannerBg: Color(0x26FFC107),
+    warningBannerBorder: Color(0x66FFA000),
+    onWarningBanner: Color(0xFFFF6F00),
+    danger: Color(0xFFC62828),
+    dangerContainer: Color(0xFFFFEBEE),
+    scoreExcellent: Color(0xFF009688),
+    gridLine: Color(0xFFE4E6EB),
+    timeAxisText: Color(0xFF8C929B),
+    conflictCardBg: Color(0xFFFFE9A8),
+    conflictDot: Color(0xFFE6A700),
+    conflictBadge: Color(0xFFE53935),
+    examOngoingBg: Color(0xFFFF9800),
+    examUrgentBg: Color(0xFFFF5252),
+    examTomorrowBg: Color(0xFFFFAB40),
+    onExamAccentBadge: Colors.white,
+    categoryAdd: Color(0xFF2E7D32),
+    categoryImprove: Color(0xFF1976D2),
+    categoryFix: Color(0xFFE65100),
+    categoryNote: Color(0xFF7B1FA2),
+    // 教务系统验证码为深色文字配浅底/透明底图片，任何主题下都需保持浅画布确保可读性。
+    captchaSurface: Colors.white,
+  );
+
+  final Color success;
+  final Color successContainer;
+  final Color warning;
+  final Color warningStrong;
+  final Color warningChipBg;
+  final Color warningBannerBg;
+  final Color warningBannerBorder;
+  final Color onWarningBanner;
+  final Color danger;
+  final Color dangerContainer;
+  final Color scoreExcellent;
+  final Color gridLine;
+  final Color timeAxisText;
+  final Color conflictCardBg;
+  final Color conflictDot;
+  final Color conflictBadge;
+  final Color examOngoingBg;
+  final Color examUrgentBg;
+  final Color examTomorrowBg;
+  final Color onExamAccentBadge;
+  final Color categoryAdd;
+  final Color categoryImprove;
+  final Color categoryFix;
+  final Color categoryNote;
+  final Color captchaSurface;
+
+  /// 安全获取当前主题下的语义色表（裸 MaterialApp 测试未挂主题时回退至 [light]）。
+  static AppColors of(BuildContext context) =>
+      Theme.of(context).extension<AppColors>() ?? light;
+
+  @override
+  AppColors copyWith({
+    Color? success,
+    Color? successContainer,
+    Color? warning,
+    Color? warningStrong,
+    Color? warningChipBg,
+    Color? warningBannerBg,
+    Color? warningBannerBorder,
+    Color? onWarningBanner,
+    Color? danger,
+    Color? dangerContainer,
+    Color? scoreExcellent,
+    Color? gridLine,
+    Color? timeAxisText,
+    Color? conflictCardBg,
+    Color? conflictDot,
+    Color? conflictBadge,
+    Color? examOngoingBg,
+    Color? examUrgentBg,
+    Color? examTomorrowBg,
+    Color? onExamAccentBadge,
+    Color? categoryAdd,
+    Color? categoryImprove,
+    Color? categoryFix,
+    Color? categoryNote,
+    Color? captchaSurface,
+  }) {
+    return AppColors(
+      success: success ?? this.success,
+      successContainer: successContainer ?? this.successContainer,
+      warning: warning ?? this.warning,
+      warningStrong: warningStrong ?? this.warningStrong,
+      warningChipBg: warningChipBg ?? this.warningChipBg,
+      warningBannerBg: warningBannerBg ?? this.warningBannerBg,
+      warningBannerBorder: warningBannerBorder ?? this.warningBannerBorder,
+      onWarningBanner: onWarningBanner ?? this.onWarningBanner,
+      danger: danger ?? this.danger,
+      dangerContainer: dangerContainer ?? this.dangerContainer,
+      scoreExcellent: scoreExcellent ?? this.scoreExcellent,
+      gridLine: gridLine ?? this.gridLine,
+      timeAxisText: timeAxisText ?? this.timeAxisText,
+      conflictCardBg: conflictCardBg ?? this.conflictCardBg,
+      conflictDot: conflictDot ?? this.conflictDot,
+      conflictBadge: conflictBadge ?? this.conflictBadge,
+      examOngoingBg: examOngoingBg ?? this.examOngoingBg,
+      examUrgentBg: examUrgentBg ?? this.examUrgentBg,
+      examTomorrowBg: examTomorrowBg ?? this.examTomorrowBg,
+      onExamAccentBadge: onExamAccentBadge ?? this.onExamAccentBadge,
+      categoryAdd: categoryAdd ?? this.categoryAdd,
+      categoryImprove: categoryImprove ?? this.categoryImprove,
+      categoryFix: categoryFix ?? this.categoryFix,
+      categoryNote: categoryNote ?? this.categoryNote,
+      captchaSurface: captchaSurface ?? this.captchaSurface,
+    );
+  }
+
+  @override
+  AppColors lerp(covariant ThemeExtension<AppColors>? other, double t) {
+    if (other is! AppColors) return this;
+    return AppColors(
+      success: Color.lerp(success, other.success, t) ?? success,
+      successContainer:
+          Color.lerp(successContainer, other.successContainer, t) ??
+          successContainer,
+      warning: Color.lerp(warning, other.warning, t) ?? warning,
+      warningStrong:
+          Color.lerp(warningStrong, other.warningStrong, t) ?? warningStrong,
+      warningChipBg:
+          Color.lerp(warningChipBg, other.warningChipBg, t) ?? warningChipBg,
+      warningBannerBg:
+          Color.lerp(warningBannerBg, other.warningBannerBg, t) ??
+          warningBannerBg,
+      warningBannerBorder:
+          Color.lerp(warningBannerBorder, other.warningBannerBorder, t) ??
+          warningBannerBorder,
+      onWarningBanner:
+          Color.lerp(onWarningBanner, other.onWarningBanner, t) ??
+          onWarningBanner,
+      danger: Color.lerp(danger, other.danger, t) ?? danger,
+      dangerContainer:
+          Color.lerp(dangerContainer, other.dangerContainer, t) ??
+          dangerContainer,
+      scoreExcellent:
+          Color.lerp(scoreExcellent, other.scoreExcellent, t) ?? scoreExcellent,
+      gridLine: Color.lerp(gridLine, other.gridLine, t) ?? gridLine,
+      timeAxisText:
+          Color.lerp(timeAxisText, other.timeAxisText, t) ?? timeAxisText,
+      conflictCardBg:
+          Color.lerp(conflictCardBg, other.conflictCardBg, t) ?? conflictCardBg,
+      conflictDot: Color.lerp(conflictDot, other.conflictDot, t) ?? conflictDot,
+      conflictBadge:
+          Color.lerp(conflictBadge, other.conflictBadge, t) ?? conflictBadge,
+      examOngoingBg:
+          Color.lerp(examOngoingBg, other.examOngoingBg, t) ?? examOngoingBg,
+      examUrgentBg:
+          Color.lerp(examUrgentBg, other.examUrgentBg, t) ?? examUrgentBg,
+      examTomorrowBg:
+          Color.lerp(examTomorrowBg, other.examTomorrowBg, t) ?? examTomorrowBg,
+      onExamAccentBadge:
+          Color.lerp(onExamAccentBadge, other.onExamAccentBadge, t) ??
+          onExamAccentBadge,
+      categoryAdd: Color.lerp(categoryAdd, other.categoryAdd, t) ?? categoryAdd,
+      categoryImprove:
+          Color.lerp(categoryImprove, other.categoryImprove, t) ??
+          categoryImprove,
+      categoryFix: Color.lerp(categoryFix, other.categoryFix, t) ?? categoryFix,
+      categoryNote:
+          Color.lerp(categoryNote, other.categoryNote, t) ?? categoryNote,
+      captchaSurface:
+          Color.lerp(captchaSurface, other.captchaSurface, t) ?? captchaSurface,
+    );
+  }
+}
+
 ThemeData buildLightTheme() {
   final scheme = ColorScheme.fromSeed(
     seedColor: _seed,
     brightness: Brightness.light,
-  );
+  ).copyWith(surfaceContainerLowest: Colors.white);
   return ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
     scaffoldBackgroundColor: _canvas,
+    extensions: const <ThemeExtension<dynamic>>[AppColors.light],
     splashFactory: InkSparkle.splashFactory,
     appBarTheme: AppBarTheme(
       backgroundColor: _canvas,
@@ -38,7 +247,7 @@ ThemeData buildLightTheme() {
     ),
     cardTheme: CardThemeData(
       elevation: 0,
-      color: Colors.white,
+      color: scheme.surfaceContainerLowest,
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       // 必须裁剪：否则 InkWell 的 hover/点击水波画出方形，在圆角卡片外面露出直角阴影。
@@ -76,7 +285,7 @@ ThemeData buildLightTheme() {
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: Colors.white,
+      fillColor: scheme.surfaceContainerLowest,
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
         borderSide: BorderSide(color: scheme.outlineVariant),
@@ -87,10 +296,10 @@ ThemeData buildLightTheme() {
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
     ),
-    bottomSheetTheme: const BottomSheetThemeData(
-      backgroundColor: Colors.white,
+    bottomSheetTheme: BottomSheetThemeData(
+      backgroundColor: scheme.surfaceContainerLowest,
       surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(
+      shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
     ),

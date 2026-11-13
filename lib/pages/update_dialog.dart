@@ -11,6 +11,8 @@ import '../src/formatted_text_span.dart';
 import '../src/updater/update_flow_controller.dart';
 import '../src/updater/update_models.dart';
 import '../src/updater/update_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/changelog_category_badge.dart';
 
 /// 弹出统一的应用更新流程弹窗（同一弹窗内流转：版本说明 → 下载进度 → 准备安装）。
 ///
@@ -488,9 +490,9 @@ class _UpdateFlowDialogState extends State<_UpdateFlowDialog>
       contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
       actionsPadding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
       title: _DialogTitleBar(
-        leading: const Icon(
+        leading: Icon(
           Icons.check_circle_rounded,
-          color: Color(0xFF2E7D32),
+          color: AppColors.of(context).success,
           size: 24,
         ),
         title: '下载完成',
@@ -595,12 +597,12 @@ class _UpdateFlowDialogState extends State<_UpdateFlowDialog>
                 )
               : FilledButton.icon(
                   icon: isTriggeringInstall
-                      ? const SizedBox(
+                      ? SizedBox(
                           width: 18,
                           height: 18,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            color: Colors.white,
+                            color: theme.colorScheme.onPrimary,
                           ),
                         )
                       : Icon(
@@ -737,7 +739,7 @@ class _ReleaseNotesView extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (section.title != null && section.title!.isNotEmpty) ...[
-          _buildCategoryBadge(context, section.title!),
+          ChangelogCategoryBadge(title: section.title!),
           const SizedBox(height: 6),
         ],
         for (final item in section.items) ...[
@@ -775,53 +777,6 @@ class _ReleaseNotesView extends StatelessWidget {
           ),
         ],
       ],
-    );
-  }
-
-  Widget _buildCategoryBadge(BuildContext context, String title) {
-    final theme = Theme.of(context);
-    Color color;
-    IconData icon;
-
-    if (title.contains('新增')) {
-      color = const Color(0xFF2E7D32);
-      icon = Icons.add_circle_outline_rounded;
-    } else if (title.contains('优化')) {
-      color = const Color(0xFF1976D2);
-      icon = Icons.auto_awesome_outlined;
-    } else if (title.contains('修复')) {
-      color = const Color(0xFFE65100);
-      icon = Icons.build_circle_outlined;
-    } else if (title.contains('碎碎念')) {
-      color = const Color(0xFF7B1FA2);
-      icon = Icons.chat_bubble_outline_rounded;
-    } else {
-      color = theme.colorScheme.primary;
-      icon = Icons.label_outline_rounded;
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withValues(alpha: 0.25)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: color),
-          const SizedBox(width: 5),
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-        ],
-      ),
     );
   }
 

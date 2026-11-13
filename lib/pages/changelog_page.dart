@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../src/app_version.dart';
 import '../src/formatted_text_span.dart';
+import '../widgets/changelog_category_badge.dart';
 
 /// 更新日志页面。
 class ChangelogPage extends StatefulWidget {
@@ -256,7 +257,10 @@ class _ChangelogPageState extends State<ChangelogPage> {
                   for (final section in release.sections) ...[
                     const SizedBox(height: 14),
                     if (section.title.isNotEmpty) ...[
-                      _buildCategoryBadge(context, section.title),
+                      ChangelogCategoryBadge(
+                        title: section.title,
+                        backgroundAlpha: 0.1,
+                      ),
                       const SizedBox(height: 8),
                     ],
                     for (final item in section.items) ...[
@@ -302,53 +306,6 @@ class _ChangelogPageState extends State<ChangelogPage> {
             ),
           );
         },
-      ),
-    );
-  }
-
-  Widget _buildCategoryBadge(BuildContext context, String title) {
-    final theme = Theme.of(context);
-    Color color;
-    IconData icon;
-
-    if (title.contains('新增')) {
-      color = const Color(0xFF2E7D32);
-      icon = Icons.add_circle_outline_rounded;
-    } else if (title.contains('优化')) {
-      color = const Color(0xFF1976D2);
-      icon = Icons.auto_awesome_outlined;
-    } else if (title.contains('修复')) {
-      color = const Color(0xFFE65100);
-      icon = Icons.build_circle_outlined;
-    } else if (title.contains('碎碎念')) {
-      color = const Color(0xFF7B1FA2);
-      icon = Icons.chat_bubble_outline_rounded;
-    } else {
-      color = theme.colorScheme.primary;
-      icon = Icons.label_outline_rounded;
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withValues(alpha: 0.25)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: color),
-          const SizedBox(width: 5),
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-        ],
       ),
     );
   }

@@ -203,7 +203,7 @@ class _AppMenu<T> extends StatelessWidget {
           alignment: Alignment(alignX, alignY),
           scale: scale,
           child: Material(
-            color: Colors.white,
+            color: Theme.of(context).colorScheme.surfaceContainerLowest,
             surfaceTintColor: Colors.transparent,
             elevation: 4,
             shadowColor: Colors.black.withValues(alpha: 0.20),

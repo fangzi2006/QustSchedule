@@ -17,9 +17,13 @@ import 'package:qustschedule/pages/school_address_page.dart';
 import 'package:qustschedule/pages/settings_page.dart';
 import 'package:qustschedule/pages/timetable_edit_page.dart';
 import 'package:qustschedule/pages/timetable_list_page.dart';
+import 'package:qustschedule/pages/update_proxy_page.dart';
+import 'package:qustschedule/theme/app_theme.dart';
+import 'package:qustschedule/widgets/app_snack_bar.dart';
+import 'package:qustschedule/widgets/changelog_category_badge.dart';
 import 'package:qustschedule/widgets/course_tile.dart';
 import 'package:qustschedule/widgets/floating_dock.dart';
-import 'package:qustschedule/widgets/app_snack_bar.dart';
+import 'package:qustschedule/widgets/section_title.dart';
 import 'package:qustschedule/src/app_model.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
 import 'package:qustschedule/src/reminder_gateway.dart';
@@ -3377,6 +3381,158 @@ void main() {
 
       expect(find.text('验证码图片无法显示'), findsOneWidget);
       expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('界面样式、语义色与提示统一', () {
+    testWidgets('AppColors.of 在裸 MaterialApp 回退浅色默认值，buildLightTheme 锁定纯白容器面', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        const MaterialApp(home: SizedBox.shrink(key: Key('bare-theme-probe'))),
+      );
+      final bareContext = tester.element(
+        find.byKey(const Key('bare-theme-probe')),
+      );
+      final bareColors = AppColors.of(bareContext);
+      expect(bareColors.success, AppColors.light.success);
+      expect(bareColors.captchaSurface, AppColors.light.captchaSurface);
+
+      // 先卸载旧 MaterialApp，避免 AnimatedTheme 跨树复用时首帧仍沿用上一棵树的主题。
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: const SizedBox.shrink(key: Key('light-theme-probe')),
+        ),
+      );
+      final themedContext = tester.element(
+        find.byKey(const Key('light-theme-probe')),
+      );
+      final themedData = Theme.of(themedContext);
+      expect(themedData.extension<AppColors>(), same(AppColors.light));
+      expect(AppColors.of(themedContext), same(AppColors.light));
+      expect(themedData.colorScheme.surfaceContainerLowest, Colors.white);
+    });
+
+    testWidgets('SectionTitle 在设置页、更新代理页与提醒页保持统一紧凑标题样式', (tester) async {
+      void expectCompactSectionStyle(WidgetTester tester, String title) {
+        final sectionFinder = find.widgetWithText(SectionTitle, title);
+        expect(sectionFinder, findsOneWidget);
+        final text = tester.widget<Text>(
+          find.descendant(of: sectionFinder, matching: find.byType(Text)),
+        );
+        expect(text.style?.fontSize, 12);
+        expect(text.style?.fontWeight, FontWeight.w500);
+        expect(text.style?.letterSpacing, 0.3);
+      }
+
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+
+      await tester.pumpWidget(wrap(SettingsPage(model: model)));
+      expectCompactSectionStyle(tester, '课表');
+
+      await tester.pumpWidget(wrap(UpdateProxyPage(model: model)));
+      expectCompactSectionStyle(tester, '首选加速节点');
+
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final gateway = FakeReminderGateway(
+        statusValue: const ReminderRuntimeStatus(
+          notificationPermission: true,
+          notificationsEnabled: true,
+          exactAlarmAllowed: true,
+          scheduled: 1,
+          style: 'banner',
+        ),
+      );
+      final service = ReminderService(
+        model: model,
+        gateway: gateway,
+        now: () => DateTime(2026, 9, 7, 6),
+      );
+      await tester.pumpWidget(
+        wrap(ReminderPage(model: model, service: service)),
+      );
+      await tester.pumpAndSettle();
+      expectCompactSectionStyle(tester, '提醒设置');
+      expectCompactSectionStyle(tester, '权限与可靠性');
+
+      service.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testWidgets('SettingsPage 修改密码失败走 error 风格 SnackBar 且不再弹 AlertDialog', (
+      tester,
+    ) async {
+      final backend = FakeBackend(
+        loginBehavior: (call, _) async {
+          if (call == 1) {
+            return const AuthenticatedState(
+              studentId: '20240001',
+              studentName: '测试学生',
+            );
+          }
+          throw const AcademicError(ErrorCode.invalidCredentials, '新密码验证未通过');
+        },
+      );
+      final model = buildModel(backend: backend);
+      await model.signIn('20240001', 'oldpw');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: SettingsPage(model: model),
+        ),
+      );
+
+      await tester.dragUntilVisible(
+        find.text('修改密码'),
+        find.byType(ListView),
+        const Offset(0, -60),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('修改密码'));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsOneWidget);
+
+      await tester.enterText(find.byType(TextFormField).at(0), 'newpw123');
+      await tester.enterText(find.byType(TextFormField).at(1), 'newpw123');
+      await tester.tap(find.text('确定'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(SnackBar), findsOneWidget);
+      expect(find.textContaining('修改失败：'), findsOneWidget);
+
+      await tester.pump(const Duration(seconds: 5));
+    });
+
+    testWidgets('ChangelogCategoryBadge 统一渲染各更新分类标签与语义色', (tester) async {
+      const titles = <String>['新增', '优化', '修复', '碎碎念', '其他'];
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: Scaffold(
+            body: Wrap(
+              children: <Widget>[
+                for (final title in titles)
+                  ChangelogCategoryBadge(title: title),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      for (final title in titles) {
+        expect(
+          find.widgetWithText(ChangelogCategoryBadge, title),
+          findsOneWidget,
+        );
+      }
+      final addText = tester.widget<Text>(find.text('新增'));
+      expect(addText.style?.color, AppColors.light.categoryAdd);
     });
   });
 }

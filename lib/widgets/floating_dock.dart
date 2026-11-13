@@ -502,7 +502,7 @@ class FloatingDockState extends State<FloatingDock>
                     height: FloatingDock.height,
                     padding: const EdgeInsets.symmetric(horizontal: 6),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: scheme.surfaceContainerLowest,
                       borderRadius: BorderRadius.circular(
                         FloatingDock.height / 2,
                       ),

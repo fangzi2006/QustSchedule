@@ -7,7 +7,9 @@ import '../src/app_model.dart';
 import '../src/preferences_repository.dart';
 import '../src/updater/update_models.dart';
 import '../src/updater/update_service.dart';
+import '../theme/app_theme.dart';
 import '../widgets/app_snack_bar.dart';
+import '../widgets/section_title.dart';
 
 class UpdateProxyPage extends StatefulWidget {
   const UpdateProxyPage({super.key, required this.model});
@@ -151,7 +153,10 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
                 ),
               ),
               const SizedBox(height: 12),
-              _buildSectionTitle('首选加速节点'),
+              const SectionTitle(
+                '首选加速节点',
+                padding: EdgeInsets.fromLTRB(4, 6, 4, 8),
+              ),
               for (final proxy in proxies) ...[
                 _buildProxyCard(context, proxy, selectedProxy),
                 const SizedBox(height: 8),
@@ -164,7 +169,10 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
               ),
 
               const SizedBox(height: 20),
-              _buildSectionTitle('多层自动回退机制'),
+              const SectionTitle(
+                '多层自动回退机制',
+                padding: EdgeInsets.fromLTRB(4, 6, 4, 8),
+              ),
               Card(
                 color: theme.colorScheme.surfaceContainerHighest.withValues(
                   alpha: 0.35,
@@ -199,21 +207,6 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
           ),
         );
       },
-    );
-  }
-
-  Widget _buildSectionTitle(String title) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 6, 4, 8),
-      child: Text(
-        title,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: Theme.of(context).hintColor,
-          letterSpacing: 0.3,
-        ),
-      ),
     );
   }
 
@@ -338,21 +331,22 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
   }
 
   Widget _buildLatencyChip(BuildContext context, ProxyTestResult result) {
+    final colors = AppColors.of(context);
     Color bg;
     Color fg;
 
     if (!result.isUsable) {
-      bg = const Color(0xFFFFEBEE);
-      fg = const Color(0xFFC62828);
+      bg = colors.dangerContainer;
+      fg = colors.danger;
     } else if (result.latencyMs < 600) {
-      bg = const Color(0xFFE8F5E9);
-      fg = const Color(0xFF2E7D32);
+      bg = colors.successContainer;
+      fg = colors.success;
     } else if (result.latencyMs < 1500) {
-      bg = const Color(0xFFFFF3E0);
-      fg = const Color(0xFFE65100);
+      bg = colors.warningChipBg;
+      fg = colors.warningStrong;
     } else {
-      bg = const Color(0xFFFFEBEE);
-      fg = const Color(0xFFC62828);
+      bg = colors.dangerContainer;
+      fg = colors.danger;
     }
 
     return Container(
