@@ -10,11 +10,12 @@
 ///  - `fetchedAt` 用于"最小更新间隔"——冷启动静默刷新前先判断隔了多久。
 library;
 
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 import 'package:zf_academic/zf_academic.dart';
+
+import 'safe_json_file.dart';
 
 /// 一份已缓存的课表 + 抓取时间 + 所属学校。
 class CachedSchedule {
@@ -41,9 +42,12 @@ abstract class ScheduleCache {
 
 /// 文件实现：app 私有目录下单个 JSON。
 class FileScheduleCache implements ScheduleCache {
-  FileScheduleCache._(this._file);
+  FileScheduleCache._(File file) : _store = SafeJsonFile(file);
 
-  final File _file;
+  /// 仅测试或显式路径使用：基于给定文件创建安全课表缓存。
+  FileScheduleCache.fromFile(File file) : _store = SafeJsonFile(file);
+
+  final SafeJsonFile _store;
 
   static Future<FileScheduleCache> open({
     String fileName = 'zf-schedule-cache.json',
@@ -52,17 +56,26 @@ class FileScheduleCache implements ScheduleCache {
     return FileScheduleCache._(File('${directory.path}/$fileName'));
   }
 
+  static bool _isValidPayload(Object? decoded) {
+    if (decoded is! Map<String, dynamic>) return false;
+    final baseUrl = decoded['baseUrl'];
+    if (baseUrl is! String || baseUrl.isEmpty) return false;
+    return _scheduleFromJson(decoded['schedule']) != null;
+  }
+
   @override
   Future<CachedSchedule?> load() async {
     try {
-      if (!await _file.exists()) return null;
-      final text = await _file.readAsString();
-      final decoded = jsonDecode(text);
-      if (decoded is! Map<String, dynamic>) return null;
-      final baseUrl = decoded['baseUrl'];
-      if (baseUrl is! String || baseUrl.isEmpty) return null;
-      final schedule = _scheduleFromJson(decoded['schedule']);
-      if (schedule == null) return null;
+      final res = await _store.readJson(isValid: _isValidPayload);
+      final decoded = res.data;
+      if (decoded is! Map<String, dynamic>) {
+        if (res.hadUnrecoverableCorruption) {
+          await clear();
+        }
+        return null;
+      }
+      final baseUrl = decoded['baseUrl'] as String;
+      final schedule = _scheduleFromJson(decoded['schedule'])!;
       final fetchedAt = DateTime.tryParse(
         decoded['fetchedAt'] as String? ?? '',
       );
@@ -72,7 +85,6 @@ class FileScheduleCache implements ScheduleCache {
         fetchedAt: fetchedAt ?? DateTime.fromMillisecondsSinceEpoch(0),
       );
     } catch (_) {
-      // 缓存损坏不值得让 app 起不来：按"没有缓存"处理。
       return null;
     }
   }
@@ -80,13 +92,12 @@ class FileScheduleCache implements ScheduleCache {
   @override
   Future<void> save(CachedSchedule cached) async {
     try {
-      await _file.parent.create(recursive: true);
-      await _file.writeAsString(
-        jsonEncode(<String, Object?>{
+      await _store.writeJson(
+        () => <String, Object?>{
           'baseUrl': cached.baseUrl,
           'fetchedAt': cached.fetchedAt.toIso8601String(),
           'schedule': _scheduleToJson(cached.schedule),
-        }),
+        },
       );
     } catch (_) {
       // 写缓存失败不影响主流程（下次打开无非再抓一次）。
@@ -95,9 +106,7 @@ class FileScheduleCache implements ScheduleCache {
 
   @override
   Future<void> clear() async {
-    try {
-      if (await _file.exists()) await _file.delete();
-    } catch (_) {}
+    await _store.clear();
   }
 
   // -------------------------------------------------------------------------

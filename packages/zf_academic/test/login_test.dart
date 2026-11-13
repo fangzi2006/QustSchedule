@@ -609,6 +609,40 @@ void main() {
       expect(await storage.load(), isNull);
     });
 
+    test('FileCookieStorage 连续保存合并只保留最新快照，且 clear 可作废未落盘任务', () async {
+      final dir = await Directory.systemTemp.createTemp('cookie_coalesce_');
+      addTearDown(() => dir.delete(recursive: true));
+      final storage = FileCookieStorage('${dir.path}/cookies.json');
+
+      await Future.wait(<Future<void>>[
+        for (var i = 1; i <= 10; i++)
+          storage.save(
+            CookieStoreSnapshot(
+              version: 1,
+              baseUrl: 'https://jw.example.edu.cn/jwglxt',
+              savedAt: i,
+              cookies: const [],
+            ),
+          ),
+      ]);
+
+      final loaded = await storage.load();
+      expect(loaded, isNotNull);
+      expect(loaded!.savedAt, 10);
+
+      final pending = storage.save(
+        const CookieStoreSnapshot(
+          version: 1,
+          baseUrl: 'https://jw.example.edu.cn/jwglxt',
+          savedAt: 99,
+          cookies: [],
+        ),
+      );
+      await storage.clear();
+      await pending;
+      expect(await storage.load(), isNull);
+    });
+
     test('selectedTermFromHtml 遇到长度不足 4 位的学年值时不抛 RangeError', () {
       const html =
           '<select name="xnm"><option value="12" selected></option></select>'

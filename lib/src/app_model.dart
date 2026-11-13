@@ -125,6 +125,7 @@ class AppModel extends ChangeNotifier {
     this.service.captchaHandler = _handleCaptcha;
     // 编排层进入"重新登录"阶段时，把右上角提示语换掉（仍不遮挡课表）。
     this.service.onStage = _onServiceStage;
+    _attachPreferencesStorageMonitor();
   }
 
   final ScheduleService service;
@@ -198,6 +199,32 @@ class AppModel extends ChangeNotifier {
 
   String _errorCode = '';
   String get errorCode => _errorCode;
+
+  int _storageNoticeEvent = 0;
+  int get storageNoticeEvent => _storageNoticeEvent;
+
+  String? _storageNoticeMessage;
+  String? get storageNoticeMessage => _storageNoticeMessage;
+
+  bool _reportedWriteFailure = false;
+
+  void _attachPreferencesStorageMonitor() {
+    _preferences.onWriteSuccess = () {
+      _reportedWriteFailure = false;
+    };
+    _preferences.onWriteError = (_) {
+      if (_disposed || _reportedWriteFailure) return;
+      _reportedWriteFailure = true;
+      _emitStorageNotice('本地设置保存失败，请检查存储空间');
+    };
+  }
+
+  void _emitStorageNotice(String message) {
+    if (_disposed) return;
+    _storageNoticeMessage = message;
+    _storageNoticeEvent++;
+    notifyListeners();
+  }
 
   /// 上次"看见"的日期（只到天）。回到前台时拿它比对，发现跨天就重建一次界面。
   ///
@@ -279,6 +306,19 @@ class AppModel extends ChangeNotifier {
     prefsNotifier.value++;
   }
 
+  /// 先同步更新内存与界面，再异步等待合并写盘，确保快速开关不卡手也不堆积长队列。
+  Future<void> _commitPref(
+    Future<void> Function() write, {
+    bool syncProxy = false,
+    bool notifyPrefs = true,
+  }) async {
+    final flushing = write();
+    if (syncProxy) _syncUpdateProxy();
+    notifyListeners();
+    if (notifyPrefs) _notifyPrefs();
+    await flushing;
+  }
+
   /// 本学期实际有课的最大周次（课表里出现过的最晚周）。
   int _maxWeek = 20;
   int get maxWeek => _maxWeek;
@@ -346,11 +386,8 @@ class AppModel extends ChangeNotifier {
   int get sectionCount => _preferences.sectionCount;
 
   /// 改全局节数。每张表读取时会按段自动对齐，课表行数跟着变。
-  Future<void> setSectionCounts(Map<PeriodGroup, int> value) async {
-    await _preferences.setSectionCounts(value);
-    notifyListeners();
-    _notifyPrefs();
-  }
+  Future<void> setSectionCounts(Map<PeriodGroup, int> value) =>
+      _commitPref(() => _preferences.setSectionCounts(value));
 
   /// 当前生效表对齐到全局节数后的节次（时间轴读它，保证行数一致）。
   List<SectionTime> get activeSections => reconcileSections(
@@ -409,11 +446,8 @@ class AppModel extends ChangeNotifier {
   }
 
   /// 保存整份时间表集合（增删改统一走这里）。
-  Future<void> saveTimetables(List<Timetable> tables) async {
-    await _preferences.saveTimetables(tables);
-    notifyListeners();
-    _notifyPrefs();
-  }
+  Future<void> saveTimetables(List<Timetable> tables) =>
+      _commitPref(() => _preferences.saveTimetables(tables));
 
   /// 新增或按 id 覆盖一张表。
   Future<void> upsertTimetable(Timetable table) async {
@@ -439,10 +473,8 @@ class AppModel extends ChangeNotifier {
   /// 上次填的快捷设置（面板回填用）。
   QuickSetup? get quickSetup => _preferences.quickSetup;
 
-  Future<void> saveQuickSetup(QuickSetup setup) async {
-    await _preferences.setQuickSetup(setup);
-    notifyListeners();
-  }
+  Future<void> saveQuickSetup(QuickSetup setup) =>
+      _commitPref(() => _preferences.setQuickSetup(setup), notifyPrefs: false);
 
   // ---------------------------------------------------------------------------
   // 课表格子显示哪些信息
@@ -455,15 +487,13 @@ class AppModel extends ChangeNotifier {
   bool get showLocation => _preferences.showLocation;
 
   Future<void> setShowTeacher(bool value) async {
-    await _preferences.setShowTeacher(value);
-    notifyListeners();
-    _notifyPrefs();
+    if (_preferences.showTeacher == value) return;
+    await _commitPref(() => _preferences.setShowTeacher(value));
   }
 
   Future<void> setShowLocation(bool value) async {
-    await _preferences.setShowLocation(value);
-    notifyListeners();
-    _notifyPrefs();
+    if (_preferences.showLocation == value) return;
+    await _commitPref(() => _preferences.setShowLocation(value));
   }
 
   /// 当前课表的"备注"（实践课程 / 其他课程，来自 `sjkList`）。没有则为空。
@@ -478,9 +508,8 @@ class AppModel extends ChangeNotifier {
       showScheduleRemarks && scheduleRemarks.isNotEmpty;
 
   Future<void> setShowScheduleRemarks(bool value) async {
-    await _preferences.setShowScheduleRemarks(value);
-    notifyListeners();
-    _notifyPrefs();
+    if (_preferences.showScheduleRemarks == value) return;
+    await _commitPref(() => _preferences.setShowScheduleRemarks(value));
   }
 
   // ---------------------------------------------------------------------------
@@ -494,15 +523,14 @@ class AppModel extends ChangeNotifier {
   int get autoRefreshIntervalMinutes => _preferences.autoRefreshIntervalMinutes;
 
   Future<void> setAutoRefresh(bool value) async {
-    await _preferences.setAutoRefresh(value);
-    notifyListeners();
-    _notifyPrefs();
+    if (_preferences.autoRefresh == value) return;
+    await _commitPref(() => _preferences.setAutoRefresh(value));
   }
 
   Future<void> setAutoRefreshIntervalMinutes(int value) async {
-    await _preferences.setAutoRefreshIntervalMinutes(value);
-    notifyListeners();
-    _notifyPrefs();
+    final safe = clampAutoRefreshIntervalMinutes(value);
+    if (_preferences.autoRefreshIntervalMinutes == safe) return;
+    await _commitPref(() => _preferences.setAutoRefreshIntervalMinutes(safe));
   }
 
   // ---------------------------------------------------------------------------
@@ -527,34 +555,26 @@ class AppModel extends ChangeNotifier {
 
   Future<void> setReminderEnabled(bool value) async {
     if (_preferences.reminderEnabled == value) return;
-    await _preferences.setReminderEnabled(value);
-    notifyListeners();
-    _notifyPrefs();
+    await _commitPref(() => _preferences.setReminderEnabled(value));
   }
 
   Future<void> setReminderLeadMinutes(int value) async {
     final safe = clampReminderLead(value);
     if (_preferences.reminderLeadMinutes == safe) return;
-    await _preferences.setReminderLeadMinutes(safe);
-    notifyListeners();
-    _notifyPrefs();
+    await _commitPref(() => _preferences.setReminderLeadMinutes(safe));
   }
 
   Future<void> setReminderStyle(ReminderStyle value) async {
     if (_preferences.reminderStyle == value) return;
-    await _preferences.setReminderStyle(value);
-    notifyListeners();
-    _notifyPrefs();
+    await _commitPref(() => _preferences.setReminderStyle(value));
   }
 
-  /// 流体云卡片是否显示到下课（默认 false = 上课即收起）。
+  /// 流体云卡片是否显示到下课（false = 上课即收起）。
   bool get reminderFluidUntilEnd => _preferences.reminderFluidUntilEnd;
 
   Future<void> setReminderFluidUntilEnd(bool value) async {
     if (_preferences.reminderFluidUntilEnd == value) return;
-    await _preferences.setReminderFluidUntilEnd(value);
-    notifyListeners();
-    _notifyPrefs();
+    await _commitPref(() => _preferences.setReminderFluidUntilEnd(value));
   }
 
   // ---------------------------------------------------------------------------
@@ -576,39 +596,35 @@ class AppModel extends ChangeNotifier {
 
   Future<void> setSelectedUpdateProxy(String value) async {
     if (_preferences.selectedUpdateProxy == value.trim()) return;
-    await _preferences.setSelectedUpdateProxy(value);
-    _syncUpdateProxy();
-    _notifyPrefs();
-    notifyListeners();
+    await _commitPref(
+      () => _preferences.setSelectedUpdateProxy(value),
+      syncProxy: true,
+    );
   }
 
   String get updateProxyUrl => _preferences.updateProxyUrl;
 
   Future<void> setUpdateProxyUrl(String value) async {
     if (_preferences.updateProxyUrl == value.trim()) return;
-    await _preferences.setUpdateProxyUrl(value);
-    _syncUpdateProxy();
-    _notifyPrefs();
-    notifyListeners();
+    await _commitPref(
+      () => _preferences.setUpdateProxyUrl(value),
+      syncProxy: true,
+    );
   }
 
   List<String> get customUpdateProxies => _preferences.customUpdateProxies;
 
   List<String> get allUpdateProxies => _preferences.allUpdateProxies;
 
-  Future<void> addCustomUpdateProxy(String url) async {
-    await _preferences.addCustomUpdateProxy(url);
-    _syncUpdateProxy();
-    _notifyPrefs();
-    notifyListeners();
-  }
+  Future<void> addCustomUpdateProxy(String url) => _commitPref(
+    () => _preferences.addCustomUpdateProxy(url),
+    syncProxy: true,
+  );
 
-  Future<void> removeCustomUpdateProxy(String url) async {
-    await _preferences.removeCustomUpdateProxy(url);
-    _syncUpdateProxy();
-    _notifyPrefs();
-    notifyListeners();
-  }
+  Future<void> removeCustomUpdateProxy(String url) => _commitPref(
+    () => _preferences.removeCustomUpdateProxy(url),
+    syncProxy: true,
+  );
 
   bool get autoCheckUpdate => _preferences.autoCheckUpdate;
 
@@ -699,9 +715,7 @@ class AppModel extends ChangeNotifier {
 
   Future<void> setAutoCheckUpdate(bool value) async {
     if (_preferences.autoCheckUpdate == value) return;
-    await _preferences.setAutoCheckUpdate(value);
-    _notifyPrefs();
-    notifyListeners();
+    await _commitPref(() => _preferences.setAutoCheckUpdate(value));
   }
 
   // ---------------------------------------------------------------------------
@@ -725,11 +739,13 @@ class AppModel extends ChangeNotifier {
       toMonth: toMonth,
       toDay: toDay,
     );
-    await _preferences.saveReschedules(<RescheduleRule>[
-      ..._preferences.reschedules,
-      rule,
-    ]);
-    notifyListeners();
+    await _commitPref(
+      () => _preferences.saveReschedules(<RescheduleRule>[
+        ..._preferences.reschedules,
+        rule,
+      ]),
+      notifyPrefs: false,
+    );
     return rule;
   }
 
@@ -739,8 +755,10 @@ class AppModel extends ChangeNotifier {
         .where((rule) => rule.id != id)
         .toList();
     if (rest.length == _preferences.reschedules.length) return;
-    await _preferences.saveReschedules(rest);
-    notifyListeners();
+    await _commitPref(
+      () => _preferences.saveReschedules(rest),
+      notifyPrefs: false,
+    );
   }
 
   /// 修改一条调课规则的起止日期（保留原 id，渲染与冲突判定不变）。
@@ -770,8 +788,10 @@ class AppModel extends ChangeNotifier {
       }
     }
     if (!changed) return;
-    await _preferences.saveReschedules(updated);
-    notifyListeners();
+    await _commitPref(
+      () => _preferences.saveReschedules(updated),
+      notifyPrefs: false,
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -919,7 +939,13 @@ class AppModel extends ChangeNotifier {
           : FileGradesCache.open();
 
       if (sessionFuture != null) _rebindRepository(await sessionFuture);
-      if (preferencesFuture != null) _preferences = await preferencesFuture;
+      if (preferencesFuture != null) {
+        _preferences = await preferencesFuture;
+        _attachPreferencesStorageMonitor();
+        if (_preferences.didResetFromCorruption) {
+          _emitStorageNotice('本地设置文件已损坏且无法恢复，已重置为默认设置');
+        }
+      }
       // 偏好到手（或本来就注入了内存实现）：提醒服务从这一刻起才允许同步。
       _preferencesLoaded = true;
       // 冷启动也算"刚看见过今天"：回到前台时拿它比对，跨天才重建。

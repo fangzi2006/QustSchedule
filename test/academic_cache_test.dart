@@ -194,6 +194,46 @@ void main() {
       expect(loaded!.isNotEvaluated, isTrue);
       expect(loaded.items.first.courseName, equals('大学英语'));
     });
+
+    test('并发保存多个学期的考试与成绩缓存时不互相覆盖', () async {
+      final examFile = File('${tempDir.path}/concurrent_exams.json');
+      final gradesFile = File('${tempDir.path}/concurrent_grades.json');
+      final examCache = FileExamCache.fromFile(examFile);
+      final gradesCache = FileGradesCache.fromFile(gradesFile);
+
+      await Future.wait(<Future<void>>[
+        examCache.save('2025-2026-1', const [ExamItem(courseName: '大一高数')]),
+        examCache.save('2025-2026-2', const [ExamItem(courseName: '大一物理')]),
+        examCache.save('2026-2027-1', const [ExamItem(courseName: '大二离散')]),
+        gradesCache.save('2025-2026-1', const [
+          GradeItem(courseName: '大一高数', rawScore: '91', credit: 4.0),
+        ]),
+        gradesCache.save('2025-2026-2', const [
+          GradeItem(courseName: '大一物理', rawScore: '88', credit: 3.5),
+        ]),
+      ]);
+
+      expect(
+        (await examCache.load('2025-2026-1'))?.items.single.courseName,
+        '大一高数',
+      );
+      expect(
+        (await examCache.load('2025-2026-2'))?.items.single.courseName,
+        '大一物理',
+      );
+      expect(
+        (await examCache.load('2026-2027-1'))?.items.single.courseName,
+        '大二离散',
+      );
+      expect(
+        (await gradesCache.load('2025-2026-1'))?.items.single.courseName,
+        '大一高数',
+      );
+      expect(
+        (await gradesCache.load('2025-2026-2'))?.items.single.courseName,
+        '大一物理',
+      );
+    });
   });
 
   group('LateExamCache and LateGradesCache', () {

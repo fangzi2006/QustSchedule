@@ -26,6 +26,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'reminder_planner.dart';
 import 'reschedule.dart';
+import 'safe_json_file.dart';
 import 'school.dart';
 import 'timetable.dart';
 
@@ -102,6 +103,7 @@ class Preferences {
     List<String>? customUpdateProxies,
     bool autoCheckUpdate = defaultAutoCheckUpdate,
     File? file,
+    bool didResetFromCorruption = false,
   }) : _termStarts = termStarts,
        _timetables = timetables,
        _quickSetup = quickSetup,
@@ -133,7 +135,17 @@ class Preferences {
            ? List<String>.from(customUpdateProxies)
            : <String>[],
        _autoCheckUpdate = autoCheckUpdate,
+       didResetFromCorruption = didResetFromCorruption,
        _file = file;
+
+  /// 本地文件与备份均损坏、被迫恢复为出厂默认值时为 `true`。
+  final bool didResetFromCorruption;
+
+  /// 持久化落盘失败回调（供状态层温和提示用户）。
+  void Function(Object error)? onWriteError;
+
+  /// 持久化落盘成功回调。
+  void Function()? onWriteSuccess;
 
   final Map<String, String> _termStarts;
   List<Timetable> _timetables;
@@ -252,10 +264,22 @@ class Preferences {
 
   static Future<Preferences> open({String fileName = 'app_prefs.json'}) async {
     final directory = await getApplicationSupportDirectory();
-    final file = File('${directory.path}/$fileName');
-    final text = file.existsSync() ? await file.readAsString() : '';
-    final prefs = decode(text, file: file);
-    return prefs;
+    return openFile(File('${directory.path}/$fileName'));
+  }
+
+  /// 从指定设置文件安全打开设置（支持 `.bak` 自动恢复与损坏检测）。
+  static Future<Preferences> openFile(File file) async {
+    final readResult = await SafeJsonFile(file)
+        .readJson(isValid: (decoded) => decoded is Map<String, dynamic>);
+    final data = readResult.data;
+    if (data is Map<String, dynamic>) {
+      return _fromDecodedMap(data, file: file);
+    }
+    return _fromDecodedMap(
+      const <String, dynamic>{},
+      file: file,
+      didResetFromCorruption: readResult.hadUnrecoverableCorruption,
+    );
   }
 
   /// 从 JSON 文本恢复设置（[open] 的核心逻辑）。
@@ -277,6 +301,33 @@ class Preferences {
   }
 
   static Preferences decode(String text, {File? file}) {
+    if (text.trim().isEmpty) {
+      return _fromDecodedMap(const <String, dynamic>{}, file: file);
+    }
+    try {
+      final decoded = jsonDecode(text);
+      if (decoded is Map<String, dynamic>) {
+        return _fromDecodedMap(decoded, file: file);
+      }
+      return _fromDecodedMap(
+        const <String, dynamic>{},
+        file: file,
+        didResetFromCorruption: true,
+      );
+    } catch (_) {
+      return _fromDecodedMap(
+        const <String, dynamic>{},
+        file: file,
+        didResetFromCorruption: true,
+      );
+    }
+  }
+
+  static Preferences _fromDecodedMap(
+    Map<String, dynamic> decoded, {
+    File? file,
+    bool didResetFromCorruption = false,
+  }) {
     var termStarts = <String, String>{};
     var timetables = <Timetable>[];
     QuickSetup? quickSetup;
@@ -301,162 +352,139 @@ class Preferences {
     var customUpdateProxies = <String>[];
     var autoCheckUpdate = defaultAutoCheckUpdate;
 
-    if (text.trim().isNotEmpty) {
-      try {
-        final decoded = jsonDecode(text);
-        if (decoded is Map<String, dynamic>) {
-          final rawStarts = decoded['termStarts'];
-          if (rawStarts is Map<String, dynamic>) {
-            termStarts = rawStarts.map(
-              (key, value) => MapEntry(key, value.toString()),
-            );
-          }
-          final rawTables = decoded['timetables'];
-          if (rawTables is List<dynamic>) {
-            timetables = rawTables
-                .whereType<Map<String, dynamic>>()
-                .map(Timetable.fromJson)
-                .where((table) => table.sections.isNotEmpty)
-                .toList();
-          }
-          final rawQuick = decoded['quickSetup'];
-          if (rawQuick is Map<String, dynamic>) {
-            quickSetup = QuickSetup.fromJson(rawQuick);
-          }
-          // 新格式：三段节数。旧格式只有总数，按 4/4/其余 迁移。
-          final rawCounts = decoded['sectionCounts'];
-          if (rawCounts is Map<String, dynamic>) {
-            final parsed = <PeriodGroup, int>{};
-            for (final group in PeriodGroup.values) {
-              final value = (rawCounts[group.name] as num?)?.toInt();
-              if (value != null) parsed[group] = value;
-            }
-            if (parsed.isNotEmpty) sectionCounts = clampCounts(parsed);
-          } else {
-            final legacy = (decoded['sectionCount'] as num?)?.toInt();
-            if (legacy != null) {
-              sectionCounts = clampCounts(splitCounts(legacy));
-            }
-          }
-          final rawSchools = decoded['schools'];
-          if (rawSchools is List<dynamic>) {
-            final parsed = rawSchools
-                .whereType<String>()
-                .map((item) => item.trim())
-                .where((item) => item.isNotEmpty)
-                .toList();
-            if (parsed.isNotEmpty) schools = parsed;
-          }
-          // schema 8：地址簿出厂带 6 条青科大线路。老文件里只有当初那一条
-          // （或用户自己加的几条），这里把缺的补上；用户删过的线路在 schema 8
-          // 之后不会再被补回来（迁移只跑一次）。
-          final int rawSchema = (decoded['schema'] as num?)?.toInt() ?? 1;
-          if (rawSchema < 8) schools = withPresetSchools(schools);
-
-          final rawCurrent = (decoded['currentSchool'] as String?)?.trim();
-          if (rawCurrent != null && rawCurrent.isNotEmpty) {
-            currentSchool = rawCurrent;
-          }
-          // schema 7：每个学校上次登录的账号（用于拼凭据的 key）。
-          final rawAccounts = decoded['lastAccounts'];
-          if (rawAccounts is Map<String, dynamic>) {
-            lastAccounts = <String, String>{
-              for (final entry in rawAccounts.entries)
-                if (entry.value is String && (entry.value as String).isNotEmpty)
-                  entry.key: entry.value as String,
-            };
-          }
-          // schema 13：每个学校上次登录记录的学生姓名（冷启动免等网络）。
-          final rawStudentNames = decoded['lastStudentNames'];
-          if (rawStudentNames is Map<String, dynamic>) {
-            lastStudentNames = <String, String>{
-              for (final entry in rawStudentNames.entries)
-                if (entry.value is String && (entry.value as String).isNotEmpty)
-                  entry.key: entry.value as String,
-            };
-          }
-          // 缺字段 = 旧版本存的设置，按"都显示"处理。
-          final rawTeacher = decoded['showTeacher'];
-          if (rawTeacher is bool) showTeacher = rawTeacher;
-          final rawLocation = decoded['showLocation'];
-          if (rawLocation is bool) showLocation = rawLocation;
-          final rawCell = (decoded['cellHeight'] as num?)?.toDouble();
-          if (rawCell != null) cellHeight = clampCellHeight(rawCell);
-          final rawScale = (decoded['courseTextScale'] as num?)?.toDouble();
-          if (rawScale != null) {
-            courseTextScale = clampCourseTextScale(rawScale);
-          }
-          // schema 5：静默更新开关 / 间隔 / 调课规则。
-          final rawAutoRefresh = decoded['autoRefresh'];
-          if (rawAutoRefresh is bool) autoRefresh = rawAutoRefresh;
-          final rawInterval = (decoded['autoRefreshIntervalMinutes'] as num?)
-              ?.toInt();
-          if (rawInterval != null) {
-            autoRefreshIntervalMinutes = clampAutoRefreshIntervalMinutes(
-              rawInterval,
-            );
-          }
-          final rawReschedules = decoded['reschedules'];
-          if (rawReschedules is List<dynamic>) {
-            reschedules = rawReschedules
-                .map(RescheduleRule.fromJson)
-                .whereType<RescheduleRule>()
-                .toList();
-          }
-          // schema 6：是否显示课表备注。缺字段 = 旧版本，按"显示"处理。
-          final rawRemarks = decoded['showScheduleRemarks'];
-          if (rawRemarks is bool) showScheduleRemarks = rawRemarks;
-          // schema 9：课前提醒。缺字段 = 旧版本，按"关闭 + 默认提前量"。
-          final rawReminder = decoded['reminderEnabled'];
-          if (rawReminder is bool) reminderEnabled = rawReminder;
-          final rawLead = (decoded['reminderLeadMinutes'] as num?)?.toInt();
-          if (rawLead != null) reminderLeadMinutes = clampReminderLead(rawLead);
-          // schema 10：提醒形态。缺字段 / 脏值一律按横幅。
-          reminderStyle = ReminderStyle.parse(
-            decoded['reminderStyle'] as String?,
-          );
-          // schema 11：流体云是否显示到下课。缺字段 = 默认（上课即收起）。
-          final rawUntilEnd = decoded['reminderFluidUntilEnd'];
-          if (rawUntilEnd is bool) reminderFluidUntilEnd = rawUntilEnd;
-          // schema 12：软件更新设置。
-          final rawUpdateProxy =
-              decoded['selectedUpdateProxy'] ?? decoded['updateProxyUrl'];
-          if (rawUpdateProxy is String) {
-            updateProxyUrl = rawUpdateProxy.trim();
-          }
-          final rawCustomList = decoded['customUpdateProxies'];
-          if (rawCustomList is List<dynamic>) {
-            customUpdateProxies = rawCustomList
-                .whereType<String>()
-                .map((s) => s.trim())
-                .where((s) => s.isNotEmpty && !presetUpdateProxies.contains(s))
-                .toList();
-          }
-          final rawAutoCheck = decoded['autoCheckUpdate'];
-          if (rawAutoCheck is bool) autoCheckUpdate = rawAutoCheck;
-        }
-      } catch (_) {
-        // 文件损坏按空设置处理：不值得因为一份设置让 app 起不来。
-        termStarts = <String, String>{};
-        timetables = <Timetable>[];
-        quickSetup = null;
-        sectionCounts = <PeriodGroup, int>{...defaultSectionCounts};
-        showTeacher = true;
-        showLocation = true;
-        cellHeight = defaultCellHeight;
-        courseTextScale = defaultCourseTextScale;
-        autoRefresh = true;
-        autoRefreshIntervalMinutes = defaultAutoRefreshIntervalMinutes;
-        reschedules = <RescheduleRule>[];
-        showScheduleRemarks = true;
-        reminderEnabled = false;
-        reminderLeadMinutes = defaultReminderLeadMinutes;
-        reminderStyle = defaultReminderStyle;
-        reminderFluidUntilEnd = defaultReminderFluidUntilEnd;
-        updateProxyUrl = defaultUpdateProxyUrl;
-        customUpdateProxies = <String>[];
-        autoCheckUpdate = defaultAutoCheckUpdate;
+    if (decoded.isNotEmpty) {
+      final rawStarts = decoded['termStarts'];
+      if (rawStarts is Map<String, dynamic>) {
+        termStarts = rawStarts.map(
+          (key, value) => MapEntry(key, value.toString()),
+        );
       }
+      final rawTables = decoded['timetables'];
+      if (rawTables is List<dynamic>) {
+        for (final item in rawTables.whereType<Map<String, dynamic>>()) {
+          try {
+            final table = Timetable.fromJson(item);
+            if (table.sections.isNotEmpty) timetables.add(table);
+          } catch (_) {}
+        }
+      }
+      final rawQuick = decoded['quickSetup'];
+      if (rawQuick is Map<String, dynamic>) {
+        try {
+          quickSetup = QuickSetup.fromJson(rawQuick);
+        } catch (_) {}
+      }
+      // 新格式：三段节数。旧格式只有总数，按 4/4/其余 迁移。
+      final rawCounts = decoded['sectionCounts'];
+      if (rawCounts is Map<String, dynamic>) {
+        final parsed = <PeriodGroup, int>{};
+        for (final group in PeriodGroup.values) {
+          final value = (rawCounts[group.name] as num?)?.toInt();
+          if (value != null) parsed[group] = value;
+        }
+        if (parsed.isNotEmpty) sectionCounts = clampCounts(parsed);
+      } else {
+        final legacy = (decoded['sectionCount'] as num?)?.toInt();
+        if (legacy != null) {
+          sectionCounts = clampCounts(splitCounts(legacy));
+        }
+      }
+      final rawSchools = decoded['schools'];
+      if (rawSchools is List<dynamic>) {
+        final parsed = rawSchools
+            .whereType<String>()
+            .map((item) => item.trim())
+            .where((item) => item.isNotEmpty)
+            .toList();
+        if (parsed.isNotEmpty) schools = parsed;
+      }
+      // schema 8：地址簿出厂带 6 条青科大线路。老文件里只有当初那一条
+      // （或用户自己加的几条），这里把缺的补上；用户删过的线路在 schema 8
+      // 之后不会再被补回来（迁移只跑一次）。
+      final int rawSchema = (decoded['schema'] as num?)?.toInt() ?? 1;
+      if (rawSchema < 8) schools = withPresetSchools(schools);
+
+      final rawCurrent = (decoded['currentSchool'] as String?)?.trim();
+      if (rawCurrent != null && rawCurrent.isNotEmpty) {
+        currentSchool = rawCurrent;
+      }
+      // schema 7：每个学校上次登录的账号（用于拼凭据的 key）。
+      final rawAccounts = decoded['lastAccounts'];
+      if (rawAccounts is Map<String, dynamic>) {
+        lastAccounts = <String, String>{
+          for (final entry in rawAccounts.entries)
+            if (entry.value is String && (entry.value as String).isNotEmpty)
+              entry.key: entry.value as String,
+        };
+      }
+      // schema 13：每个学校上次登录记录的学生姓名（冷启动免等网络）。
+      final rawStudentNames = decoded['lastStudentNames'];
+      if (rawStudentNames is Map<String, dynamic>) {
+        lastStudentNames = <String, String>{
+          for (final entry in rawStudentNames.entries)
+            if (entry.value is String && (entry.value as String).isNotEmpty)
+              entry.key: entry.value as String,
+        };
+      }
+      // 缺字段 = 旧版本存的设置，按"都显示"处理。
+      final rawTeacher = decoded['showTeacher'];
+      if (rawTeacher is bool) showTeacher = rawTeacher;
+      final rawLocation = decoded['showLocation'];
+      if (rawLocation is bool) showLocation = rawLocation;
+      final rawCell = (decoded['cellHeight'] as num?)?.toDouble();
+      if (rawCell != null) cellHeight = clampCellHeight(rawCell);
+      final rawScale = (decoded['courseTextScale'] as num?)?.toDouble();
+      if (rawScale != null) {
+        courseTextScale = clampCourseTextScale(rawScale);
+      }
+      // schema 5：静默更新开关 / 间隔 / 调课规则。
+      final rawAutoRefresh = decoded['autoRefresh'];
+      if (rawAutoRefresh is bool) autoRefresh = rawAutoRefresh;
+      final rawInterval = (decoded['autoRefreshIntervalMinutes'] as num?)
+          ?.toInt();
+      if (rawInterval != null) {
+        autoRefreshIntervalMinutes = clampAutoRefreshIntervalMinutes(
+          rawInterval,
+        );
+      }
+      final rawReschedules = decoded['reschedules'];
+      if (rawReschedules is List<dynamic>) {
+        for (final item in rawReschedules) {
+          try {
+            final rule = RescheduleRule.fromJson(item);
+            if (rule != null) reschedules.add(rule);
+          } catch (_) {}
+        }
+      }
+      // schema 6：是否显示课表备注。缺字段 = 旧版本，按"显示"处理。
+      final rawRemarks = decoded['showScheduleRemarks'];
+      if (rawRemarks is bool) showScheduleRemarks = rawRemarks;
+      // schema 9：课前提醒。缺字段 = 旧版本，按"关闭 + 默认提前量"。
+      final rawReminder = decoded['reminderEnabled'];
+      if (rawReminder is bool) reminderEnabled = rawReminder;
+      final rawLead = (decoded['reminderLeadMinutes'] as num?)?.toInt();
+      if (rawLead != null) reminderLeadMinutes = clampReminderLead(rawLead);
+      // schema 10：提醒形态。缺字段 / 脏值一律按横幅。
+      reminderStyle = ReminderStyle.parse(decoded['reminderStyle'] as String?);
+      // schema 11：流体云是否显示到下课。缺字段 = 默认（上课即收起）。
+      final rawUntilEnd = decoded['reminderFluidUntilEnd'];
+      if (rawUntilEnd is bool) reminderFluidUntilEnd = rawUntilEnd;
+      // schema 12：软件更新设置。
+      final rawUpdateProxy =
+          decoded['selectedUpdateProxy'] ?? decoded['updateProxyUrl'];
+      if (rawUpdateProxy is String) {
+        updateProxyUrl = rawUpdateProxy.trim();
+      }
+      final rawCustomList = decoded['customUpdateProxies'];
+      if (rawCustomList is List<dynamic>) {
+        customUpdateProxies = rawCustomList
+            .whereType<String>()
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty && !presetUpdateProxies.contains(s))
+            .toList();
+      }
+      final rawAutoCheck = decoded['autoCheckUpdate'];
+      if (rawAutoCheck is bool) autoCheckUpdate = rawAutoCheck;
     }
 
     return Preferences._(
@@ -484,6 +512,7 @@ class Preferences {
       customUpdateProxies: customUpdateProxies,
       autoCheckUpdate: autoCheckUpdate,
       file: file,
+      didResetFromCorruption: didResetFromCorruption,
     );
   }
 
@@ -883,40 +912,43 @@ class Preferences {
   // 落盘
   // ---------------------------------------------------------------------------
 
+  Map<String, Object?> _toJson() => <String, Object?>{
+    'schema': preferencesSchema,
+    'termStarts': _termStarts,
+    'sectionCounts': <String, int>{
+      for (final entry in _sectionCounts.entries) entry.key.name: entry.value,
+    },
+    'schools': _schools,
+    'currentSchool': _currentSchool,
+    'lastAccounts': _lastAccounts,
+    'lastStudentNames': _lastStudentNames,
+    'showTeacher': _showTeacher,
+    'showLocation': _showLocation,
+    'cellHeight': _cellHeight,
+    'courseTextScale': _courseTextScale,
+    'autoRefresh': _autoRefresh,
+    'autoRefreshIntervalMinutes': _autoRefreshIntervalMinutes,
+    'reschedules': _reschedules.map((rule) => rule.toJson()).toList(),
+    'showScheduleRemarks': _showScheduleRemarks,
+    'reminderEnabled': _reminderEnabled,
+    'reminderLeadMinutes': _reminderLeadMinutes,
+    'reminderStyle': _reminderStyle.wireName,
+    'reminderFluidUntilEnd': _reminderFluidUntilEnd,
+    'selectedUpdateProxy': _selectedUpdateProxy,
+    'customUpdateProxies': _customUpdateProxies,
+    'autoCheckUpdate': _autoCheckUpdate,
+    'timetables': _timetables.map((table) => table.toJson()).toList(),
+    if (_quickSetup != null) 'quickSetup': _quickSetup!.toJson(),
+  };
+
   Future<void> _flush() async {
     final file = _file;
     if (file == null) return;
-    await file.parent.create(recursive: true);
-    await file.writeAsString(
-      jsonEncode(<String, Object?>{
-        'schema': preferencesSchema,
-        'termStarts': _termStarts,
-        'sectionCounts': <String, int>{
-          for (final entry in _sectionCounts.entries)
-            entry.key.name: entry.value,
-        },
-        'schools': _schools,
-        'currentSchool': _currentSchool,
-        'lastAccounts': _lastAccounts,
-        'lastStudentNames': _lastStudentNames,
-        'showTeacher': _showTeacher,
-        'showLocation': _showLocation,
-        'cellHeight': _cellHeight,
-        'courseTextScale': _courseTextScale,
-        'autoRefresh': _autoRefresh,
-        'autoRefreshIntervalMinutes': _autoRefreshIntervalMinutes,
-        'reschedules': _reschedules.map((rule) => rule.toJson()).toList(),
-        'showScheduleRemarks': _showScheduleRemarks,
-        'reminderEnabled': _reminderEnabled,
-        'reminderLeadMinutes': _reminderLeadMinutes,
-        'reminderStyle': _reminderStyle.wireName,
-        'reminderFluidUntilEnd': _reminderFluidUntilEnd,
-        'selectedUpdateProxy': _selectedUpdateProxy,
-        'customUpdateProxies': _customUpdateProxies,
-        'autoCheckUpdate': _autoCheckUpdate,
-        'timetables': _timetables.map((table) => table.toJson()).toList(),
-        if (_quickSetup != null) 'quickSetup': _quickSetup!.toJson(),
-      }),
-    );
+    try {
+      await SafeJsonFile(file).writeJson(_toJson);
+      onWriteSuccess?.call();
+    } catch (error) {
+      onWriteError?.call(error);
+    }
   }
 }

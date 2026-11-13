@@ -6,11 +6,79 @@
 /// 支持按学期多版本持久化与冷启动 0 延迟秒开读取。
 library;
 
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 import 'package:zf_academic/zf_academic.dart';
+
+import 'safe_json_file.dart';
+
+/// 按学期分桶持久化学业数据的共享安全文件读写器（消除考试与成绩缓存重复逻辑）。
+class _TermJsonCacheStore<T> {
+  _TermJsonCacheStore(File file, {required this.fromJson, required this.toJson})
+    : _store = SafeJsonFile(file);
+
+  final SafeJsonFile _store;
+  final T Function(Map<String, dynamic> json) fromJson;
+  final Map<String, dynamic> Function(T value) toJson;
+
+  static bool _isValidRoot(Object? decoded) =>
+      decoded is Map<String, dynamic> &&
+      decoded['terms'] is Map<String, dynamic>;
+
+  Map<String, T> _decodeMap(Object? decoded) {
+    if (decoded is! Map<String, dynamic>) return <String, T>{};
+    final termsMap = decoded['terms'];
+    if (termsMap is! Map<String, dynamic>) return <String, T>{};
+    final result = <String, T>{};
+    termsMap.forEach((key, value) {
+      if (value is Map<String, dynamic>) {
+        try {
+          result[key] = fromJson(value);
+        } catch (_) {}
+      }
+    });
+    return result;
+  }
+
+  Future<T?> load(String termId) async {
+    final all = await loadAll();
+    return all[termId];
+  }
+
+  Future<Map<String, T>> loadAll() async {
+    try {
+      final res = await _store.readJson(isValid: _isValidRoot);
+      if (res.data == null) {
+        if (res.hadUnrecoverableCorruption) {
+          await _store.clear();
+        }
+        return <String, T>{};
+      }
+      return _decodeMap(res.data);
+    } catch (_) {
+      return <String, T>{};
+    }
+  }
+
+  Future<void> saveTerm(String termId, T item) async {
+    try {
+      await _store.updateJson(
+        isValid: _isValidRoot,
+        transform: (current) {
+          final merged = _decodeMap(current);
+          merged[termId] = item;
+          return <String, dynamic>{
+            'updatedAt': DateTime.now().toIso8601String(),
+            'terms': merged.map((key, value) => MapEntry(key, toJson(value))),
+          };
+        },
+      );
+    } catch (_) {}
+  }
+
+  Future<void> clear() => _store.clear();
+}
 
 /// 已缓存的单学期考试数据。
 class CachedTermExams {
@@ -57,10 +125,16 @@ abstract class ExamCache {
 
 /// 文件实现：app 私有目录下的 JSON 文件。
 class FileExamCache implements ExamCache {
-  FileExamCache._(this._file);
-  FileExamCache.fromFile(this._file);
+  FileExamCache._(File file) : this.fromFile(file);
 
-  final File _file;
+  FileExamCache.fromFile(File file)
+    : _store = _TermJsonCacheStore<CachedTermExams>(
+        file,
+        fromJson: CachedTermExams.fromJson,
+        toJson: (item) => item.toJson(),
+      );
+
+  final _TermJsonCacheStore<CachedTermExams> _store;
 
   static Future<FileExamCache> open({
     String fileName = 'zf-exam-cache.json',
@@ -70,60 +144,19 @@ class FileExamCache implements ExamCache {
   }
 
   @override
-  Future<CachedTermExams?> load(String termId) async {
-    final all = await loadAll();
-    return all[termId];
-  }
+  Future<CachedTermExams?> load(String termId) => _store.load(termId);
 
   @override
-  Future<Map<String, CachedTermExams>> loadAll() async {
-    try {
-      if (!await _file.exists()) return const <String, CachedTermExams>{};
-      final text = await _file.readAsString();
-      final decoded = jsonDecode(text);
-      if (decoded is! Map<String, dynamic>) {
-        return const <String, CachedTermExams>{};
-      }
-      final termsMap = decoded['terms'] as Map<String, dynamic>?;
-      if (termsMap == null) return const <String, CachedTermExams>{};
-
-      final result = <String, CachedTermExams>{};
-      termsMap.forEach((key, value) {
-        if (value is Map<String, dynamic>) {
-          result[key] = CachedTermExams.fromJson(value);
-        }
-      });
-      return result;
-    } catch (_) {
-      return const <String, CachedTermExams>{};
-    }
-  }
+  Future<Map<String, CachedTermExams>> loadAll() => _store.loadAll();
 
   @override
-  Future<void> save(String termId, List<ExamItem> items) async {
-    try {
-      final current = Map<String, CachedTermExams>.from(await loadAll());
-      current[termId] = CachedTermExams(
-        termId: termId,
-        items: items,
-        fetchedAt: DateTime.now(),
-      );
-
-      await _file.parent.create(recursive: true);
-      final jsonPayload = <String, dynamic>{
-        'updatedAt': DateTime.now().toIso8601String(),
-        'terms': current.map((key, value) => MapEntry(key, value.toJson())),
-      };
-      await _file.writeAsString(jsonEncode(jsonPayload));
-    } catch (_) {}
-  }
+  Future<void> save(String termId, List<ExamItem> items) => _store.saveTerm(
+    termId,
+    CachedTermExams(termId: termId, items: items, fetchedAt: DateTime.now()),
+  );
 
   @override
-  Future<void> clear() async {
-    try {
-      if (await _file.exists()) await _file.delete();
-    } catch (_) {}
-  }
+  Future<void> clear() => _store.clear();
 }
 
 /// 占位实现：目录未初始化前使用。
@@ -228,10 +261,16 @@ abstract class GradesCache {
 
 /// 文件实现：app 私有目录下的 JSON 文件。
 class FileGradesCache implements GradesCache {
-  FileGradesCache._(this._file);
-  FileGradesCache.fromFile(this._file);
+  FileGradesCache._(File file) : this.fromFile(file);
 
-  final File _file;
+  FileGradesCache.fromFile(File file)
+    : _store = _TermJsonCacheStore<CachedTermGrades>(
+        file,
+        fromJson: CachedTermGrades.fromJson,
+        toJson: (item) => item.toJson(),
+      );
+
+  final _TermJsonCacheStore<CachedTermGrades> _store;
 
   static Future<FileGradesCache> open({
     String fileName = 'zf-grades-cache.json',
@@ -241,65 +280,28 @@ class FileGradesCache implements GradesCache {
   }
 
   @override
-  Future<CachedTermGrades?> load(String termId) async {
-    final all = await loadAll();
-    return all[termId];
-  }
+  Future<CachedTermGrades?> load(String termId) => _store.load(termId);
 
   @override
-  Future<Map<String, CachedTermGrades>> loadAll() async {
-    try {
-      if (!await _file.exists()) return const <String, CachedTermGrades>{};
-      final text = await _file.readAsString();
-      final decoded = jsonDecode(text);
-      if (decoded is! Map<String, dynamic>) {
-        return const <String, CachedTermGrades>{};
-      }
-      final termsMap = decoded['terms'] as Map<String, dynamic>?;
-      if (termsMap == null) return const <String, CachedTermGrades>{};
-
-      final result = <String, CachedTermGrades>{};
-      termsMap.forEach((key, value) {
-        if (value is Map<String, dynamic>) {
-          result[key] = CachedTermGrades.fromJson(value);
-        }
-      });
-      return result;
-    } catch (_) {
-      return const <String, CachedTermGrades>{};
-    }
-  }
+  Future<Map<String, CachedTermGrades>> loadAll() => _store.loadAll();
 
   @override
   Future<void> save(
     String termId,
     List<GradeItem> items, {
     bool isNotEvaluated = false,
-  }) async {
-    try {
-      final current = Map<String, CachedTermGrades>.from(await loadAll());
-      current[termId] = CachedTermGrades(
-        termId: termId,
-        items: items,
-        fetchedAt: DateTime.now(),
-        isNotEvaluated: isNotEvaluated,
-      );
-
-      await _file.parent.create(recursive: true);
-      final jsonPayload = <String, dynamic>{
-        'updatedAt': DateTime.now().toIso8601String(),
-        'terms': current.map((key, value) => MapEntry(key, value.toJson())),
-      };
-      await _file.writeAsString(jsonEncode(jsonPayload));
-    } catch (_) {}
-  }
+  }) => _store.saveTerm(
+    termId,
+    CachedTermGrades(
+      termId: termId,
+      items: items,
+      fetchedAt: DateTime.now(),
+      isNotEvaluated: isNotEvaluated,
+    ),
+  );
 
   @override
-  Future<void> clear() async {
-    try {
-      if (await _file.exists()) await _file.delete();
-    } catch (_) {}
-  }
+  Future<void> clear() => _store.clear();
 }
 
 /// 占位实现：目录未初始化前使用。

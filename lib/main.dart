@@ -21,6 +21,7 @@ import 'src/app_model.dart';
 import 'src/app_version.dart';
 import 'src/reminder_service.dart';
 import 'theme/app_theme.dart';
+import 'widgets/app_snack_bar.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -78,12 +79,40 @@ class _AppShellState extends State<_AppShell> {
   /// 前后台切换监听。只订阅 onShow（`hidden → inactive` 时触发）：
   /// 手机切回前台、桌面端最小化后还原都会走到这里。
   late final AppLifecycleListener _lifecycle;
+  int _lastStorageNoticeEvent = 0;
+  bool _storageNoticeScheduled = false;
 
   @override
   void initState() {
     super.initState();
+    _model.addListener(_onModelChanged);
     _model.boot();
     _lifecycle = AppLifecycleListener(onShow: () => unawaited(_onShown()));
+  }
+
+  void _onModelChanged() {
+    if (!mounted || _model.status == AppStatus.booting) return;
+    final event = _model.storageNoticeEvent;
+    final message = _model.storageNoticeMessage;
+    if (event == _lastStorageNoticeEvent ||
+        message == null ||
+        message.isEmpty) {
+      return;
+    }
+    _lastStorageNoticeEvent = event;
+    if (_storageNoticeScheduled) return;
+    _storageNoticeScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _storageNoticeScheduled = false;
+      if (!mounted) return;
+      showAppSnackBar(
+        context,
+        message: message,
+        type: AppSnackBarType.error,
+        aboveDock: _model.status == AppStatus.ready,
+        duration: const Duration(seconds: 4),
+      );
+    });
   }
 
   /// 回到前台：先校正日期/周次，再过一遍提醒。
@@ -98,6 +127,7 @@ class _AppShellState extends State<_AppShell> {
   @override
   void dispose() {
     _lifecycle.dispose();
+    _model.removeListener(_onModelChanged);
     // 先停编排（它监听 model），再销毁 model。
     _reminders?.dispose();
     _model.dispose();
