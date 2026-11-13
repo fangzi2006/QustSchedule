@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import java.util.Calendar
+import java.util.concurrent.TimeUnit
 
 /** `sync` 的结果，直接映射给 Dart 的诊断页。 */
 data class ReminderSyncOutcome(
@@ -20,16 +21,20 @@ data class ReminderSyncOutcome(
  * 排程器：把 payload 里的绝对毫秒挂成系统闹钟。
  *
  * 与参考实现（sleepy）的差异：课程事件按"能多准就多准"排。
- *  - **闹钟 API 分工**：有精确闹钟权限时，课程事件与流体云收起兜底都用 `setAlarmClock`
- *    （代价是状态栏闹钟图标，但不会被 OEM 拉长投递窗口——ColorOS 16 实测会把
+ *  - **闹钟 API 分工**：有精确闹钟权限时，课程事件使用 `setAlarmClock`
+ *    （不会被 OEM 拉长投递窗口——ColorOS 16 实测会把
  *    `setExactAndAllowWhileIdle` 拉成 1 小时窗口）；无权限时统一降级
  *    `setAndAllowWhileIdle`（不精确但能穿透 Doze）。每日 00:05 自愈链用
  *    `setExactAndAllowWhileIdle`，晚几分钟无害，也不必占用闹钟图标。
  *    不用 `setWindow`（10 分钟窗口对 5 分钟提前量毫无意义）。
+ *  - **开课自动收起通知**：不再为每节课预挂 `ACTION_DISMISS` 高危闹钟。普通横幅
+ *    交由系统通知 `setTimeoutAfter` 到点自动消除；流体云卡片仅在弹出期间由
+ *    [ReminderFluidService] 临时挂单条兜底收起定时器。
+ *  - **滚动挂钟窗口**：本地持久化保存完整 14 天 payload，系统闹钟表只预挂未来
+ *    [SYSTEM_ALARM_WINDOW_DAYS]（10 天）内的课程，由每日 00:05 自愈重排与每次
+ *    触发后顺延补齐。
  *  - **账本差分撤销**：只撤"上次排过但现在不需要"的 code，仍需要的槽位原地
  *    覆盖，不制造"先撤再排"的空窗。
- *  - **每日 00:05 自愈重排**：一次性闹钟链，每次触发后重挂次日，用于修复被
- *    系统/OEM 悄悄丢掉或改晚的闹钟（不新增计划，只重放 payload）。
  *  - 同一事件 requestCode 稳定（由事件 id 派生），重复排程即覆盖。
  */
 class ReminderScheduler(context: Context) {
@@ -60,13 +65,16 @@ class ReminderScheduler(context: Context) {
         }
 
         val now = System.currentTimeMillis()
+        val armUntilMs = now + SYSTEM_ALARM_WINDOW_MS
         val previous = store.alarmCodes().toSet()
         val desired = LinkedHashMap<Int, ReminderEvent>()
         val windowCodes = HashSet<Int>()
         for (event in payload.events) {
             val code = requestCodeFor(event.id)
             windowCodes.add(code)
-            if (event.remindAtMs > now + MIN_LEAD_MS) desired[code] = event
+            if (event.remindAtMs > now + MIN_LEAD_MS && event.remindAtMs <= armUntilMs) {
+                desired[code] = event
+            }
         }
 
         // 账本差分：上次排过但这次不需要的（含换表/删课/窗口外残留）全部撤掉。
@@ -132,6 +140,36 @@ class ReminderScheduler(context: Context) {
         return sync(payload, json, fromFlutter = false)
     }
 
+    /**
+     * 滚动补齐未来 [SYSTEM_ALARM_WINDOW_DAYS] 天内尚未挂载的事件闹钟。
+     *
+     * 每次提醒触发后顺手调用：只在刚好有新事件进入 10 天窗口且账本里还没有它时
+     * 才挂载，既避免重复全量重排，也防止 OEM 杀掉夜间自愈后第 11~14 天掉链子。
+     */
+    fun topUpWindowFromStore(): Int = synchronized(LOCK) {
+        val payload = store.loadPayload() ?: return 0
+        val now = System.currentTimeMillis()
+        val armUntilMs = now + SYSTEM_ALARM_WINDOW_MS
+        val armed = store.alarmCodes().toMutableSet()
+        var added = 0
+        for (event in payload.events) {
+            if (event.remindAtMs <= now + MIN_LEAD_MS || event.remindAtMs > armUntilMs) {
+                continue
+            }
+            val code = requestCodeFor(event.id)
+            if (armed.contains(code)) continue
+            if (arm(code, event, payload.fingerprint)) {
+                armed.add(code)
+                added++
+            }
+        }
+        if (added > 0) {
+            store.setAlarmCodes(armed)
+            Log.i(TAG, "topped up $added alarm(s) into ${SYSTEM_ALARM_WINDOW_DAYS}d window")
+        }
+        added
+    }
+
     /** 诊断页"一分钟后测试提醒"：走真实闹钟链路，触发时发示例通知。 */
     fun scheduleTest(delaySeconds: Int, style: String): Long? {
         val delay = delaySeconds.coerceIn(MIN_TEST_SECONDS, MAX_TEST_SECONDS)
@@ -172,14 +210,14 @@ class ReminderScheduler(context: Context) {
     }
 
     /** 当前状态（诊断页读它，不进 build 热路径）。 */
-    fun status(): Map<String, Any?> {
+    fun status(): Map<String, Any?> = synchronized(LOCK) {
         val payload = store.loadPayload()
         val now = System.currentTimeMillis()
         val next = payload?.events
             ?.filter { it.remindAtMs > now }
             ?.minOfOrNull { it.remindAtMs }
         val payloadAt = store.payloadAtMs()
-        return mapOf(
+        mapOf(
             "notificationPermission" to
                 ReminderPermissions.hasNotificationPermission(appContext),
             "notificationsEnabled" to
@@ -242,34 +280,8 @@ class ReminderScheduler(context: Context) {
             }
         }
 
-        // 同时挂一个开课时刻准时收起/撤销通知的闹钟（双保险）
-        val now = System.currentTimeMillis()
-        if (event.startMs > now) {
-            val dismissCode = dismissCodeFor(event.id)
-            val dismissOp = dismissPendingIntent(dismissCode, event.id)
-            var dismissExact = exact
-            while (true) {
-                try {
-                    if (dismissExact) {
-                        val info = AlarmManager.AlarmClockInfo(
-                            event.startMs,
-                            ReminderNotifier.contentIntent(appContext),
-                        )
-                        manager.setAlarmClock(info, dismissOp)
-                    } else {
-                        manager.setAndAllowWhileIdle(
-                            AlarmManager.RTC_WAKEUP,
-                            event.startMs,
-                            dismissOp,
-                        )
-                    }
-                    break
-                } catch (error: SecurityException) {
-                    if (!dismissExact) break
-                    dismissExact = false
-                }
-            }
-        }
+        // 清理旧版本遗留的开课收起闹钟（新版本由系统 setTimeoutAfter / 流体云服务自停处理）。
+        cancelLegacyDismiss(manager, dismissCodeFor(event.id))
 
         return armed
     }
@@ -292,6 +304,10 @@ class ReminderScheduler(context: Context) {
         }
 
         val dismissCode = (code and 0x3fffffff) or 0x40000000
+        cancelLegacyDismiss(manager, dismissCode)
+    }
+
+    private fun cancelLegacyDismiss(manager: AlarmManager, dismissCode: Int) {
         val dismissIntent = Intent(appContext, ReminderReceiver::class.java).apply {
             action = ReminderReceiver.ACTION_DISMISS
         }
@@ -385,39 +401,25 @@ class ReminderScheduler(context: Context) {
         )
     }
 
-    private fun dismissPendingIntent(
-        code: Int,
-        eventId: String,
-    ): PendingIntent {
-        val intent = Intent(appContext, ReminderReceiver::class.java).apply {
-            action = ReminderReceiver.ACTION_DISMISS
-            putExtra(ReminderReceiver.EXTRA_EVENT_ID, eventId)
-        }
-        return PendingIntent.getBroadcast(
-            appContext,
-            code,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-    }
-
     /** 稳定 requestCode：同一事件永远落在同一槽位，重排即覆盖。 */
     private fun requestCodeFor(eventId: String): Int {
         val code = eventId.hashCode() and 0x3fffffff
         return if (code == 0) 1 else code
     }
 
-    /** 撤销闹钟 requestCode：最高有效位标识，与提醒槽位绝对不冲突。 */
-    private fun dismissCodeFor(eventId: String): Int {
-        val code = eventId.hashCode() and 0x3fffffff
-        return (if (code == 0) 1 else code) or 0x40000000
-    }
+    /** 旧版撤销闹钟 requestCode：仅用于升级后清理历史遗留闹钟。 */
+    private fun dismissCodeFor(eventId: String): Int =
+        requestCodeFor(eventId) or 0x40000000
 
     companion object {
         const val TAG = "ReminderScheduler"
 
         /** 进程级锁：桥接线程与各 Receiver 是不同实例，必须串行化排程。 */
         private val LOCK = Any()
+
+        /** 系统闹钟表预挂窗口（10 天）：本地仍存 14 天，超出的由每日自愈与触发滚动补齐。 */
+        private const val SYSTEM_ALARM_WINDOW_DAYS = 10L
+        private val SYSTEM_ALARM_WINDOW_MS = TimeUnit.DAYS.toMillis(SYSTEM_ALARM_WINDOW_DAYS)
 
         /** 剩余不足一秒的事件直接跳过，避免刚排上就触发。 */
         private const val MIN_LEAD_MS = 1000L

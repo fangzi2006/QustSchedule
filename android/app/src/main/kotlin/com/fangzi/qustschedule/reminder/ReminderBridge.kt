@@ -11,14 +11,12 @@ import android.widget.Toast
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
-import java.util.concurrent.Executors
 
 /**
  * `qustschedule/reminder` 通道的唯一入口。
  *
- * `sync` 会落盘并批量挂闹钟，放到后台单线程执行，结果回到主线程回复。
- * 排程本身在 [ReminderScheduler] 里加进程级锁，所以这里单线程只是为了让
- * 主线程不被一批 `setExact` 拖住。
+ * `sync` / `cancel` / `status` / `testReminder` 会读写偏好或操作 AlarmManager，
+ * 全部放到共用后台单线程执行，结果回到主线程回复，避免阻塞 UI 线程。
  */
 class ReminderBridge(
     private val activity: Activity,
@@ -27,18 +25,26 @@ class ReminderBridge(
 
     private val channel = MethodChannel(messenger, CHANNEL)
     private val scheduler = ReminderScheduler(activity)
-    private val worker = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingNotificationResult: MethodChannel.Result? = null
+    @Volatile
+    private var disposed = false
 
     fun attach() {
+        disposed = false
         channel.setMethodCallHandler(this)
     }
 
     fun dispose() {
+        disposed = true
         channel.setMethodCallHandler(null)
         pendingNotificationResult = null
-        worker.shutdownNow()
+    }
+
+    private fun postReply(block: () -> Unit) {
+        mainHandler.post {
+            if (!disposed) block()
+        }
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -46,20 +52,20 @@ class ReminderBridge(
             "sync" -> handleSync(call, result)
 
             "cancel" -> {
-                worker.execute {
+                ReminderWorker.execute {
                     scheduler.cancelAll()
-                    mainHandler.post { result.success(null) }
+                    postReply { result.success(null) }
                 }
             }
 
             "status" -> {
-                worker.execute {
+                ReminderWorker.execute {
                     try {
                         val status = scheduler.status()
-                        mainHandler.post { result.success(status) }
+                        postReply { result.success(status) }
                     } catch (e: Exception) {
                         Log.e(TAG, "failed to get status", e)
-                        mainHandler.post { result.error("STATUS_FAILED", e.message, null) }
+                        postReply { result.error("STATUS_FAILED", e.message, null) }
                     }
                 }
             }
@@ -91,11 +97,15 @@ class ReminderBridge(
                 val delay = call.argument<Int>("delaySeconds") ?: 60
                 val style = call.argument<String>("style")
                     ?: ReminderPayload.STYLE_BANNER
-                val epoch = scheduler.scheduleTest(delay, style)
-                if (epoch == null) {
-                    result.error("TEST_FAILED", "cannot schedule test alarm", null)
-                } else {
-                    result.success(epoch)
+                ReminderWorker.execute {
+                    val epoch = scheduler.scheduleTest(delay, style)
+                    postReply {
+                        if (epoch == null) {
+                            result.error("TEST_FAILED", "cannot schedule test alarm", null)
+                        } else {
+                            result.success(epoch)
+                        }
+                    }
                 }
             }
 
@@ -174,7 +184,7 @@ class ReminderBridge(
             result.error("BAD_ARGS", "payload json is required", null)
             return
         }
-        worker.execute {
+        ReminderWorker.execute {
             var outcome: ReminderSyncOutcome? = null
             var error: String? = null
             try {
@@ -188,11 +198,11 @@ class ReminderBridge(
                 error = failure.message ?: failure.javaClass.simpleName
                 Log.e(TAG, "sync failed", failure)
             }
-            mainHandler.post {
+            postReply {
                 val done = outcome
                 if (done == null) {
                     result.error("SYNC_FAILED", error ?: "unknown", null)
-                    return@post
+                    return@postReply
                 }
                 result.success(
                     mapOf(

@@ -18,42 +18,38 @@ import android.util.Log
 class ReminderReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-        when (intent.action) {
-            ACTION_TEST -> {
-                handleTest(context, intent)
-                return
-            }
-
-            // 开课准时消失闹钟、或流体云到点收起的兜底闹钟
+        val action = intent.action ?: return
+        when (action) {
+            ACTION_TEST,
             ACTION_DISMISS,
-            ACTION_FLUID_STOP -> {
-                context.getSystemService(android.app.NotificationManager::class.java)
-                    ?.cancel(ReminderNotifier.NOTIFY_ID)
-                ReminderFluidService.stop(context)
-                Log.i(TAG, "reminder dismissed by alarm action=${intent.action}")
-                return
-            }
-
+            ACTION_FLUID_STOP,
             ACTION_REMIND -> Unit
-
             else -> return
         }
+        ReminderWorker.runBroadcastAsync(this, TAG) {
+            when (action) {
+                ACTION_TEST -> handleTest(context, intent)
 
-        val pending = goAsync()
-        try {
-            handleRemind(context, intent)
-        } catch (error: Exception) {
-            Log.e(TAG, "fire failed", error)
-        } finally {
-            pending.finish()
+                // 流体云到点收起兜底闹钟（以及旧版本遗留的 ACTION_DISMISS）
+                ACTION_DISMISS,
+                ACTION_FLUID_STOP -> {
+                    context.getSystemService(android.app.NotificationManager::class.java)
+                        ?.cancel(ReminderNotifier.NOTIFY_ID)
+                    ReminderFluidService.stop(context)
+                    Log.i(TAG, "reminder dismissed by alarm action=$action")
+                }
+
+                ACTION_REMIND -> handleRemind(context, intent)
+            }
         }
     }
 
     private fun handleRemind(context: Context, intent: Intent) {
         val eventId = intent.getStringExtra(EXTRA_EVENT_ID)
+        val fingerprint = intent.getStringExtra(EXTRA_FINGERPRINT)
         val expected = intent.getLongExtra(EXTRA_REMIND_AT_MS, 0L)
         val code = intent.getIntExtra(EXTRA_REQUEST_CODE, 0)
-        if (eventId.isNullOrEmpty() || expected <= 0L) {
+        if (eventId.isNullOrEmpty() || fingerprint.isNullOrEmpty() || expected <= 0L) {
             Log.w(TAG, "malformed alarm, ignored")
             return
         }
@@ -64,13 +60,27 @@ class ReminderReceiver : BroadcastReceiver() {
             Log.w(TAG, "payload missing while firing id=$eventId")
             return
         }
+        val scheduler = ReminderScheduler(context)
+        if (fingerprint != payload.fingerprint) {
+            Log.w(
+                TAG,
+                "stale alarm fingerprint=$fingerprint current=${payload.fingerprint}, resyncing",
+            )
+            scheduler.rescheduleFromStore()
+            return
+        }
         val event = payload.events.firstOrNull { it.id == eventId }
         if (event == null) {
-            Log.w(TAG, "event $eventId no longer in payload, ignored")
+            Log.w(TAG, "event $eventId no longer in payload, resyncing")
+            scheduler.rescheduleFromStore()
             return
         }
         if (kotlin.math.abs(event.remindAtMs - expected) > 1000L) {
-            Log.w(TAG, "alarm time $expected does not match current event time ${event.remindAtMs}")
+            Log.w(
+                TAG,
+                "alarm time $expected does not match current event time ${event.remindAtMs}, resyncing",
+            )
+            scheduler.rescheduleFromStore()
             return
         }
 
@@ -92,6 +102,7 @@ class ReminderReceiver : BroadcastReceiver() {
             posted = ReminderNotifier.show(context, event, payload.leadMinutes)
         }
         if (code != 0) store.removeAlarmCode(code)
+        scheduler.topUpWindowFromStore()
         Log.i(
             TAG,
             "fired id=$eventId style=${payload.style} expected=$expected " +

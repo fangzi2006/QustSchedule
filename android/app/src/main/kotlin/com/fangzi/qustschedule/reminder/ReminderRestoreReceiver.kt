@@ -20,30 +20,41 @@ class ReminderRestoreReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
-        val store = ReminderStore(context)
-        when (action) {
-            Intent.ACTION_BOOT_COMPLETED,
-            Intent.ACTION_MY_PACKAGE_REPLACED -> {
-                val outcome = ReminderScheduler(context).rescheduleFromStore()
-                Log.i(TAG, "restore($action) scheduled=${outcome?.scheduled}")
-            }
+        if (action !in SUPPORTED_ACTIONS) return
+        ReminderWorker.runBroadcastAsync(this, TAG) {
+            val store = ReminderStore(context)
+            when (action) {
+                Intent.ACTION_BOOT_COMPLETED,
+                Intent.ACTION_MY_PACKAGE_REPLACED -> {
+                    val outcome = ReminderScheduler(context).rescheduleFromStore()
+                    Log.i(TAG, "restore($action) scheduled=${outcome?.scheduled}")
+                }
 
-            Intent.ACTION_TIME_CHANGED,
-            Intent.ACTION_TIMEZONE_CHANGED -> {
-                store.markDirty()
-                val outcome = ReminderScheduler(context).rescheduleFromStore()
-                Log.i(TAG, "restore($action) scheduled=${outcome?.scheduled}")
-            }
+                Intent.ACTION_TIME_CHANGED,
+                Intent.ACTION_TIMEZONE_CHANGED -> {
+                    store.markDirty()
+                    val outcome = ReminderScheduler(context).rescheduleFromStore()
+                    Log.i(TAG, "restore($action) scheduled=${outcome?.scheduled}")
+                }
 
-            AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED -> {
-                // 用户刚把精确闹钟权限打开：把降级过的排程整体升回精确。
-                val outcome = ReminderScheduler(context).rescheduleFromStore()
-                Log.i(TAG, "exact alarm granted, rescheduled=${outcome?.scheduled}")
+                AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED -> {
+                    // 用户刚把精确闹钟权限打开：把降级过的排程整体升回精确。
+                    val outcome = ReminderScheduler(context).rescheduleFromStore()
+                    Log.i(TAG, "exact alarm granted, rescheduled=${outcome?.scheduled}")
+                }
             }
         }
     }
 
     companion object {
         const val TAG = "ReminderRestore"
+
+        private val SUPPORTED_ACTIONS = setOf(
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_MY_PACKAGE_REPLACED,
+            Intent.ACTION_TIME_CHANGED,
+            Intent.ACTION_TIMEZONE_CHANGED,
+            AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED,
+        )
     }
 }

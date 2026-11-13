@@ -17,14 +17,9 @@ class ReminderDailyResyncReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION_RESYNC) return
-        val pending = goAsync()
-        try {
+        ReminderWorker.runBroadcastAsync(this, TAG) {
             val outcome = ReminderScheduler(context).rescheduleFromStore()
             Log.i(TAG, "daily resync scheduled=${outcome?.scheduled}")
-        } catch (error: Exception) {
-            Log.e(TAG, "daily resync failed", error)
-        } finally {
-            pending.finish()
         }
     }
 
