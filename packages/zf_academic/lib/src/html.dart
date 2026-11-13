@@ -97,12 +97,43 @@ List<TagMatch> allTags(String html) {
 
 bool isVoid(String tag) => _voidTags.contains(tag);
 
-/// 元素的结束标签下标；自闭合或未闭合时返回 -1。
+final RegExp _nestingTokenPattern = RegExp(
+  r'<!--[\s\S]*?-->'
+  r"|<script(?=\s|>)(?:\x22[^\x22]*\x22|'[^']*'|[^>\x22'])*>[\s\S]*?</script\s*>"
+  r"|<style(?=\s|>)(?:\x22[^\x22]*\x22|'[^']*'|[^>\x22'])*>[\s\S]*?</style\s*>"
+  r'|</([a-zA-Z][a-zA-Z0-9-]*)\s*>'
+  r"|<([a-zA-Z][a-zA-Z0-9-]*)((?:\x22[^\x22]*\x22|'[^']*'|[^>\x22'])*)>",
+  caseSensitive: false,
+);
+
+/// 元素的结束标签下标；自闭合或未闭合时返回 -1（支持同名标签多层嵌套）。
 int closingIndex(String html, TagMatch element) {
-  if (isVoid(element.tag) || element.raw.endsWith('/>')) return -1;
-  final pattern = RegExp('</${element.tag}\\s*>', caseSensitive: false);
-  final found = pattern.firstMatch(html.substring(element.endOfStartTag));
-  return found == null ? -1 : element.endOfStartTag + found.start;
+  final target = element.tag;
+  if (isVoid(target) || element.raw.endsWith('/>')) return -1;
+  if (target == 'script' || target == 'style') {
+    final pattern = RegExp('</$target\\s*>', caseSensitive: false);
+    final found = pattern.firstMatch(html.substring(element.endOfStartTag));
+    return found == null ? -1 : element.endOfStartTag + found.start;
+  }
+
+  var depth = 1;
+  for (final match
+      in _nestingTokenPattern.allMatches(html, element.endOfStartTag)) {
+    final closingTag = match.group(1);
+    if (closingTag != null) {
+      if (closingTag.toLowerCase() == target) {
+        depth--;
+        if (depth == 0) return match.start;
+      }
+      continue;
+    }
+    final openingTag = match.group(2);
+    if (openingTag != null && openingTag.toLowerCase() == target) {
+      final raw = match.group(0) ?? '';
+      if (!raw.endsWith('/>')) depth++;
+    }
+  }
+  return -1;
 }
 
 String innerOf(String html, TagMatch element) {
@@ -137,7 +168,10 @@ String stripTags(String html) {
           RegExp(r'<style[\s\S]*?</style\s*>', caseSensitive: false), ' ')
       .replaceAll(RegExp(r'<!--[\s\S]*?-->'), ' ')
       .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
-      .replaceAll(RegExp(r'<[^>]*>'), ' ');
+      .replaceAll(
+        RegExp(r"<(?=[/a-zA-Z!])(?:\x22[^\x22]*\x22|'[^']*'|[^>\x22'])*>"),
+        ' ',
+      );
   return decodeEntities(withoutMarkup).replaceAll(RegExp(r'\s+'), ' ').trim();
 }
 
