@@ -3361,6 +3361,92 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('滑动关闭测试'), findsNothing);
     });
+
+    testWidgets('短文案居中自适应紧凑宽度，非 Dock 子页默认底距抬升至 40dp 舒适区', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => ElevatedButton(
+                onPressed: () => showAppSnackBar(
+                  context,
+                  message: '密码已更新',
+                  type: AppSnackBarType.success,
+                ),
+                child: const Text('触发短胶囊'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('触发短胶囊'));
+      await tester.pumpAndSettle();
+
+      final SnackBar snackBar = tester.widget(find.byType(SnackBar));
+      final margin = snackBar.margin as EdgeInsets;
+      expect(margin.bottom, greaterThanOrEqualTo(40));
+
+      final pillBox = tester.widget<DecoratedBox>(
+        find.descendant(
+          of: find.byType(SnackBar),
+          matching: find.byType(DecoratedBox),
+        ),
+      );
+      final pillSize = tester.getSize(find.byWidget(pillBox));
+      // 短文字紧凑胶囊不应占满全屏宽度（默认测试视口宽 800）
+      expect(pillSize.width, lessThan(220));
+
+      final decoration = pillBox.decoration as BoxDecoration;
+      expect(decoration.color, Colors.white);
+      expect(decoration.borderRadius, BorderRadius.circular(999));
+
+      await tester.pump(const Duration(seconds: 3));
+    });
+
+    testWidgets('报错胶囊呈现淡红状态描边，长文案自动换用 20dp 圆角防裁切', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => ElevatedButton(
+                onPressed: () => showAppSnackBar(
+                  context,
+                  message:
+                      '这是一条非常非常长的错误提示信息，用来验证超出单行宽度限制时会自动换用二十像素圆角且不会发生任何排版溢出',
+                  type: AppSnackBarType.error,
+                ),
+                child: const Text('触发长报错'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('触发长报错'));
+      await tester.pumpAndSettle();
+
+      final pillBox = tester.widget<DecoratedBox>(
+        find.descendant(
+          of: find.byType(SnackBar),
+          matching: find.byType(DecoratedBox),
+        ),
+      );
+      final pillSize = tester.getSize(find.byWidget(pillBox));
+      expect(pillSize.width, lessThanOrEqualTo(420));
+
+      final decoration = pillBox.decoration as BoxDecoration;
+      expect(decoration.borderRadius, BorderRadius.circular(20));
+      final border = decoration.border! as Border;
+      expect(
+        border.top.color,
+        buildLightTheme().colorScheme.error.withValues(alpha: 0.40),
+      );
+
+      await tester.pump(const Duration(seconds: 3));
+    });
   });
 
   group('验证码页面容错', () {
