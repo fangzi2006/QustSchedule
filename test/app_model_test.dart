@@ -1544,6 +1544,89 @@ void main() {
       expect(model.exams, isEmpty, reason: '退出登录后学业同步完成不得复活数据');
       expect(model.grades, isEmpty);
     });
+
+    test('同学期静默更新与手动刷新完成后保留当前查看周次，不跳回今天', () async {
+      const longSchedule = Schedule(
+        termId: '2026-2027-1',
+        maxWeeks: 10,
+        entries: <ScheduleEntry>[
+          ScheduleEntry(
+            id: 'e1',
+            name: '长周期课程',
+            teacher: '李老师',
+            location: '教101',
+            day: 1,
+            startPeriod: 1,
+            endPeriod: 2,
+            weeks: <int>[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+          ),
+        ],
+      );
+      final backend = FakeBackend(
+        fetchBehavior: (call, termId) async => longSchedule,
+      );
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
+      model.hydrateForTest(schedule: longSchedule);
+
+      final targetWeek = model.currentWeekOfToday == 8 ? 9 : 8;
+      model.goToWeek(targetWeek);
+      expect(model.week, targetWeek);
+
+      await model.syncSilently();
+      expect(model.week, targetWeek, reason: '静默更新后不应跳回今天所在周');
+
+      await model.refresh();
+      expect(model.week, targetWeek, reason: '手动刷新后不应跳回今天所在周');
+    });
+
+    test('同学期刷新后若新课表最大周次小于当前查看周次，则自动收敛到新的最大周次', () async {
+      const initialSchedule = Schedule(
+        termId: '2026-2027-1',
+        maxWeeks: 10,
+        entries: <ScheduleEntry>[
+          ScheduleEntry(
+            id: 'e1',
+            name: '长周期课程',
+            teacher: '李老师',
+            location: '教101',
+            day: 1,
+            startPeriod: 1,
+            endPeriod: 2,
+            weeks: <int>[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+          ),
+        ],
+      );
+      final backend = FakeBackend(
+        fetchBehavior: (call, termId) async => const Schedule(
+          termId: '2026-2027-1',
+          maxWeeks: 5,
+          entries: <ScheduleEntry>[
+            ScheduleEntry(
+              id: 'e2',
+              name: '短周期课程',
+              teacher: '李老师',
+              location: '教101',
+              day: 1,
+              startPeriod: 1,
+              endPeriod: 2,
+              weeks: <int>[1, 2, 3, 4, 5],
+            ),
+          ],
+        ),
+      );
+
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
+      model.hydrateForTest(schedule: initialSchedule);
+
+      model.goToWeek(8);
+      expect(model.week, 8);
+
+      await model.refresh();
+      expect(model.maxWeek, 5);
+      expect(model.week, 5);
+    });
   });
 }
 

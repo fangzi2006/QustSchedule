@@ -1208,9 +1208,13 @@ class AppModel extends ChangeNotifier {
     try {
       final schedule = await _scheduleLoad!;
       if (_disposed) return;
+      final previousTermId = _termId;
       _schedule = schedule;
       _termId = schedule.termId;
-      _applyCalendar(schedule);
+      _applyCalendar(
+        schedule,
+        resetToToday: !hasData || previousTermId != schedule.termId,
+      );
       // 抓到就落缓存：下次冷启动直接展示，不再干等网络。
       unawaited(_saveScheduleCache(schedule));
       // 记下抓取时刻：回到前台的"够不够旧"判断用它，别再用缓存的旧时间。
@@ -1274,7 +1278,10 @@ class AppModel extends ChangeNotifier {
 
   /// 课表就绪后定位"第几周"：
   /// 用户校准过就用校准值；否则按学期估算（秋季 9 月初 / 春季 2 月底）。
-  void _applyCalendar(Schedule schedule) {
+  ///
+  /// [resetToToday] 为 true 时定位到今天所在周（首次加载或切换学期）；
+  /// 为 false 时保留用户当前查看的周次（仅在超出新课表最大周次时收敛）。
+  void _applyCalendar(Schedule schedule, {bool resetToToday = true}) {
     final DateTime? previousStart = _termStart;
     var maxWeek = 0;
     for (final entry in schedule.entries) {
@@ -1287,11 +1294,16 @@ class AppModel extends ChangeNotifier {
     final saved = _preferences.termStartOf(schedule.termId);
     if (saved != null) {
       _termStart = saved;
-      _setWeek(weekOf(saved, DateTime.now()));
     } else {
       final term = _termById(schedule.termId);
       _termStart = estimateTermStart(term ?? _fallbackTerm(schedule.termId));
+    }
+
+    if (resetToToday) {
       _setWeek(weekOf(_termStart!, DateTime.now()));
+    } else {
+      // 同学期刷新已有课表时保留用户当前周，仅在 _maxWeek 缩小时收敛。
+      _setWeek(_week);
     }
     // 只有起始日**真的变了**才通知。
     //
