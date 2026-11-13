@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:test/test.dart';
 import 'package:zf_academic/zf_academic_io.dart';
@@ -596,6 +597,24 @@ void main() {
             ),
         isTrue,
       );
+    });
+
+    test('FileCookieStorage 遇到损坏的 JSON 文件时返回 null 而不崩溃', () async {
+      const path = '.dart_tool/corrupt-session.json';
+      final file = File(path)..createSync(recursive: true);
+      file.writeAsStringSync('{not valid json!!!');
+      final storage = FileCookieStorage(path);
+      addTearDown(() async => storage.clear());
+
+      expect(await storage.load(), isNull);
+    });
+
+    test('selectedTermFromHtml 遇到长度不足 4 位的学年值时不抛 RangeError', () {
+      const html =
+          '<select name="xnm"><option value="12" selected></option></select>'
+          '<select name="xqm"><option value="3" selected></option></select>';
+      expect(() => selectedTermFromHtml(html), returnsNormally);
+      expect(selectedTermFromHtml(html), isNull);
     });
   });
 }

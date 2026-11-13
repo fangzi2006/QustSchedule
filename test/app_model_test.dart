@@ -1627,6 +1627,86 @@ void main() {
       expect(model.maxWeek, 5);
       expect(model.week, 5);
     });
+
+    test('快速连续切换学业学期时，旧请求晚到不得覆盖新学期数据', () async {
+      final oldTermExams = Completer<List<ExamItem>>();
+      final oldTermGrades = Completer<List<GradeItem>>();
+      final backend = FakeBackend(
+        termsBehavior: (_) async => const Terms(
+          currentId: '2026-2027-1',
+          items: <Term>[
+            Term(
+              id: '2026-2027-1',
+              name: '2026-2027-1',
+              year: 2026,
+              semester: 1,
+            ),
+            Term(
+              id: '2026-2027-2',
+              name: '2026-2027-2',
+              year: 2026,
+              semester: 2,
+            ),
+          ],
+        ),
+      );
+      backend.examsBehavior = (_, termId) {
+        if (termId == '2026-2027-1') return oldTermExams.future;
+        return Future<List<ExamItem>>.value(const <ExamItem>[
+          ExamItem(courseName: '新学期考试'),
+        ]);
+      };
+      backend.gradesBehavior = (_, termId) {
+        if (termId == '2026-2027-1') return oldTermGrades.future;
+        return Future<List<GradeItem>>.value(const <GradeItem>[
+          GradeItem(courseName: '新学期成绩', credit: 2.0, rawScore: '95'),
+        ]);
+      };
+
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
+      addTearDown(model.dispose);
+      await model.signIn('20240001', 'pw');
+
+      model.setAcademicTerm('2026-2027-1');
+      await Future<void>.delayed(Duration.zero);
+      model.setAcademicTerm('2026-2027-2');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      // 旧学期请求晚到完成，不得覆盖当前选中的新学期数据
+      oldTermExams.complete(const <ExamItem>[ExamItem(courseName: '旧学期考试')]);
+      oldTermGrades.complete(const <GradeItem>[
+        GradeItem(courseName: '旧学期成绩', credit: 2.0, rawScore: '80'),
+      ]);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(model.academicTermId, '2026-2027-2');
+      expect(model.academicLoading, isFalse);
+      expect(model.exams.map((e) => e.courseName), ['新学期考试']);
+      expect(model.grades.map((g) => g.courseName), ['新学期成绩']);
+    });
+
+    test('跨天后回到前台会同步通知学业页刷新日期状态', () async {
+      final model = buildModel();
+      addTearDown(model.dispose);
+      final today = dayOnly(DateTime.now());
+      model.hydrateForTest(
+        schedule: sampleSchedule(),
+        termStart: today.subtract(const Duration(days: 7)),
+      );
+      model.seedLifecycleForTest(
+        lastSeenDay: today.subtract(const Duration(days: 1)),
+        lastFetchedAt: DateTime.now(),
+      );
+
+      var academicNotifyCount = 0;
+      void listener() => academicNotifyCount++;
+      model.academicNotifier.addListener(listener);
+      addTearDown(() => model.academicNotifier.removeListener(listener));
+
+      await model.onAppShown();
+      expect(academicNotifyCount, 1);
+    });
   });
 }
 

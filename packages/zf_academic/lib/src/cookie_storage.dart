@@ -15,24 +15,42 @@ class FileCookieStorage {
 
   const FileCookieStorage(this.path);
 
-  /// 文件不存在时返回 null（首次运行的正常状态）。
+  /// 文件不存在或内容损坏时返回 null。
   Future<CookieStoreSnapshot?> load() async {
     final file = File(path);
     if (!file.existsSync()) return null;
-    final text = await file.readAsString();
-    return CookieStoreSnapshot.fromJson(
-      jsonDecode(text) as Map<String, dynamic>,
-    );
+    try {
+      final text = await file.readAsString();
+      final decoded = jsonDecode(text);
+      if (decoded is! Map<String, dynamic>) return null;
+      return CookieStoreSnapshot.fromJson(decoded);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> save(CookieStoreSnapshot snapshot) async {
     final file = File(path);
     await file.parent.create(recursive: true);
-    await file.writeAsString(jsonEncode(snapshot.toJson()));
+    final tmpFile = File('$path.tmp');
     try {
-      await Process.run('chmod', ['600', path]);
+      await tmpFile.writeAsString(
+        jsonEncode(snapshot.toJson()),
+        flush: true,
+      );
+      await tmpFile.rename(path);
     } catch (_) {
-      // Windows 等没有 chmod 的平台忽略即可。
+      if (tmpFile.existsSync()) {
+        try {
+          await tmpFile.delete();
+        } catch (_) {}
+      }
+      rethrow;
+    }
+    if (!Platform.isWindows) {
+      try {
+        await Process.run('chmod', ['600', path]);
+      } catch (_) {}
     }
   }
 

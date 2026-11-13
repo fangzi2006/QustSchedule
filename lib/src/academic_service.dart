@@ -26,6 +26,28 @@ class GradeStats {
     required this.passedCourses,
   });
 
+  /// 等级制成绩中的及格字样（供绩点统计与成绩单着色共用）。
+  static const List<String> passingScoreLabels = <String>[
+    '通过',
+    '合格',
+    '优秀',
+    '良好',
+    '中等',
+    '及格',
+    '免修',
+    '免考',
+    'P',
+    'p',
+  ];
+
+  /// 判断单门课程是否及格。
+  static bool isGradePassed(GradeItem grade) {
+    final numScore = grade.numericScore ?? double.tryParse(grade.rawScore);
+    if (numScore != null && numScore >= 60.0) return true;
+    if (passingScoreLabels.contains(grade.rawScore.trim())) return true;
+    return grade.gradePoint != null && grade.gradePoint! > 0;
+  }
+
   /// 依据教务原生数据计算加权平均绩点与通过门数。
   ///
   /// 严格遵循教务官方 `jd`（绩点），严禁客户端擅自臆测换算规则。
@@ -54,24 +76,7 @@ class GradeStats {
       }
       totalCredits += cr;
 
-      final numScore = grade.numericScore ?? double.tryParse(grade.rawScore);
-      final raw = grade.rawScore.trim();
-      final isPassed =
-          (numScore != null && numScore >= 60.0) ||
-          const [
-            '通过',
-            '合格',
-            '优秀',
-            '良好',
-            '中等',
-            '及格',
-            '免修',
-            '免考',
-            'P',
-            'p',
-          ].contains(raw) ||
-          (grade.gradePoint != null && grade.gradePoint! > 0);
-      if (isPassed) {
+      if (isGradePassed(grade)) {
         passedCount++;
         passedCredits += cr;
       }

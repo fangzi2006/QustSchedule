@@ -991,7 +991,7 @@ class _GradeListTile extends StatelessWidget {
                   [
                     if (grade.courseNature.isNotEmpty) grade.courseNature,
                     '${grade.credit} 学分',
-                    '绩点 ${grade.gradePoint}',
+                    if (grade.gradePoint != null) '绩点 ${grade.gradePoint}',
                     if (grade.examNature.isNotEmpty &&
                         grade.examNature != '正常考试')
                       grade.examNature,
@@ -1032,17 +1032,7 @@ class _GradeListTile extends StatelessWidget {
     }
     final trimmed = score.trim();
     if (trimmed == '优秀') return Colors.teal;
-    if (const [
-      '良好',
-      '中等',
-      '及格',
-      '通过',
-      '合格',
-      '免修',
-      '免考',
-      'P',
-      'p',
-    ].contains(trimmed)) {
+    if (GradeStats.passingScoreLabels.contains(trimmed)) {
       return scheme.primary;
     }
     if (const ['不及格', '不合格', '不通过', 'F', 'f'].contains(trimmed)) {

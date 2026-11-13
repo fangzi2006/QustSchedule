@@ -97,7 +97,10 @@ Term? selectedTermFromHtml(String html) {
           : (target.attrs['value'] ?? stripTags(innerOf(inner, target)));
     }
     if (_yearNames.contains(name)) {
-      year = int.tryParse((value ?? '').substring(0, 4)) ?? 0;
+      final yearText = (value ?? '').trim();
+      year = yearText.length >= 4
+          ? (int.tryParse(yearText.substring(0, 4)) ?? 0)
+          : (int.tryParse(yearText) ?? 0);
     }
     if (_semesterNames.contains(name)) {
       semester = _semesterPart(name, value ?? '');

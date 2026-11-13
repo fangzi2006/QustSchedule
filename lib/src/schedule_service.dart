@@ -79,6 +79,9 @@ class ScheduleService {
   /// 单 flight：进行中的取课表任务。
   Future<Schedule>? _inFlight;
 
+  /// 登录遇到验证码时暂存本次凭据，待验证码提交成功后按用户意愿持久化。
+  ({Credentials credentials, bool remember})? _pendingSignIn;
+
   /// 自动登录时间戳（熔断判定用）。
   final List<DateTime> _autoLogins = <DateTime>[];
 
@@ -350,6 +353,20 @@ class ScheduleService {
   // 入口三：手动登录（设置页 / 重登失败后）
   // -------------------------------------------------------------------------
 
+  Future<void> _saveAuthenticatedSignIn(
+    ScheduleBackend client,
+    Credentials creds,
+    bool remember,
+  ) async {
+    // 记下账号：后续所有凭据读写都靠它拼 key。
+    accountHint = creds.username;
+    if (remember) {
+      await credentials.save(_accountKey(username: creds.username), creds);
+    }
+    await _persist(client);
+    resetBreaker();
+  }
+
   /// 用账号密码登录。[remember] 为 true 时把凭据写入安全存储。
   ///
   /// 返回登录结果：验证码状态下调用方应展示验证码页并调用 [submitCaptcha]。
@@ -361,19 +378,14 @@ class ScheduleService {
     try {
       await _waitForRelogin();
     } catch (_) {}
+    final creds = Credentials(username, password);
+    _pendingSignIn = null;
     final client = await _ensureClient();
-    final state = await client.login(Credentials(username, password));
+    final state = await client.login(creds);
     if (state is AuthenticatedState) {
-      // 记下账号：后续所有凭据读写都靠它拼 key。
-      accountHint = username;
-      if (remember) {
-        await credentials.save(
-          _accountKey(username: username),
-          Credentials(username, password),
-        );
-      }
-      await _persist(client);
-      resetBreaker();
+      await _saveAuthenticatedSignIn(client, creds, remember);
+    } else if (state is CaptchaState) {
+      _pendingSignIn = (credentials: creds, remember: remember);
     }
     return state;
   }
@@ -383,8 +395,18 @@ class ScheduleService {
     final client = await _ensureClient();
     final state = await client.submitCaptcha(code);
     if (state is AuthenticatedState) {
-      await _persist(client);
-      resetBreaker();
+      final pending = _pendingSignIn;
+      _pendingSignIn = null;
+      if (pending != null) {
+        await _saveAuthenticatedSignIn(
+          client,
+          pending.credentials,
+          pending.remember,
+        );
+      } else {
+        await _persist(client);
+        resetBreaker();
+      }
     }
     return state;
   }
@@ -424,6 +446,7 @@ class ScheduleService {
     _clientFlight = null;
     _inFlight = null;
     _reloginFlight = null;
+    _pendingSignIn = null;
     accountHint = null;
     await cookieStorage.clear();
     if (forgetCredentials) {

@@ -7,6 +7,7 @@ import 'dart:async';
 
 import 'package:qustschedule/main.dart' show pageForStatus;
 import 'package:qustschedule/pages/academic_page.dart';
+import 'package:qustschedule/pages/captcha_page.dart';
 import 'package:qustschedule/pages/debug_page.dart';
 import 'package:qustschedule/pages/home_shell.dart';
 import 'package:qustschedule/pages/login_page.dart';
@@ -3355,6 +3356,27 @@ void main() {
       await tester.fling(find.text('滑动关闭测试'), const Offset(500, 0), 1000);
       await tester.pumpAndSettle();
       expect(find.text('滑动关闭测试'), findsNothing);
+    });
+  });
+
+  group('验证码页面容错', () {
+    testWidgets('验证码 Base64 数据异常时安全降级展示错误占位，不崩溃', (tester) async {
+      final backend = FakeBackend(
+        loginBehavior: (_, _) async => const CaptchaState(
+          continuationId: 'c1',
+          imageBase64: 'not-valid-base64!!!',
+          mimeType: 'image/png',
+        ),
+      );
+      final model = buildModel(backend: backend);
+      await model.signIn('20240001', 'pw');
+      expect(model.status, AppStatus.needCaptcha);
+
+      await tester.pumpWidget(wrap(CaptchaPage(model: model)));
+      await tester.pump();
+
+      expect(find.text('验证码图片无法显示'), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
   });
 }

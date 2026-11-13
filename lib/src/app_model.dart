@@ -181,6 +181,9 @@ class AppModel extends ChangeNotifier {
   bool _academicLoading = false;
   bool get academicLoading => _academicLoading;
 
+  int _academicLoadSeq = 0;
+  String? _loadingAcademicTerm;
+
   String? _academicError;
   String? get academicError => _academicError;
 
@@ -637,8 +640,9 @@ class AppModel extends ChangeNotifier {
 
     Future<void> executeCheck() async {
       if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
+      UpdateService? ownedService;
       try {
-        final service = updateService ?? UpdateService();
+        final service = updateService ?? (ownedService = UpdateService());
         final result = await service.checkForUpdatesWithFallback(
           currentVersion: appVersion,
           selectedProxy: selectedUpdateProxy,
@@ -676,6 +680,8 @@ class AppModel extends ChangeNotifier {
         } else {
           _hasCheckedAutoUpdate = true;
         }
+      } finally {
+        ownedService?.dispose();
       }
     }
 
@@ -1027,8 +1033,15 @@ class AppModel extends ChangeNotifier {
     bool forceRefresh = false,
     bool showHint = false,
   }) async {
-    if (_academicLoading) return;
     var target = termId ?? academicTermId;
+    if (_academicLoading &&
+        !forceRefresh &&
+        target.isNotEmpty &&
+        target == _loadingAcademicTerm) {
+      return;
+    }
+
+    final seq = ++_academicLoadSeq;
     if (target.isEmpty) {
       if (_terms != null && _terms!.currentId.isNotEmpty) {
         target = _terms!.currentId;
@@ -1036,29 +1049,37 @@ class AppModel extends ChangeNotifier {
       } else {
         try {
           final t = await service.fetchTerms();
+          if (_disposed || seq != _academicLoadSeq) return;
           _terms = t;
           target = t.currentId;
           _academicTermId = target;
         } catch (_) {}
       }
     }
-    if (target.isEmpty) return;
+    if (_disposed || seq != _academicLoadSeq || target.isEmpty) return;
 
     final bool termChanged = target != _loadedAcademicTerm;
 
     if (!forceRefresh) {
       final cachedExams = await _examCache.load(target);
       final cachedGrades = await _gradesCache.load(target);
+      if (_disposed || seq != _academicLoadSeq) return;
       if (cachedExams != null || cachedGrades != null) {
         _exams = cachedExams?.items ?? const <ExamItem>[];
         _grades = cachedGrades?.items ?? const <GradeItem>[];
         _isNotEvaluated = cachedGrades?.isNotEvaluated ?? false;
         _loadedAcademicTerm = target;
         _academicError = null;
+        _academicLoading = false;
+        _loadingAcademicTerm = null;
         academicNotifier.notifyListeners();
         return;
       }
     }
+
+    final existingExams = await _examCache.load(target);
+    final existingGrades = await _gradesCache.load(target);
+    if (_disposed || seq != _academicLoadSeq) return;
 
     if (termChanged) {
       // 切换到无缓存的新学期：清空上一学期的残留数据，避免画面串台
@@ -1068,11 +1089,10 @@ class AppModel extends ChangeNotifier {
       _loadedAcademicTerm = target;
     }
 
-    final existingExams = await _examCache.load(target);
-    final existingGrades = await _gradesCache.load(target);
     final bool isDebugCleared = _academicDataClearedForDebug;
     _academicDataClearedForDebug = false;
 
+    _loadingAcademicTerm = target;
     _academicLoading = true;
     _academicError = null;
     academicNotifier.notifyListeners();
@@ -1094,6 +1114,7 @@ class AppModel extends ChangeNotifier {
         safeRun(academicService.fetchExams(target)),
         safeRun(academicService.fetchGrades(target)),
       ]);
+      if (_disposed || seq != _academicLoadSeq) return;
 
       final examRes = results[0];
       final gradeRes = results[1];
@@ -1114,6 +1135,7 @@ class AppModel extends ChangeNotifier {
           gradeRes.code == ErrorCode.notEvaluated) {
         _isNotEvaluated = true;
         final existing = await _gradesCache.load(target);
+        if (_disposed || seq != _academicLoadSeq) return;
         if (existing != null && existing.items.isNotEmpty) {
           _grades = existing.items;
         }
@@ -1138,28 +1160,33 @@ class AppModel extends ChangeNotifier {
         changeMsg = '成绩有更新';
       }
     } catch (e) {
-      _academicError ??= _describeAcademicError(e);
+      if (!_disposed && seq == _academicLoadSeq) {
+        _academicError ??= _describeAcademicError(e);
+      }
     } finally {
-      _academicLoading = false;
-      academicNotifier.notifyListeners();
-      if (_academicError != null) {
-        if (showHint) {
+      if (!_disposed && seq == _academicLoadSeq) {
+        _academicLoading = false;
+        _loadingAcademicTerm = null;
+        academicNotifier.notifyListeners();
+        if (_academicError != null) {
+          if (showHint) {
+            _showHint(
+              '更新失败：$_academicError',
+              error: true,
+              clearAfter: const Duration(seconds: 4),
+              scope: HintScope.academic,
+            );
+          }
+        } else if (changeMsg != null) {
+          clearAcademicHint();
+          _showAcademicUpdateHint(changeMsg);
+        } else if (showHint) {
           _showHint(
-            '更新失败：$_academicError',
-            error: true,
-            clearAfter: const Duration(seconds: 4),
+            '已更新',
+            clearAfter: const Duration(milliseconds: 1500),
             scope: HintScope.academic,
           );
         }
-      } else if (changeMsg != null) {
-        clearAcademicHint();
-        _showAcademicUpdateHint(changeMsg);
-      } else if (showHint) {
-        _showHint(
-          '已更新',
-          clearAfter: const Duration(milliseconds: 1500),
-          scope: HintScope.academic,
-        );
       }
     }
   }
@@ -1450,6 +1477,7 @@ class AppModel extends ChangeNotifier {
     }
     _lastSeenDay = today;
     notifyListeners();
+    academicNotifier.notifyListeners();
     return true;
   }
 

@@ -942,12 +942,150 @@ void main() {
       expect(find.byIcon(Icons.download_done_rounded), findsOneWidget);
     });
   });
+
+  group('SHA256 校验与资源释放', () {
+    test('parseSha256Sums 解析标准 sha256sum 文本并兼容 ./ 与 * 前缀', () {
+      const sumA =
+          '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+      const sumB =
+          'ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789';
+      const content =
+          '# comment\n'
+          '$sumA  ./QustSchedule-v1.0.0-arm64-v8a.apk\n'
+          '$sumB *QustSchedule-v1.0.0-windows.zip\n'
+          'invalid-line\n';
+
+      final parsed = UpdateService.parseSha256Sums(content);
+      expect(parsed['QustSchedule-v1.0.0-arm64-v8a.apk'], sumA);
+      expect(parsed['QustSchedule-v1.0.0-windows.zip'], sumB.toLowerCase());
+      expect(parsed.length, 2);
+    });
+
+    test('fetchExpectedSha256 从 Release 的 SHA256SUMS 解析目标文件摘要', () async {
+      final prevOverrides = HttpOverrides.current;
+      HttpOverrides.global = null;
+      addTearDown(() => HttpOverrides.global = prevOverrides);
+
+      const digest =
+          '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824';
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+
+      server.listen((req) async {
+        if (req.uri.path == '/SHA256SUMS') {
+          req.response.statusCode = HttpStatus.ok;
+          req.response.write('$digest  ./target.apk\n');
+        } else {
+          req.response.statusCode = HttpStatus.notFound;
+        }
+        await req.response.close();
+      });
+
+      final baseUrl = 'http://127.0.0.1:${server.port}';
+      final service = UpdateService();
+      addTearDown(service.dispose);
+
+      const targetAsset = ReleaseAsset(
+        name: 'target.apk',
+        downloadUrl: 'https://example.com/target.apk',
+        size: 5,
+        contentType: 'application/vnd.android.package-archive',
+      );
+      final release = ReleaseInfo(
+        tagName: 'v1.0.0',
+        version: '1.0.0',
+        name: 'v1.0.0',
+        body: '',
+        publishedAt: null,
+        assets: [
+          targetAsset,
+          ReleaseAsset(
+            name: 'SHA256SUMS',
+            downloadUrl: '$baseUrl/SHA256SUMS',
+            size: 80,
+            contentType: 'text/plain',
+          ),
+        ],
+        htmlUrl: '',
+      );
+
+      final actual = await service.fetchExpectedSha256(
+        release: release,
+        targetAsset: targetAsset,
+      );
+      expect(actual, digest);
+    });
+
+    test('UpdateFlowController 下载时向服务传递预期 SHA256', () async {
+      final service = _MockDownloadUpdateService(
+        resolvedSha256:
+            '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+      );
+      final flow = UpdateFlowController(
+        updateService: service,
+        canInstallCheck: () async => true,
+        installRunner: (_) async {},
+        openSettingsRunner: () async {},
+      );
+      addTearDown(flow.dispose);
+
+      const asset = ReleaseAsset(
+        name: 'app.apk',
+        downloadUrl: 'https://example.com/app.apk',
+        size: 1024,
+        contentType: 'application/vnd.android.package-archive',
+      );
+      flow.setAvailableUpdate(
+        result: const UpdateCheckResult(
+          status: UpdateStatus.hasUpdate,
+          release: ReleaseInfo(
+            tagName: 'v1.6.0',
+            version: '1.6.0',
+            name: 'v1.6.0',
+            body: '',
+            publishedAt: null,
+            assets: [asset],
+            htmlUrl: '',
+          ),
+          targetAsset: asset,
+        ),
+        selectedProxy: '',
+      );
+
+      final future = flow.startDownload();
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        service.lastExpectedSha256,
+        '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+      );
+
+      final tmpFile = File('${Directory.systemTemp.path}/dummy_sha_test.apk');
+      tmpFile.writeAsBytesSync(const <int>[1, 2, 3]);
+      addTearDown(() {
+        if (tmpFile.existsSync()) tmpFile.deleteSync();
+      });
+      service.completeSuccess(tmpFile);
+      await future;
+    });
+  });
 }
 
 class _MockDownloadUpdateService extends UpdateService {
+  _MockDownloadUpdateService({this.resolvedSha256});
+
+  final String? resolvedSha256;
   Completer<File>? _completer;
   void Function(DownloadProgress)? _onProgress;
   CancelToken? lastToken;
+  String? lastExpectedSha256;
+
+  @override
+  Future<String?> fetchExpectedSha256({
+    required ReleaseInfo release,
+    required ReleaseAsset targetAsset,
+    String selectedProxy = '',
+    List<String> backupProxies = const <String>[],
+  }) async => resolvedSha256;
 
   @override
   Future<File> downloadAssetWithFallback({
@@ -962,6 +1100,7 @@ class _MockDownloadUpdateService extends UpdateService {
     _completer = Completer<File>();
     _onProgress = onProgress;
     lastToken = cancelToken;
+    lastExpectedSha256 = expectedSha256;
     return _completer!.future;
   }
 

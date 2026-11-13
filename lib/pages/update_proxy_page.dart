@@ -28,6 +28,12 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
     super.initState();
   }
 
+  @override
+  void dispose() {
+    _service.dispose();
+    super.dispose();
+  }
+
   Future<void> _testProxy(String url) async {
     if (_testingUrls.contains(url)) return;
     setState(() => _testingUrls.add(url));

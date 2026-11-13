@@ -50,11 +50,16 @@ class _AboutPageState extends State<AboutPage> {
 
     try {
       final service = UpdateService();
-      final result = await service.checkForUpdatesWithFallback(
-        currentVersion: appVersion,
-        selectedProxy: widget.model.selectedUpdateProxy,
-        backupProxies: widget.model.allUpdateProxies,
-      );
+      late final UpdateCheckResult result;
+      try {
+        result = await service.checkForUpdatesWithFallback(
+          currentVersion: appVersion,
+          selectedProxy: widget.model.selectedUpdateProxy,
+          backupProxies: widget.model.allUpdateProxies,
+        );
+      } finally {
+        service.dispose();
+      }
 
       if (!mounted) return;
 

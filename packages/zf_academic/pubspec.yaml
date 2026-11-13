@@ -8,7 +8,6 @@ environment:
 
 dependencies:
   crypto: ^3.0.0
-  fast_gbk: ^1.0.0
   pointycastle: ^3.9.0
 
 dev_dependencies:

@@ -26,11 +26,20 @@ class UpdateService {
     this.repoOwner = 'fangzi2006',
     this.repoName = 'QustSchedule',
     HttpClient? httpClient,
-  }) : _client = httpClient ?? HttpClient();
+  }) : _ownsClient = httpClient == null,
+       _client = httpClient ?? HttpClient();
 
   final String repoOwner;
   final String repoName;
+  final bool _ownsClient;
   final HttpClient _client;
+
+  /// 释放底层网络连接资源（仅销毁内部自建的 HttpClient）。
+  void dispose() {
+    if (_ownsClient) {
+      _client.close(force: true);
+    }
+  }
 
   /// 超时策略定义
   static const Duration probeTimeout = Duration(seconds: 5);
@@ -298,15 +307,7 @@ class UpdateService {
     }
 
     // 构造候选队列：选中的代理 -> 其余备选代理 -> 官方直连 (空字符串)
-    final candidates = <String>[];
-    candidates.add(selectedProxy.trim());
-    for (final p in backupProxies) {
-      final clean = p.trim();
-      if (!candidates.contains(clean)) candidates.add(clean);
-    }
-    if (!candidates.contains('')) {
-      candidates.add(''); // 确保最后总有直连兜底
-    }
+    final candidates = _buildCandidates(selectedProxy, backupProxies);
 
     final rawApiUrl =
         'https://api.github.com/repos/$repoOwner/$repoName/releases/latest';
@@ -432,6 +433,82 @@ class UpdateService {
     );
   }
 
+  List<String> _buildCandidates(
+    String selectedProxy,
+    List<String> backupProxies,
+  ) {
+    final candidates = <String>[selectedProxy.trim()];
+    for (final p in backupProxies) {
+      final clean = p.trim();
+      if (!candidates.contains(clean)) candidates.add(clean);
+    }
+    if (!candidates.contains('')) {
+      candidates.add(''); // 确保最后总有直连兜底
+    }
+    return candidates;
+  }
+
+  /// 解析标准 `sha256sum` 生成的校验清单（支持 `./` 或 `*` 前缀）。
+  static Map<String, String> parseSha256Sums(String content) {
+    final result = <String, String>{};
+    final lineRegex = RegExp(r'^([a-fA-F0-9]{64})\s+[*]?(.+)$');
+    for (final rawLine in content.split(RegExp(r'\r?\n'))) {
+      final line = rawLine.trim();
+      if (line.isEmpty) continue;
+      final match = lineRegex.firstMatch(line);
+      if (match == null) continue;
+      final digest = match.group(1)!.toLowerCase();
+      var filePath = match.group(2)!.trim();
+      if (filePath.startsWith('./') || filePath.startsWith(r'.\')) {
+        filePath = filePath.substring(2);
+      }
+      final fileName = filePath.split(RegExp(r'[/\\]')).last;
+      if (fileName.isNotEmpty) {
+        result[fileName] = digest;
+      }
+    }
+    return result;
+  }
+
+  /// 从 Release 的 `SHA256SUMS` 产物中查询目标安装包对应的 SHA-256 摘要。
+  Future<String?> fetchExpectedSha256({
+    required ReleaseInfo release,
+    required ReleaseAsset targetAsset,
+    String selectedProxy = '',
+    List<String> backupProxies = const <String>[],
+  }) async {
+    ReleaseAsset? sumAsset;
+    for (final asset in release.assets) {
+      if (asset.name.toUpperCase() == 'SHA256SUMS') {
+        sumAsset = asset;
+        break;
+      }
+    }
+    if (sumAsset == null || sumAsset.downloadUrl.isEmpty) return null;
+
+    final candidates = _buildCandidates(selectedProxy, backupProxies);
+    for (final candidate in candidates) {
+      final url = buildProxiedUrl(sumAsset.downloadUrl, candidate);
+      try {
+        final req = await _client.getUrl(Uri.parse(url)).timeout(apiTimeout);
+        req.headers.set('User-Agent', browserUserAgent);
+        final res = await req.close().timeout(apiTimeout);
+        if (res.statusCode != HttpStatus.ok) {
+          await res.drain<void>();
+          continue;
+        }
+        final body = await res.transform(utf8.decoder).join();
+        final digest = parseSha256Sums(body)[targetAsset.name];
+        if (digest != null && digest.isNotEmpty) {
+          return digest;
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+    return null;
+  }
+
   /// 带多节点轮询回退与 3 线程并发分块加速的安装包下载方法。
   Future<File> downloadAssetWithFallback({
     required ReleaseAsset asset,
@@ -442,15 +519,7 @@ class UpdateService {
     CancelToken? cancelToken,
     String? expectedSha256,
   }) async {
-    final candidates = <String>[];
-    candidates.add(selectedProxy.trim());
-    for (final p in backupProxies) {
-      final clean = p.trim();
-      if (!candidates.contains(clean)) candidates.add(clean);
-    }
-    if (!candidates.contains('')) {
-      candidates.add(''); // 最后直连
-    }
+    final candidates = _buildCandidates(selectedProxy, backupProxies);
 
     final tempDir = await getTemporaryDirectory();
     final file = File('${tempDir.path}/${asset.name}');
@@ -542,21 +611,8 @@ class UpdateService {
             } catch (chunkError) {
               if (cancelToken?.isCancelled == true) rethrow;
               // 若该节点对并发切片限流或连接中断，立即在该节点内平滑回退单线程直通流
-              final singleReq = await _client
-                  .getUrl(Uri.parse(downloadUrl))
-                  .timeout(downloadConnectTimeout);
-              singleReq.headers.set('User-Agent', browserUserAgent);
-              singleReq.headers.set(
-                HttpHeaders.acceptEncodingHeader,
-                'identity',
-              );
-              singleReq.headers.set(HttpHeaders.acceptHeader, '*/*');
-              singleReq.headers.set(HttpHeaders.connectionHeader, 'keep-alive');
-              final singleRes = await singleReq.close().timeout(
-                downloadConnectTimeout,
-              );
-              await _downloadSingleStream(
-                response: singleRes,
+              await _downloadSingleUrl(
+                downloadUrl: downloadUrl,
                 targetFile: file,
                 totalBytes: totalBytes,
                 onProgress: onProgress,
@@ -565,18 +621,8 @@ class UpdateService {
             }
           } else {
             // 小文件开销不大，走单连接直通
-            final singleReq = await _client
-                .getUrl(Uri.parse(downloadUrl))
-                .timeout(downloadConnectTimeout);
-            singleReq.headers.set('User-Agent', browserUserAgent);
-            singleReq.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
-            singleReq.headers.set(HttpHeaders.acceptHeader, '*/*');
-            singleReq.headers.set(HttpHeaders.connectionHeader, 'keep-alive');
-            final singleRes = await singleReq.close().timeout(
-              downloadConnectTimeout,
-            );
-            await _downloadSingleStream(
-              response: singleRes,
+            await _downloadSingleUrl(
+              downloadUrl: downloadUrl,
               targetFile: file,
               totalBytes: totalBytes,
               onProgress: onProgress,
@@ -756,14 +802,15 @@ class UpdateService {
 
     final response = await request.close().timeout(downloadConnectTimeout);
 
-    if (response.statusCode != HttpStatus.partialContent &&
-        response.statusCode != HttpStatus.ok) {
+    if (response.statusCode != HttpStatus.partialContent) {
+      await response.drain<void>();
       throw HttpException(
         'Chunk $workerIndex HTTP ${response.statusCode}',
         uri: Uri.parse(downloadUrl),
       );
     }
 
+    final expectedBytes = end - start + 1;
     final sink = partFile.openWrite();
     var received = 0;
 
@@ -772,13 +819,18 @@ class UpdateService {
         if (cancelToken?.isCancelled == true) {
           throw Exception('下载已取消');
         }
+        if (received + chunk.length > expectedBytes) {
+          throw HttpException(
+            'Chunk $workerIndex 超出预期长度: 预期 $expectedBytes 字节',
+            uri: Uri.parse(downloadUrl),
+          );
+        }
         sink.add(chunk);
         received += chunk.length;
         onBytes(received);
       }
       await sink.flush();
-      final expectedBytes = end - start + 1;
-      if (received < expectedBytes) {
+      if (received != expectedBytes) {
         throw HttpException(
           'Chunk $workerIndex 传输未完成: 接收 $received 字节，预期 $expectedBytes 字节',
           uri: Uri.parse(downloadUrl),
@@ -789,6 +841,38 @@ class UpdateService {
         await sink.close();
       } catch (_) {}
     }
+  }
+
+  /// 发起单连接 GET 请求并验证 HTTP 200 后交由直通流处理器落盘。
+  Future<void> _downloadSingleUrl({
+    required String downloadUrl,
+    required File targetFile,
+    required int totalBytes,
+    required void Function(DownloadProgress progress) onProgress,
+    CancelToken? cancelToken,
+  }) async {
+    final singleReq = await _client
+        .getUrl(Uri.parse(downloadUrl))
+        .timeout(downloadConnectTimeout);
+    singleReq.headers.set('User-Agent', browserUserAgent);
+    singleReq.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+    singleReq.headers.set(HttpHeaders.acceptHeader, '*/*');
+    singleReq.headers.set(HttpHeaders.connectionHeader, 'keep-alive');
+    final singleRes = await singleReq.close().timeout(downloadConnectTimeout);
+    if (singleRes.statusCode != HttpStatus.ok) {
+      await singleRes.drain<void>();
+      throw HttpException(
+        'HTTP ${singleRes.statusCode}',
+        uri: Uri.parse(downloadUrl),
+      );
+    }
+    await _downloadSingleStream(
+      response: singleRes,
+      targetFile: targetFile,
+      totalBytes: totalBytes,
+      onProgress: onProgress,
+      cancelToken: cancelToken,
+    );
   }
 
   /// 单线程直通下载流处理（带零额外网络握手与平滑限频更新）。

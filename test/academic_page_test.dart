@@ -813,5 +813,34 @@ void main() {
       expect(model.isAcademicUpdateHint, isTrue);
       expect(model.academicHint, isEmpty);
     });
+
+    testWidgets('成绩缺省绩点时隐藏绩点字段，不显示 "绩点 null"', (tester) async {
+      tester.view.physicalSize = const Size(800, 1800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final backend = FakeBackend();
+      backend.gradesBehavior = (_, _) async => const <GradeItem>[
+        GradeItem(
+          courseName: '体育(1)',
+          credit: 1.0,
+          gradePoint: null,
+          rawScore: '92',
+          numericScore: 92.0,
+          termId: '2026-2027-1',
+        ),
+      ];
+      final model = _buildTestModel(backend: backend);
+
+      await tester.pumpWidget(_wrap(AcademicPage(model: model)));
+      await tester.tap(find.byTooltip('刷新学业数据'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 5));
+
+      expect(find.text('体育(1)'), findsOneWidget);
+      expect(find.text('1.0 学分'), findsOneWidget);
+      expect(find.textContaining('null'), findsNothing);
+    });
   });
 }

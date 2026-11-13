@@ -922,5 +922,38 @@ void main() {
       final state = await signInFuture;
       expect(state, isA<AuthenticatedState>());
     });
+
+    test('经验证码完成 signIn 后仍会保存凭据与 accountHint（remember=false 则不存密码）', () async {
+      final h1 = _Harness();
+      h1.backend.loginBehavior = (call, credentials) async =>
+          const CaptchaState(
+            continuationId: 'c1',
+            imageBase64: 'iVBORw0KGgo=',
+            mimeType: 'image/png',
+          );
+      final first = await h1.service.signIn('20240001', 'pw');
+      expect(first, isA<CaptchaState>());
+      expect(await h1.credentials.has(_Harness.accountKey), isFalse);
+
+      final done1 = await h1.service.submitCaptcha('1234');
+      expect(done1, isA<AuthenticatedState>());
+      final saved = await h1.credentials.get(_Harness.accountKey);
+      expect(saved?.username, '20240001');
+      expect(saved?.password, 'pw');
+      expect(h1.service.accountHint, '20240001');
+      expect(h1.storage.saveCount, 1);
+
+      final h2 = _Harness();
+      h2.backend.loginBehavior = (call, credentials) async =>
+          const CaptchaState(
+            continuationId: 'c2',
+            imageBase64: 'iVBORw0KGgo=',
+            mimeType: 'image/png',
+          );
+      await h2.service.signIn('20240001', 'pw', remember: false);
+      await h2.service.submitCaptcha('1234');
+      expect(await h2.credentials.has(_Harness.accountKey), isFalse);
+      expect(h2.service.accountHint, '20240001');
+    });
   });
 }

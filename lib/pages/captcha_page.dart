@@ -2,6 +2,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -36,6 +37,15 @@ class _CaptchaPageState extends State<CaptchaPage> {
     _controller.dispose();
     _focus.dispose();
     super.dispose();
+  }
+
+  Uint8List? _decodeCaptchaBytes(String raw) {
+    if (raw.trim().isEmpty) return null;
+    try {
+      return base64Decode(raw);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _submit() async {
@@ -108,20 +118,30 @@ class _CaptchaPageState extends State<CaptchaPage> {
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(color: scheme.outlineVariant),
                           ),
-                          child: Image.memory(
-                            base64Decode(captcha.imageBase64),
-                            height: 72,
-                            fit: BoxFit.contain,
-                            gaplessPlayback: true,
-                            errorBuilder: (context, error, stack) => SizedBox(
-                              height: 72,
-                              child: Center(
-                                child: Text(
-                                  '验证码图片无法显示',
-                                  style: theme.textTheme.bodySmall,
+                          child: Builder(
+                            builder: (context) {
+                              final placeholder = SizedBox(
+                                height: 72,
+                                child: Center(
+                                  child: Text(
+                                    '验证码图片无法显示',
+                                    style: theme.textTheme.bodySmall,
+                                  ),
                                 ),
-                              ),
-                            ),
+                              );
+                              final bytes = _decodeCaptchaBytes(
+                                captcha.imageBase64,
+                              );
+                              if (bytes == null) return placeholder;
+                              return Image.memory(
+                                bytes,
+                                height: 72,
+                                fit: BoxFit.contain,
+                                gaplessPlayback: true,
+                                errorBuilder: (context, error, stack) =>
+                                    placeholder,
+                              );
+                            },
                           ),
                         ),
                       ),

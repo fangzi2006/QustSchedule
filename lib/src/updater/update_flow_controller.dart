@@ -253,11 +253,24 @@ class UpdateFlowController extends ChangeNotifier {
     notifyListeners();
 
     try {
+      String? expectedSha256;
+      final currentRelease = release;
+      if (currentRelease != null && _allowAvailableFallback) {
+        expectedSha256 = await _service.fetchExpectedSha256(
+          release: currentRelease,
+          targetAsset: asset,
+          selectedProxy: _selectedProxy,
+          backupProxies: _backupProxies,
+        );
+        if (_disposed || token.isCancelled || _cancelToken != token) return;
+      }
+
       final file = await _service.downloadAssetWithFallback(
         asset: asset,
         selectedProxy: _selectedProxy,
         backupProxies: _backupProxies,
         cancelToken: token,
+        expectedSha256: expectedSha256,
         onProxySwitched: (proxy) {
           if (_disposed || token.isCancelled || _cancelToken != token) return;
           _currentProxy = proxy;
@@ -400,6 +413,8 @@ class UpdateFlowController extends ChangeNotifier {
     _disposed = true;
     _cancelToken?.cancel();
     _cancelToken = null;
+    _ownedService?.dispose();
+    _ownedService = null;
     super.dispose();
   }
 }
