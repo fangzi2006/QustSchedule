@@ -85,7 +85,8 @@ class _AppShellState extends State<_AppShell> {
   @override
   void initState() {
     super.initState();
-    _model.addListener(_onModelChanged);
+    _model.hints.addListener(_onModelChanged);
+    _model.routeNotifier.addListener(_onModelChanged);
     _model.boot();
     _lifecycle = AppLifecycleListener(onShow: () => unawaited(_onShown()));
   }
@@ -127,7 +128,8 @@ class _AppShellState extends State<_AppShell> {
   @override
   void dispose() {
     _lifecycle.dispose();
-    _model.removeListener(_onModelChanged);
+    _model.hints.removeListener(_onModelChanged);
+    _model.routeNotifier.removeListener(_onModelChanged);
     // 先停编排（它监听 model），再销毁 model。
     _reminders?.dispose();
     _model.dispose();
@@ -137,7 +139,7 @@ class _AppShellState extends State<_AppShell> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: _model,
+      listenable: _model.routeNotifier,
       builder: (BuildContext context, _) =>
           pageForStatus(_model, reminders: _reminders),
     );

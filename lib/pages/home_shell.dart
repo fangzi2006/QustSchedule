@@ -219,7 +219,10 @@ class _HomeShellState extends State<HomeShell> {
             top: topInset + 6,
             right: 10,
             child: ListenableBuilder(
-              listenable: widget.model,
+              listenable: Listenable.merge(<Listenable>[
+                widget.model.hints,
+                widget.model.routeNotifier,
+              ]),
               builder: (context, _) => StatusPopup(
                 model: widget.model,
                 scope: HintScope.global,

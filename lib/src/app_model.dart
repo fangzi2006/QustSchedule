@@ -1,37 +1,40 @@
-/// 应用状态机：UI 只跟这里读状态、发意图，不直接碰教务客户端。
+/// 应用状态协调器：串联认证会话、课表校历、学业缓存、用户设置与状态气泡五大专职控制器。
 ///
-/// 与模块错误码一一对应（不允许"其他错误弹个 toast"这种黑洞）：
-///  - SESSION_EXPIRED    → 引导重新登录（自动重登失败或没有保存密码时）；
-///  - CAPTCHA_REQUIRED   → 验证码页；
-///  - WEB_LOGIN_REQUIRED → 明确提示"教务系统需要网页统一认证，暂不支持"；
-///  - INVALID_CREDENTIALS→ 账号或密码不正确；
-///  - NETWORK_RETRYABLE  → 网络问题，可重试；
-///  - PAGE_CHANGED       → 页面结构变化，建议反馈；
-///  - UNSUPPORTED        → 账号没有课表权限。
+/// UI 与测试继续通过 [AppModel] 读取状态、发送意图；高频局部状态已隔离到各自的
+/// [Listenable] 频道（[routeNotifier]、[hints]、[scheduleState]、[academic]、
+/// [prefsNotifier]、[weekNotifier]、[refreshingNotifier]），防止微小的提示或
+/// 刷新转圈触发外层外壳与课表网格白刷。
 library;
 
 import 'dart:async';
-import 'dart:io' show SocketException;
 
 import 'package:flutter/foundation.dart';
 import 'package:zf_academic/zf_academic.dart';
 
 import 'academic_cache.dart';
 import 'academic_service.dart';
-import 'schedule_service.dart';
-import 'school.dart';
-import 'session_repository.dart';
-import 'credentials_repository.dart';
 import 'preferences_repository.dart';
 import 'reminder_planner.dart';
 import 'reschedule.dart';
 import 'schedule_cache.dart';
-import 'term_calendar.dart';
+import 'schedule_service.dart';
+import 'school.dart';
+import 'session_repository.dart';
+import 'state/academic_controller.dart';
+import 'state/auth_session_controller.dart';
+import 'state/hint_notice_controller.dart';
+import 'state/preferences_controller.dart';
+import 'state/schedule_controller.dart';
 import 'timetable.dart';
-import 'app_version.dart';
 import 'updater/update_flow_controller.dart';
 import 'updater/update_models.dart';
 import 'updater/update_service.dart';
+
+export 'state/academic_controller.dart';
+export 'state/auth_session_controller.dart';
+export 'state/hint_notice_controller.dart' show HintNoticeController, HintScope;
+export 'state/preferences_controller.dart';
+export 'state/schedule_controller.dart' show ScheduleController, WeekNotifier;
 
 enum AppStatus {
   /// 启动中：读快照、试探会话。
@@ -56,30 +59,6 @@ enum AppStatus {
   failed,
 }
 
-/// 提示气泡的页面作用域。
-enum HintScope {
-  /// 全局通用（如重新登录、登录中、会话失效等）。
-  global,
-
-  /// 课表专属（如课表拉取中、已更新、课表刷新失败等）。
-  schedule,
-
-  /// 学业专属（如学业刷新中、已更新、学业刷新失败等）。
-  academic,
-}
-
-/// 周次通知源：在 [ValueNotifier] 基础上支持同值强制重发。
-///
-/// 手势翻页途中只改顶栏 `shownWeek`，停稳才回写 `model.week`。
-/// 若动画还没停稳（`model.week` 仍等于原周）用户就点「今」或选周切回原周，
-/// 目标值与 `_week` 相同；普通 [ValueNotifier] 会忽略同值赋值，这里显式广播。
-class WeekNotifier extends ValueNotifier<int> {
-  WeekNotifier(super._value);
-
-  /// 强制广播当前周次。
-  void notify() => notifyListeners();
-}
-
 class AppModel extends ChangeNotifier {
   AppModel({
     ScheduleService? service,
@@ -92,104 +71,75 @@ class AppModel extends ChangeNotifier {
     AcademicService? academicService,
     UpdateFlowController? updateFlow,
     String? schoolBaseUrl,
-  }) : _schoolBaseUrl = schoolBaseUrl ?? defaultSchool.baseUrl,
-       updateFlow = updateFlow ?? UpdateFlowController(),
-       // 构造时显式给了地址（测试注入）就别被设置里的"上次用的学校"覆盖。
-       _schoolFixed = schoolBaseUrl != null,
-       service =
-           service ??
-           ScheduleService(
-             credentials: credentials ?? SecureCredentialStore(),
-             // path_provider 的目录要异步取；boot() 注入真实实现。
-             cookieStorage: repository ?? LateSessionRepository(),
-           ),
-       _repositoryReady = repository != null,
-       _preferences = preferences ?? Preferences.inMemory(),
+  }) : _repositoryReady = repository != null,
        _preferencesReady = preferences != null,
-       _preferencesLoaded = preferences != null,
-       _scheduleCache = scheduleCache ?? LateScheduleCache(),
        _cacheReady = scheduleCache != null,
-       _examCache = examCache ?? LateExamCache(),
        _examCacheReady = examCache != null,
-       _gradesCache = gradesCache ?? LateGradesCache(),
        _gradesCacheReady = gradesCache != null,
-       _academicServiceReady = academicService != null {
-    this.academicService =
-        academicService ??
-        AcademicService(
-          service: this.service,
-          examCache: _examCache,
-          gradesCache: _gradesCache,
-        );
-    // 自动回登遇到验证码时由状态机挂起、UI 输入（见 _handleCaptcha）。
-    this.service.captchaHandler = _handleCaptcha;
-    // 编排层进入"重新登录"阶段时，把右上角提示语换掉（仍不遮挡课表）。
-    this.service.onStage = _onServiceStage;
-    _attachPreferencesStorageMonitor();
+       _academicServiceReady = academicService != null,
+       hints = HintNoticeController() {
+    prefs = PreferencesController(
+      preferences: preferences,
+      updateFlow: updateFlow ?? UpdateFlowController(),
+      hints: hints,
+      onStateChanged: _notifyStateChanged,
+    );
+    session = AuthSessionController(
+      prefs: prefs,
+      onStateChanged: _notifyStateChanged,
+      onRouteChanged: _notifyRouteChanged,
+      service: service,
+      repository: repository,
+      credentials: credentials,
+      schoolBaseUrl: schoolBaseUrl,
+    );
+    scheduleState = ScheduleController(
+      scheduleCache: scheduleCache,
+      prefs: prefs,
+    );
+    academic = AcademicController(
+      service: session.service,
+      examCache: examCache ?? LateExamCache(),
+      gradesCache: gradesCache ?? LateGradesCache(),
+      hints: hints,
+      fallbackTermIdReader: () => scheduleState.termId,
+      termsReader: () => scheduleState.terms,
+      termsSetter: (terms) => scheduleState.setTerms(terms, notify: false),
+      isNeedLoginReader: () => _status == AppStatus.needLogin,
+      suppressStageHintsSetter: (suppress) => _suppressStageHints = suppress,
+      academicService: academicService,
+    );
+    session.service.captchaHandler = _handleCaptcha;
+    session.service.onStage = _onServiceStage;
   }
 
-  final ScheduleService service;
   final bool _repositoryReady;
-
-  /// 用户设置。构造时先给内存实现，`boot()` 时替换为落盘实现。
-  Preferences _preferences;
   final bool _preferencesReady;
-
-  /// 偏好是否已经读到（注入内存实现时一开始就算读到）。
-  ///
-  /// 见 [preferencesLoaded]：提醒服务不能用"默认值"判断用户关掉了提醒。
-  bool _preferencesLoaded;
-
-  /// 课表本地缓存（课表 + 抓取时间）。同样在 `boot()` 时替换为落盘实现。
-  ScheduleCache _scheduleCache;
   final bool _cacheReady;
-
-  /// 考试本地离线缓存。
-  ExamCache _examCache;
   final bool _examCacheReady;
-
-  /// 成绩本地离线缓存。
-  GradesCache _gradesCache;
   final bool _gradesCacheReady;
   final bool _academicServiceReady;
 
-  /// 学业服务业务编排层。
-  late AcademicService academicService;
+  /// 全局与页面级提示气泡控制器。
+  final HintNoticeController hints;
 
-  String _academicTermId = '';
-  String _loadedAcademicTerm = '';
-  String get academicTermId {
-    if (_academicTermId.isNotEmpty) return _academicTermId;
-    if (_termId.isNotEmpty) return _termId;
-    if (_terms != null && _terms!.currentId.isNotEmpty) {
-      return _terms!.currentId;
-    }
-    return '';
-  }
+  /// 用户偏好与外观防抖控制器。
+  late final PreferencesController prefs;
 
-  List<ExamItem> _exams = const <ExamItem>[];
-  List<ExamItem> get exams => _exams;
+  /// 登录会话与线路控制器。
+  late final AuthSessionController session;
 
-  List<GradeItem> _grades = const <GradeItem>[];
-  List<GradeItem> get grades => _grades;
+  /// 课表与周历控制器。
+  late final ScheduleController scheduleState;
 
-  /// 当前学期成绩与学分绩点统计。
-  GradeStats get gradeStats => GradeStats.calculate(_grades);
+  /// 学业考试成绩控制器。
+  late final AcademicController academic;
 
-  bool _isNotEvaluated = false;
-  bool get isNotEvaluated => _isNotEvaluated;
+  /// 顶层页面路由监听源：仅在页面切换条件、登录提示或错误码变化时通知。
+  final ChangeNotifier routeNotifier = ChangeNotifier();
 
-  bool _academicLoading = false;
-  bool get academicLoading => _academicLoading;
-
-  int _academicLoadSeq = 0;
-  String? _loadingAcademicTerm;
-
-  String? _academicError;
-  String? get academicError => _academicError;
-
-  /// 学业页面独立订阅源，防止课表刷新引起的无效重绘。
-  final ChangeNotifier academicNotifier = ChangeNotifier();
+  bool _suppressStageHints = false;
+  bool _disposed = false;
 
   AppStatus _status = AppStatus.booting;
   AppStatus get status => _status;
@@ -200,734 +150,215 @@ class AppModel extends ChangeNotifier {
   String _errorCode = '';
   String get errorCode => _errorCode;
 
-  int _storageNoticeEvent = 0;
-  int get storageNoticeEvent => _storageNoticeEvent;
-
-  String? _storageNoticeMessage;
-  String? get storageNoticeMessage => _storageNoticeMessage;
-
-  bool _reportedWriteFailure = false;
-
-  void _attachPreferencesStorageMonitor() {
-    _preferences.onWriteSuccess = () {
-      _reportedWriteFailure = false;
-    };
-    _preferences.onWriteError = (_) {
-      if (_disposed || _reportedWriteFailure) return;
-      _reportedWriteFailure = true;
-      _emitStorageNotice('本地设置保存失败，请检查存储空间');
-    };
-  }
-
-  void _emitStorageNotice(String message) {
+  void _notifyStateChanged() {
     if (_disposed) return;
-    _storageNoticeMessage = message;
-    _storageNoticeEvent++;
     notifyListeners();
   }
 
-  /// 上次"看见"的日期（只到天）。回到前台时拿它比对，发现跨天就重建一次界面。
-  ///
-  /// 课表页的表头日期与"今天"高亮都是 build 时按 `DateTime.now()` 现算的，
-  /// 所以一次 `notifyListeners` 就够——但没人通知的话，App 在后台过夜后
-  /// 回到前台会一直显示昨天的日期。
-  DateTime _lastSeenDay = dayOnly(DateTime.now());
-
-  /// 上次成功抓到课表的时刻。`null` = 本次进程还没成功抓过、也不知道缓存时间。
-  DateTime? _lastFetchedAt;
-
-  Schedule? _schedule;
-  Schedule? get schedule => _schedule;
-
-  Terms? _terms;
-  Terms? get terms => _terms;
-
-  String _termId = '';
-  String get termId => _termId;
-
-  String _studentName = '';
-  String get studentName => _studentName;
-
-  String _studentId = '';
-  String get studentId => _studentId;
-
-  CaptchaState? _captcha;
-  CaptchaState? get captcha => _captcha;
-
-  String _username = '';
-  String get username => _username;
-  set username(String value) {
-    _username = value;
-    notifyListeners();
+  void _notifyRouteChanged() {
+    if (_disposed) return;
+    routeNotifier.notifyListeners();
   }
-
-  String _schoolBaseUrl;
-  final bool _schoolFixed;
-  String get schoolBaseUrl => _schoolBaseUrl;
 
   // ---------------------------------------------------------------------------
-  // 周次（周视图的核心状态）
+  // 转发到专职控制器（保持外部 API 完全兼容）
   // ---------------------------------------------------------------------------
 
-  /// 正在查看第几周（1-based）。
-  int _week = 1;
-  int get week => _week;
+  ScheduleService get service => session.service;
+  AcademicService get academicService => academic.academicService;
+  UpdateFlowController get updateFlow => prefs.updateFlow;
 
-  /// 周次单独的通知源。
-  ///
-  /// 周次是"看哪一页"，不是课表内容：改它不该把整张课表重建一次（实测一次
-  /// 整页重建 60ms+，而翻页落稳、点箭头、选周都会改周次）。所以它走自己的
-  /// notifier —— 只有顶栏、右下角按钮和翻页逻辑监听它，课表网格不监听。
-  final WeekNotifier weekNotifier = WeekNotifier(1);
+  String get academicTermId => academic.academicTermId;
+  List<ExamItem> get exams => academic.exams;
+  List<GradeItem> get grades => academic.grades;
+  GradeStats get gradeStats => academic.gradeStats;
+  bool get isNotEvaluated => academic.isNotEvaluated;
+  bool get academicLoading => academic.academicLoading;
+  String? get academicError => academic.academicError;
+  ChangeNotifier get academicNotifier => academic;
 
-  /// 设置当前周次。
-  ///
-  /// **不**发 `notifyListeners()`：内容没变，整页重建是白花的钱。
-  /// 需要重建界面（例如校准改了开学日）的地方自己另外通知。
-  void _setWeek(int week) {
-    final int next = _clampWeek(week);
-    if (next == _week) return;
-    _week = next;
-    weekNotifier.value = next;
-  }
+  int get storageNoticeEvent => hints.storageNoticeEvent;
+  String? get storageNoticeMessage => hints.storageNoticeMessage;
 
-  /// 偏好设置（显示教师/地点、静默更新、外观…）单独的通知源。
-  ///
-  /// 设置页只关心这些。原先它听的是整个 model，于是**任何**通知都会让它整页
-  /// 重建一次（实测 21~26ms）：后台刷新一次课表，用户在设置页里就白重建一遍。
-  ///
-  /// 走自己的 notifier 后，设置页只在偏好真的变了时重建。
-  final ValueNotifier<int> prefsNotifier = ValueNotifier<int>(0);
+  Schedule? get schedule => scheduleState.schedule;
+  Terms? get terms => scheduleState.terms;
+  String get termId => scheduleState.termId;
+  String get studentName => session.studentName;
+  String get studentId => session.studentId;
+  CaptchaState? get captcha => session.captcha;
 
-  /// 偏好变了：通知设置页（以及任何只关心偏好的界面）。
-  ///
-  /// 计数递增即可——监听方只需要知道"变了"，不需要知道变成了什么。
-  void _notifyPrefs() {
-    prefsNotifier.value++;
-  }
+  String get username => session.username;
+  set username(String value) => session.username = value;
 
-  /// 先同步更新内存与界面，再异步等待合并写盘，确保快速开关不卡手也不堆积长队列。
-  Future<void> _commitPref(
-    Future<void> Function() write, {
-    bool syncProxy = false,
-    bool notifyPrefs = true,
-  }) async {
-    final flushing = write();
-    if (syncProxy) _syncUpdateProxy();
-    notifyListeners();
-    if (notifyPrefs) _notifyPrefs();
-    await flushing;
-  }
+  String get schoolBaseUrl => session.schoolBaseUrl;
 
-  /// 本学期实际有课的最大周次（课表里出现过的最晚周）。
-  int _maxWeek = 20;
-  int get maxWeek => _maxWeek;
+  int get week => scheduleState.week;
+  WeekNotifier get weekNotifier => scheduleState.weekNotifier;
+  ValueNotifier<int> get prefsNotifier => prefs.prefsNotifier;
+  ValueNotifier<bool> get refreshingNotifier =>
+      scheduleState.refreshingNotifier;
 
-  /// 第 1 周的周一。null 表示还没定位（未加载课表）。
-  DateTime? _termStart;
-  DateTime? get termStart => _termStart;
+  int get maxWeek => scheduleState.maxWeek;
+  DateTime? get termStart => scheduleState.termStart;
+  String get weekRange => scheduleState.weekRange;
+  List<ScheduleEntry> get weekEntries => scheduleState.weekEntries;
 
-  /// 以周一为一周之始的日期文案，给周次条用。
-  String get weekRange =>
-      _termStart == null ? '' : weekRangeLabel(_termStart!, _week);
+  RescheduleWeekView rescheduleViewFor(int week) =>
+      scheduleState.rescheduleViewFor(week);
 
-  /// 这一周要上的课（已按周次过滤，并叠加调课规则）。
-  List<ScheduleEntry> get weekEntries => entriesForWeek(_week);
-
-  /// 某一周的调课渲染视图：要显示的课 + 每天的调课冲突（被顶掉、未显示的原课）。
-  ///
-  /// 调课只在这里叠加，`_schedule.entries` 始终是教务返回的原样。
-  RescheduleWeekView rescheduleViewFor(int week) {
-    final schedule = _schedule;
-    final termStart = _termStart;
-    if (schedule == null || termStart == null) {
-      return const RescheduleWeekView();
-    }
-    return rescheduleWeekView(
-      schedule.entries,
-      _preferences.reschedules,
-      termStart,
-      week,
-      maxWeek: _maxWeek,
-    );
-  }
-
-  /// 某一周实际渲染的课（= 调课视图的 entries）。
   List<ScheduleEntry> entriesForWeek(int week) =>
-      rescheduleViewFor(week).entries;
+      scheduleState.entriesForWeek(week);
 
-  /// 今天按当前校准落在第几周（用于"回到本周"）。
-  int get currentWeekOfToday =>
-      _termStart == null ? 1 : weekOf(_termStart!, DateTime.now());
+  int get currentWeekOfToday => scheduleState.currentWeekOfToday;
 
-  /// 是否已有可用会话（设置页据此区分"已登录 / 未登录"）。
-  ///
-  /// 不能用 `studentName.isEmpty` 判断：Cookie 免登时客户端并不知道"我是谁"，
-  /// 课表能取但姓名是空的——那正是"能看课表却显示未登录"的原因。
   bool get signedIn =>
-      service.sessionInfo?.authenticated == true ||
-      _schedule != null ||
-      service.hasCookies;
+      session.service.sessionInfo?.authenticated == true ||
+      scheduleState.schedule != null ||
+      session.service.hasCookies;
 
-  // ---------------------------------------------------------------------------
-  // 作息时间表（课表左侧时间轴与网格行数的来源）
-  // ---------------------------------------------------------------------------
-
-  /// 全部时间表（按生效日倒序）。
-  List<Timetable> get timetables => _preferences.timetables;
-
-  /// 今天生效的时间表。null 表示还没配置（理论上不会：迁移时会补默认表）。
-  Timetable? get activeTimetable => _preferences.activeTimetable();
-
-  /// 课表节数（**全局设置**，所有作息表共用）：上午 / 下午 / 晚上各几节。
-  Map<PeriodGroup, int> get sectionCounts => _preferences.sectionCounts;
-
-  /// 总节数 = 三段之和。
-  int get sectionCount => _preferences.sectionCount;
-
-  /// 改全局节数。每张表读取时会按段自动对齐，课表行数跟着变。
+  // 作息时间表与节数
+  List<Timetable> get timetables => prefs.timetables;
+  Timetable? get activeTimetable => prefs.activeTimetable;
+  Map<PeriodGroup, int> get sectionCounts => prefs.sectionCounts;
+  int get sectionCount => prefs.sectionCount;
   Future<void> setSectionCounts(Map<PeriodGroup, int> value) =>
-      _commitPref(() => _preferences.setSectionCounts(value));
-
-  /// 当前生效表对齐到全局节数后的节次（时间轴读它，保证行数一致）。
-  List<SectionTime> get activeSections => reconcileSections(
-    activeTimetable?.sections ?? const <SectionTime>[],
-    sectionCounts,
-  );
-
-  /// 时间表配了多少节（等于全局节数，保留给外部读）。
+      prefs.setSectionCounts(value);
+  List<SectionTime> get activeSections => prefs.activeSections;
   int get timetableSectionCount => sectionCount;
-
-  /// 数据里出现过的最大节次。
-  int get _dataMaxPeriod {
-    var max = 0;
-    for (final entry in _schedule?.entries ?? const <ScheduleEntry>[]) {
-      if (entry.endPeriod > max) max = entry.endPeriod;
-    }
-    return max;
-  }
-
-  /// 课表网格行数 = max(时间表节数, 数据最大节次)。
-  ///
-  /// 取大值是为了**不丢课**：如果教务出现第 11 节而时间表只配了 10 节，
-  /// 严格按时间表渲染会把那节课直接藏掉。宁可多一行并标注。
-  int get gridSectionCount {
-    final dataMax = _dataMaxPeriod;
-    return dataMax > sectionCount ? dataMax : sectionCount;
-  }
-
-  /// 数据里有课超出时间表节数（UI 据此给"未在时间表中"的提示）。
-  bool get hasSectionsBeyondTimetable => _dataMaxPeriod > sectionCount;
-
-  /// 某节的起止时间文案，例如 `08:00–08:45`。没有这一节时返回空串。
-  String timeLabelOf(int period) {
-    final section = _sectionOf(period);
-    if (section == null) return '';
-    return '${formatClock(section.startMinutes)}–${formatClock(section.endMinutes)}';
-  }
-
-  /// 某节的开始时间文案（时间轴主标签）。
-  String startLabelOf(int period) {
-    final section = _sectionOf(period);
-    return section == null ? '' : formatClock(section.startMinutes);
-  }
-
-  /// 某节的结束时间文案（时间轴第三行）。没有这一节时返回空串。
-  String endLabelOf(int period) {
-    final section = _sectionOf(period);
-    return section == null ? '' : formatClock(section.endMinutes);
-  }
-
-  SectionTime? _sectionOf(int period) {
-    for (final section in activeSections) {
-      if (section.period == period) return section;
-    }
-    return null;
-  }
-
-  /// 保存整份时间表集合（增删改统一走这里）。
+  int get gridSectionCount => scheduleState.gridSectionCount;
+  bool get hasSectionsBeyondTimetable =>
+      scheduleState.hasSectionsBeyondTimetable;
+  String timeLabelOf(int period) => scheduleState.timeLabelOf(period);
+  String startLabelOf(int period) => scheduleState.startLabelOf(period);
+  String endLabelOf(int period) => scheduleState.endLabelOf(period);
   Future<void> saveTimetables(List<Timetable> tables) =>
-      _commitPref(() => _preferences.saveTimetables(tables));
+      prefs.saveTimetables(tables);
+  Future<void> upsertTimetable(Timetable table) => prefs.upsertTimetable(table);
+  Future<void> deleteTimetable(String id) => prefs.deleteTimetable(id);
+  QuickSetup? get quickSetup => prefs.quickSetup;
+  Future<void> saveQuickSetup(QuickSetup setup) => prefs.saveQuickSetup(setup);
 
-  /// 新增或按 id 覆盖一张表。
-  Future<void> upsertTimetable(Timetable table) async {
-    final list = _preferences.timetables;
-    final index = list.indexWhere((item) => item.id == table.id);
-    if (index >= 0) {
-      list[index] = table;
-    } else {
-      list.add(table);
-    }
-    await saveTimetables(list);
-  }
-
-  /// 删除一张表。最后一张不允许删（否则课表没有作息可读）。
-  Future<void> deleteTimetable(String id) async {
-    final rest = _preferences.timetables
-        .where((item) => item.id != id)
-        .toList();
-    if (rest.isEmpty) return;
-    await saveTimetables(rest);
-  }
-
-  /// 上次填的快捷设置（面板回填用）。
-  QuickSetup? get quickSetup => _preferences.quickSetup;
-
-  Future<void> saveQuickSetup(QuickSetup setup) =>
-      _commitPref(() => _preferences.setQuickSetup(setup), notifyPrefs: false);
-
-  // ---------------------------------------------------------------------------
-  // 课表格子显示哪些信息
-  // ---------------------------------------------------------------------------
-
-  /// 课格里是否显示教师名。
-  bool get showTeacher => _preferences.showTeacher;
-
-  /// 课格里是否显示上课地点。
-  bool get showLocation => _preferences.showLocation;
-
-  Future<void> setShowTeacher(bool value) async {
-    if (_preferences.showTeacher == value) return;
-    await _commitPref(() => _preferences.setShowTeacher(value));
-  }
-
-  Future<void> setShowLocation(bool value) async {
-    if (_preferences.showLocation == value) return;
-    await _commitPref(() => _preferences.setShowLocation(value));
-  }
-
-  /// 当前课表的"备注"（实践课程 / 其他课程，来自 `sjkList`）。没有则为空。
-  List<ScheduleRemark> get scheduleRemarks =>
-      _schedule?.remarks ?? const <ScheduleRemark>[];
-
-  /// 是否在课表页下方显示备注。
-  bool get showScheduleRemarks => _preferences.showScheduleRemarks;
-
-  /// 是否真的显示备注区：有备注 **且** 开关打开。空备注时区不占地方。
+  // 课表显示与静默更新设置
+  bool get showTeacher => prefs.showTeacher;
+  bool get showLocation => prefs.showLocation;
+  Future<void> setShowTeacher(bool value) => prefs.setShowTeacher(value);
+  Future<void> setShowLocation(bool value) => prefs.setShowLocation(value);
+  List<ScheduleRemark> get scheduleRemarks => scheduleState.scheduleRemarks;
+  bool get showScheduleRemarks => prefs.showScheduleRemarks;
   bool get showScheduleRemarksSection =>
       showScheduleRemarks && scheduleRemarks.isNotEmpty;
+  Future<void> setShowScheduleRemarks(bool value) =>
+      prefs.setShowScheduleRemarks(value);
+  bool get autoRefresh => prefs.autoRefresh;
+  int get autoRefreshIntervalMinutes => prefs.autoRefreshIntervalMinutes;
+  Future<void> setAutoRefresh(bool value) => prefs.setAutoRefresh(value);
+  Future<void> setAutoRefreshIntervalMinutes(int value) =>
+      prefs.setAutoRefreshIntervalMinutes(value);
 
-  Future<void> setShowScheduleRemarks(bool value) async {
-    if (_preferences.showScheduleRemarks == value) return;
-    await _commitPref(() => _preferences.setShowScheduleRemarks(value));
-  }
+  // 课前提醒偏好
+  bool get preferencesLoaded => prefs.preferencesLoaded;
+  bool get reminderEnabled => prefs.reminderEnabled;
+  int get reminderLeadMinutes => prefs.reminderLeadMinutes;
+  ReminderStyle get reminderStyle => prefs.reminderStyle;
+  Future<void> setReminderEnabled(bool value) =>
+      prefs.setReminderEnabled(value);
+  Future<void> setReminderLeadMinutes(int value) =>
+      prefs.setReminderLeadMinutes(value);
+  Future<void> setReminderStyle(ReminderStyle value) =>
+      prefs.setReminderStyle(value);
+  bool get reminderFluidUntilEnd => prefs.reminderFluidUntilEnd;
+  Future<void> setReminderFluidUntilEnd(bool value) =>
+      prefs.setReminderFluidUntilEnd(value);
 
-  // ---------------------------------------------------------------------------
-  // 静默更新（开关 + 最小间隔）
-  // ---------------------------------------------------------------------------
-
-  /// 是否开启冷启动的静默更新。
-  bool get autoRefresh => _preferences.autoRefresh;
-
-  /// 静默更新的最小间隔（分钟）。
-  int get autoRefreshIntervalMinutes => _preferences.autoRefreshIntervalMinutes;
-
-  Future<void> setAutoRefresh(bool value) async {
-    if (_preferences.autoRefresh == value) return;
-    await _commitPref(() => _preferences.setAutoRefresh(value));
-  }
-
-  Future<void> setAutoRefreshIntervalMinutes(int value) async {
-    final safe = clampAutoRefreshIntervalMinutes(value);
-    if (_preferences.autoRefreshIntervalMinutes == safe) return;
-    await _commitPref(() => _preferences.setAutoRefreshIntervalMinutes(safe));
-  }
-
-  // ---------------------------------------------------------------------------
-  // 课前提醒（开关 + 提前量）
-  // ---------------------------------------------------------------------------
-
-  /// 偏好是否已经从磁盘读到。
-  ///
-  /// 冷启动时 [Preferences.open] 还没回来，读到的 `reminderEnabled` 是默认的
-  /// `false`——提醒服务如果这时同步，会把用户真正开着的提醒当成"关掉了"
-  /// 而清空全部闹钟。所以服务必须等这个标志为 true 才动手。
-  bool get preferencesLoaded => _preferencesLoaded;
-
-  /// 是否开启课前提醒（仅 Android 有这条路径）。
-  bool get reminderEnabled => _preferences.reminderEnabled;
-
-  /// 提前多少分钟（1~60 的任意整数，界面用滑块取）。
-  int get reminderLeadMinutes => _preferences.reminderLeadMinutes;
-
-  /// 提醒形态：横幅 / 流体云。
-  ReminderStyle get reminderStyle => _preferences.reminderStyle;
-
-  Future<void> setReminderEnabled(bool value) async {
-    if (_preferences.reminderEnabled == value) return;
-    await _commitPref(() => _preferences.setReminderEnabled(value));
-  }
-
-  Future<void> setReminderLeadMinutes(int value) async {
-    final safe = clampReminderLead(value);
-    if (_preferences.reminderLeadMinutes == safe) return;
-    await _commitPref(() => _preferences.setReminderLeadMinutes(safe));
-  }
-
-  Future<void> setReminderStyle(ReminderStyle value) async {
-    if (_preferences.reminderStyle == value) return;
-    await _commitPref(() => _preferences.setReminderStyle(value));
-  }
-
-  /// 流体云卡片是否显示到下课（false = 上课即收起）。
-  bool get reminderFluidUntilEnd => _preferences.reminderFluidUntilEnd;
-
-  Future<void> setReminderFluidUntilEnd(bool value) async {
-    if (_preferences.reminderFluidUntilEnd == value) return;
-    await _commitPref(() => _preferences.setReminderFluidUntilEnd(value));
-  }
-
-  // ---------------------------------------------------------------------------
-  // ---------------------------------------------------------------------------
   // 软件更新设置
-  // ---------------------------------------------------------------------------
-
-  /// 全局软件更新状态机（供顶栏提示图标、更新弹窗与关于页共享）。
-  final UpdateFlowController updateFlow;
-
-  String get selectedUpdateProxy => _preferences.selectedUpdateProxy;
-
-  void _syncUpdateProxy() {
-    updateFlow.updateProxySelection(
-      selectedProxy: selectedUpdateProxy,
-      backupProxies: allUpdateProxies,
-    );
-  }
-
-  Future<void> setSelectedUpdateProxy(String value) async {
-    if (_preferences.selectedUpdateProxy == value.trim()) return;
-    await _commitPref(
-      () => _preferences.setSelectedUpdateProxy(value),
-      syncProxy: true,
-    );
-  }
-
-  String get updateProxyUrl => _preferences.updateProxyUrl;
-
-  Future<void> setUpdateProxyUrl(String value) async {
-    if (_preferences.updateProxyUrl == value.trim()) return;
-    await _commitPref(
-      () => _preferences.setUpdateProxyUrl(value),
-      syncProxy: true,
-    );
-  }
-
-  List<String> get customUpdateProxies => _preferences.customUpdateProxies;
-
-  List<String> get allUpdateProxies => _preferences.allUpdateProxies;
-
-  Future<void> addCustomUpdateProxy(String url) => _commitPref(
-    () => _preferences.addCustomUpdateProxy(url),
-    syncProxy: true,
-  );
-
-  Future<void> removeCustomUpdateProxy(String url) => _commitPref(
-    () => _preferences.removeCustomUpdateProxy(url),
-    syncProxy: true,
-  );
-
-  bool get autoCheckUpdate => _preferences.autoCheckUpdate;
-
-  bool _hasCheckedAutoUpdate = false;
-  Timer? _autoUpdateTimer;
-
-  /// 单次会话是否已触发过自动检查更新。
+  String get selectedUpdateProxy => prefs.selectedUpdateProxy;
+  Future<void> setSelectedUpdateProxy(String value) =>
+      prefs.setSelectedUpdateProxy(value);
+  String get updateProxyUrl => prefs.updateProxyUrl;
+  Future<void> setUpdateProxyUrl(String value) =>
+      prefs.setUpdateProxyUrl(value);
+  List<String> get customUpdateProxies => prefs.customUpdateProxies;
+  List<String> get allUpdateProxies => prefs.allUpdateProxies;
+  Future<void> addCustomUpdateProxy(String url) =>
+      prefs.addCustomUpdateProxy(url);
+  Future<void> removeCustomUpdateProxy(String url) =>
+      prefs.removeCustomUpdateProxy(url);
+  bool get autoCheckUpdate => prefs.autoCheckUpdate;
   @visibleForTesting
-  bool get hasCheckedAutoUpdate => _hasCheckedAutoUpdate;
-
-  /// 取消待执行的自动更新检查定时器。
-  void cancelAutoUpdate() {
-    _autoUpdateTimer?.cancel();
-    _autoUpdateTimer = null;
-  }
-
-  /// 启动时触发自动检查更新（由 UI 挂载后通知，集中管理定时器与重试）。
+  bool get hasCheckedAutoUpdate => prefs.hasCheckedAutoUpdate;
+  void cancelAutoUpdate() => prefs.cancelAutoUpdate();
   void checkAutoUpdate({
     required void Function(UpdateCheckResult result) onHasUpdate,
     UpdateService? updateService,
     Duration initialDelay = const Duration(seconds: 1),
-  }) {
-    if (_hasCheckedAutoUpdate) return;
-    if (!autoCheckUpdate) return;
+  }) => prefs.checkAutoUpdate(
+    onHasUpdate: onHasUpdate,
+    updateService: updateService,
+    initialDelay: initialDelay,
+  );
+  Future<void> setAutoCheckUpdate(bool value) =>
+      prefs.setAutoCheckUpdate(value);
 
-    int retryCount = 0;
-
-    late void Function(Duration delay) scheduleCheck;
-
-    Future<void> executeCheck() async {
-      if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
-      UpdateService? ownedService;
-      try {
-        final service = updateService ?? (ownedService = UpdateService());
-        final result = await service.checkForUpdatesWithFallback(
-          currentVersion: appVersion,
-          selectedProxy: selectedUpdateProxy,
-          backupProxies: allUpdateProxies,
-        );
-        if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
-
-        if (result.status == UpdateStatus.hasUpdate) {
-          _hasCheckedAutoUpdate = true;
-          if (result.release != null) {
-            updateFlow.setAvailableUpdate(
-              result: result,
-              selectedProxy: selectedUpdateProxy,
-              backupProxies: allUpdateProxies,
-            );
-            onHasUpdate(result);
-          }
-        } else if (result.status == UpdateStatus.noUpdate) {
-          _hasCheckedAutoUpdate = true;
-        } else if (result.status == UpdateStatus.networkError) {
-          if (retryCount < 2) {
-            retryCount++;
-            scheduleCheck(const Duration(seconds: 2));
-          } else {
-            _hasCheckedAutoUpdate = true;
-          }
-        } else {
-          _hasCheckedAutoUpdate = true;
-        }
-      } catch (_) {
-        if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
-        if (retryCount < 2) {
-          retryCount++;
-          scheduleCheck(const Duration(seconds: 2));
-        } else {
-          _hasCheckedAutoUpdate = true;
-        }
-      } finally {
-        ownedService?.dispose();
-      }
-    }
-
-    scheduleCheck = (Duration delay) {
-      _autoUpdateTimer?.cancel();
-      if (delay == Duration.zero) {
-        unawaited(executeCheck());
-      } else {
-        _autoUpdateTimer = Timer(delay, executeCheck);
-      }
-    };
-
-    scheduleCheck(initialDelay);
-  }
-
-  Future<void> setAutoCheckUpdate(bool value) async {
-    if (_preferences.autoCheckUpdate == value) return;
-    await _commitPref(() => _preferences.setAutoCheckUpdate(value));
-  }
-
-  // ---------------------------------------------------------------------------
-  // 调课（只影响渲染，不改原始课表）
-  // ---------------------------------------------------------------------------
-
-  /// 全部调课规则。
-  List<RescheduleRule> get reschedules => _preferences.reschedules;
-
-  /// 新增一条调课规则：把 [fromMonth] 月 [fromDay] 日的课整体调到 [toMonth] 月 [toDay] 日。
+  // 调课与外观
+  List<RescheduleRule> get reschedules => prefs.reschedules;
   Future<RescheduleRule> addReschedule({
     required int fromMonth,
     required int fromDay,
     required int toMonth,
     required int toDay,
-  }) async {
-    final rule = RescheduleRule(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
-      fromMonth: fromMonth,
-      fromDay: fromDay,
-      toMonth: toMonth,
-      toDay: toDay,
-    );
-    await _commitPref(
-      () => _preferences.saveReschedules(<RescheduleRule>[
-        ..._preferences.reschedules,
-        rule,
-      ]),
-      notifyPrefs: false,
-    );
-    return rule;
-  }
-
-  /// 删除一条调课规则（按 id）。
-  Future<void> removeReschedule(String id) async {
-    final rest = _preferences.reschedules
-        .where((rule) => rule.id != id)
-        .toList();
-    if (rest.length == _preferences.reschedules.length) return;
-    await _commitPref(
-      () => _preferences.saveReschedules(rest),
-      notifyPrefs: false,
-    );
-  }
-
-  /// 修改一条调课规则的起止日期（保留原 id，渲染与冲突判定不变）。
+  }) => prefs.addReschedule(
+    fromMonth: fromMonth,
+    fromDay: fromDay,
+    toMonth: toMonth,
+    toDay: toDay,
+  );
+  Future<void> removeReschedule(String id) => prefs.removeReschedule(id);
   Future<void> updateReschedule(
     String id, {
     required int fromMonth,
     required int fromDay,
     required int toMonth,
     required int toDay,
-  }) async {
-    final updated = <RescheduleRule>[];
-    var changed = false;
-    for (final rule in _preferences.reschedules) {
-      if (rule.id == id) {
-        updated.add(
-          RescheduleRule(
-            id: id,
-            fromMonth: fromMonth,
-            fromDay: fromDay,
-            toMonth: toMonth,
-            toDay: toDay,
-          ),
-        );
-        changed = true;
-      } else {
-        updated.add(rule);
-      }
-    }
-    if (!changed) return;
-    await _commitPref(
-      () => _preferences.saveReschedules(updated),
-      notifyPrefs: false,
-    );
-  }
+  }) => prefs.updateReschedule(
+    id,
+    fromMonth: fromMonth,
+    fromDay: fromDay,
+    toMonth: toMonth,
+    toDay: toDay,
+  );
+  double get cellHeight => prefs.cellHeight;
+  double get courseTextScale => prefs.courseTextScale;
+  void setCellHeight(double value) => prefs.setCellHeight(value);
+  void setCourseTextScale(double value) => prefs.setCourseTextScale(value);
+  Future<void> flushAppearance() => prefs.flushAppearance();
+
+  // 提示状态
+  bool get refreshing => scheduleState.refreshing;
+  String get scheduleHint => hints.scheduleHint;
+  bool get scheduleHintIsError => hints.scheduleHintIsError;
+  String get academicHint => hints.academicHint;
+  bool get academicHintIsError => hints.academicHintIsError;
+  String get globalHint => hints.globalHint;
+  bool get globalHintIsError => hints.globalHintIsError;
+  bool get isGlobalPopupActive => hints.isGlobalPopupActive(
+    isStatusBusyOrFailed:
+        _status == AppStatus.failed ||
+        _status == AppStatus.signingIn ||
+        _status == AppStatus.loading ||
+        _status == AppStatus.booting,
+  );
+  String get hint => hints.hint;
+  bool get hintIsError => hints.hintIsError;
+  HintScope get hintScope => hints.hintScope;
+  bool get isAcademicUpdateHint => hints.isAcademicUpdateHint;
 
   // ---------------------------------------------------------------------------
-  // 外观（格子高度 / 课程卡片文字缩放）
+  // 启动编排
   // ---------------------------------------------------------------------------
 
-  /// 拖动滑块时先只改内存里的值，界面立刻跟着变；落盘延后到 [flushAppearance]。
-  ///
-  /// 直接每次 `onChanged` 都写文件的话，一次拖动会写几十遍 JSON。
-  double? _cellHeightDraft;
-  double? _courseTextScaleDraft;
-  Timer? _appearanceTimer;
-
-  /// 课表格子高度（逻辑像素）。
-  double get cellHeight => _cellHeightDraft ?? _preferences.cellHeight;
-
-  /// 课程卡片文字缩放（只影响卡片里的字，不影响时间列等其他文字）。
-  double get courseTextScale =>
-      _courseTextScaleDraft ?? _preferences.courseTextScale;
-
-  void setCellHeight(double value) {
-    final safe = clampCellHeight(value);
-    if (safe == cellHeight) return;
-    _cellHeightDraft = safe;
-    notifyListeners();
-    _notifyPrefs();
-    _flushAppearanceSoon();
-  }
-
-  void setCourseTextScale(double value) {
-    final safe = clampCourseTextScale(value);
-    if (safe == courseTextScale) return;
-    _courseTextScaleDraft = safe;
-    notifyListeners();
-    _notifyPrefs();
-    _flushAppearanceSoon();
-  }
-
-  /// 立刻把外观设置写盘（关掉面板、离开页面时调）。
-  Future<void> flushAppearance() async {
-    _appearanceTimer?.cancel();
-    _appearanceTimer = null;
-    if (_cellHeightDraft == null && _courseTextScaleDraft == null) return;
-    if (_cellHeightDraft != null) {
-      await _preferences.setCellHeight(_cellHeightDraft!);
-    }
-    if (_courseTextScaleDraft != null) {
-      await _preferences.setCourseTextScale(_courseTextScaleDraft!);
-    }
-  }
-
-  void _flushAppearanceSoon() {
-    _appearanceTimer?.cancel();
-    _appearanceTimer = Timer(const Duration(milliseconds: 300), () {
-      _appearanceTimer = null;
-      unawaited(flushAppearance());
-    });
-  }
-
-  /// 验证码挂起：手动登录与自动回登共用。
-  Completer<String?> _captchaCompleter = Completer<String?>();
-
-  /// 进行中的取课表任务（自动回登挂起时由它承接后续）。
-  Future<Schedule>? _scheduleLoad;
-
-  /// 后台刷新中（课表仍显示旧数据，右上角给提示，不遮挡页面）。
-  bool _refreshing = false;
-  bool get refreshing => _refreshing;
-
-  /// 课表专属提示（附着于课表页，随横向平移移动）。
-  String _scheduleHint = '';
-  String get scheduleHint => _scheduleHint;
-  bool _scheduleHintIsError = false;
-  bool get scheduleHintIsError => _scheduleHintIsError;
-  Timer? _scheduleHintTimer;
-
-  /// 学业专属提示（附着于学业页，随横向平移移动）。
-  String _academicHint = '';
-  String get academicHint => _academicHint;
-  bool _academicHintIsError = false;
-  bool get academicHintIsError => _academicHintIsError;
-  Timer? _academicHintTimer;
-
-  /// 全局系统提示（悬浮于外壳顶层，跨页面固定显示）。
-  String _globalHint = '';
-  String get globalHint => _globalHint;
-  bool _globalHintIsError = false;
-  bool get globalHintIsError => _globalHintIsError;
-  Timer? _globalHintTimer;
-
-  /// 全局是否有进行中的状态或错误阻断（用于局部气泡自动退避压制，防止叠字）。
-  bool get isGlobalPopupActive =>
-      _status == AppStatus.failed ||
-      _status == AppStatus.signingIn ||
-      _status == AppStatus.loading ||
-      _status == AppStatus.booting ||
-      _globalHint.isNotEmpty;
-
-  /// 兼容旧接口：当前处于活跃态的提示（优先级：全局 > 课表 > 学业）。
-  String get hint {
-    if (_globalHint.isNotEmpty) return _globalHint;
-    if (_scheduleHint.isNotEmpty) return _scheduleHint;
-    if (_academicHint.isNotEmpty) return _academicHint;
-    return '';
-  }
-
-  bool get hintIsError {
-    if (_globalHint.isNotEmpty) return _globalHintIsError;
-    if (_scheduleHint.isNotEmpty) return _scheduleHintIsError;
-    if (_academicHint.isNotEmpty) return _academicHintIsError;
-    return false;
-  }
-
-  HintScope get hintScope {
-    if (_globalHint.isNotEmpty) return HintScope.global;
-    if (_scheduleHint.isNotEmpty) return HintScope.schedule;
-    if (_academicHint.isNotEmpty) return HintScope.academic;
-    return HintScope.global;
-  }
-
-  bool _disposed = false;
-
-  // -------------------------------------------------------------------------
-  // 启动
-  // -------------------------------------------------------------------------
-
-  /// 启动流程：注入 Cookie 目录 → 先读本地缓存的课表（有就直接展示，不等网络）
-  /// → 再按最小更新间隔决定要不要后台静默刷新。
-  ///
-  /// 没有缓存时退回旧路径：有快照直接取课表（免密）；没有快照但有保存的凭据
-  /// 也能自动登录，否则引导手动登录。
   Future<void> boot() async {
     _setStatus(AppStatus.booting);
     try {
-      // 三个本地存储互不依赖，但各自都要一次 path_provider 平台往返：
-      // 先把三个 Future 都发出去再逐个 await，冷启动省掉两次串行往返。
       final sessionFuture = _repositoryReady
           ? null
           : FileSessionRepository.open();
@@ -938,65 +369,61 @@ class AppModel extends ChangeNotifier {
           ? null
           : FileGradesCache.open();
 
-      if (sessionFuture != null) _rebindRepository(await sessionFuture);
+      if (sessionFuture != null) session.rebindRepository(await sessionFuture);
       if (preferencesFuture != null) {
-        _preferences = await preferencesFuture;
-        _attachPreferencesStorageMonitor();
-        if (_preferences.didResetFromCorruption) {
-          _emitStorageNotice('本地设置文件已损坏且无法恢复，已重置为默认设置');
-        }
+        prefs.rebindOpened(await preferencesFuture);
+      } else {
+        prefs.markLoaded();
       }
-      // 偏好到手（或本来就注入了内存实现）：提醒服务从这一刻起才允许同步。
-      _preferencesLoaded = true;
-      // 冷启动也算"刚看见过今天"：回到前台时拿它比对，跨天才重建。
-      _lastSeenDay = dayOnly(DateTime.now());
-      if (cacheFuture != null) _scheduleCache = await cacheFuture;
-      if (examCacheFuture != null) _examCache = await examCacheFuture;
-      if (gradesCacheFuture != null) _gradesCache = await gradesCacheFuture;
-      if (!_academicServiceReady) {
-        academicService = AcademicService(
-          service: service,
-          examCache: _examCache,
-          gradesCache: _gradesCache,
+      scheduleState.markLastSeenToday();
+      if (cacheFuture != null) scheduleState.rebindCache(await cacheFuture);
+      final loadedExamCache = examCacheFuture == null
+          ? null
+          : await examCacheFuture;
+      final loadedGradesCache = gradesCacheFuture == null
+          ? null
+          : await gradesCacheFuture;
+      if (!_academicServiceReady ||
+          loadedExamCache != null ||
+          loadedGradesCache != null) {
+        academic.rebindCaches(
+          examCache: loadedExamCache,
+          gradesCache: loadedGradesCache,
+          academicService: _academicServiceReady
+              ? academic.academicService
+              : null,
         );
       }
-      // 上次用的学校优先。以前不存这个，用户改了地址重启就退回默认学校。
-      if (!_schoolFixed) {
-        final savedSchool = _preferences.currentSchool;
-        if (savedSchool.isNotEmpty) _schoolBaseUrl = savedSchool;
-      }
-      service.switchSchool(_schoolBaseUrl);
-      // 账号必须本地恢复：凭据按「地址|账号」存，账号为空就取不到密码，
-      // Cookie 失效后也就没法自动重登。
-      _restoreAccount();
 
-      // Cookie 快照与课表缓存也是两份独立文件：一起读，别串行。
-      final snapshotFuture = service.bootstrap();
-      final cachedFuture = _scheduleCache.load();
+      session.restoreSavedSchoolIfNeeded();
+      session.restoreAccount();
+
+      final snapshotFuture = session.service.bootstrap();
+      final cachedFuture = scheduleState.scheduleCache.load();
       final snapshot = await snapshotFuture;
       final cached = await cachedFuture;
 
-      if (cached != null && sameSchool(cached.baseUrl, _schoolBaseUrl)) {
-        // 先拿缓存把课表立起来：打开就能看，不卡网络。
+      if (cached != null && sameSchool(cached.baseUrl, schoolBaseUrl)) {
         _restoreCachedSchedule(cached);
-        // 有 Cookie 可用且身份未全（老版本升级无姓名缓存），在后台静默补齐，不阻塞冷启动。
-        if (snapshot != null && (_studentName.isEmpty || _studentId.isEmpty)) {
-          _identitySync = _syncIdentityQuietly();
+        if (snapshot != null && (studentName.isEmpty || studentId.isEmpty)) {
+          unawaited(session.syncIdentityQuietly());
         }
-        // 有 Cookie 可用、且用户开了静默更新、且距上次抓取过了最小间隔，
-        // 才后台静默刷一次；否则先让用户看缓存，手动刷新再说。
         if (snapshot != null &&
-            _preferences.autoRefresh &&
-            _shouldSilentRefresh(cached.fetchedAt)) {
+            prefs.autoRefresh &&
+            scheduleState.shouldSilentRefresh(cached.fetchedAt)) {
           unawaited(syncSilently());
         }
         return;
       }
 
       if (snapshot == null) {
-        final saved = await service.credentials.get(_accountKey());
-        if (saved != null) username = saved.username;
-        final hasSaved = await service.credentials.has(_accountKey());
+        final saved = await session.service.credentials.get(
+          session.accountKey(),
+        );
+        if (saved != null) session.username = saved.username;
+        final hasSaved = await session.service.credentials.has(
+          session.accountKey(),
+        );
         if (!hasSaved) {
           _setStatus(AppStatus.needLogin);
           return;
@@ -1008,317 +435,102 @@ class AppModel extends ChangeNotifier {
     }
   }
 
-  // -------------------------------------------------------------------------
-  // 取课表
-  // -------------------------------------------------------------------------
-
-  /// 把缓存里的课表直接变成"就绪"状态（冷启动免等待）。
-  ///
-  /// 只回填课表与周次，不补身份、不发任何网络请求——这正是"打开就看到课表"
-  /// 的全部成本。身份（姓名/学号）留给之后的静默刷新或手动刷新去补。
   void _restoreCachedSchedule(CachedSchedule cached) {
-    _schedule = cached.schedule;
-    _termId = cached.schedule.termId;
-    // 记住缓存是什么时候抓的：回到前台时用它判断"够不够旧、要不要静默刷"。
-    _lastFetchedAt = cached.fetchedAt;
-    _applyCalendar(cached.schedule);
+    scheduleState.applyCachedSchedule(cached);
     _setStatus(AppStatus.ready);
-    unawaited(_restoreCachedAcademicData(cached.schedule.termId));
+    unawaited(academic.restoreCachedData(cached.schedule.termId));
   }
 
-  /// 切换学业查看学期。
-  void setAcademicTerm(String termId) {
-    if (_academicTermId == termId) return;
-    _academicTermId = termId;
-    loadAcademicData(termId: termId);
-  }
+  // ---------------------------------------------------------------------------
+  // 学业、周次与课表刷新编排
+  // ---------------------------------------------------------------------------
 
-  /// 恢复学期离线学业缓存（0 延迟展示）。
-  Future<void> _restoreCachedAcademicData(String termId) async {
-    if (termId.isEmpty) return;
-    try {
-      final cachedExams = await _examCache.load(termId);
-      final cachedGrades = await _gradesCache.load(termId);
-      if (cachedExams != null || cachedGrades != null) {
-        _exams = cachedExams?.items ?? const <ExamItem>[];
-        _grades = cachedGrades?.items ?? const <GradeItem>[];
-        _isNotEvaluated = cachedGrades?.isNotEvaluated ?? false;
-        _loadedAcademicTerm = termId;
-        _academicError = null;
-        academicNotifier.notifyListeners();
-      }
-    } catch (_) {}
-  }
+  void setAcademicTerm(String termId) => academic.setAcademicTerm(termId);
 
-  /// 加载学业数据（考试与成绩）。
-  ///
-  /// 若 [forceRefresh] 为 false，优先使用本地离线缓存；
-  /// 若没有缓存或 [forceRefresh] 为 true，发起网络请求并落盘。
   Future<void> loadAcademicData({
     String? termId,
     bool forceRefresh = false,
     bool showHint = false,
-  }) async {
-    var target = termId ?? academicTermId;
-    if (_academicLoading &&
-        !forceRefresh &&
-        target.isNotEmpty &&
-        target == _loadingAcademicTerm) {
-      return;
-    }
-
-    final seq = ++_academicLoadSeq;
-    if (target.isEmpty) {
-      if (_terms != null && _terms!.currentId.isNotEmpty) {
-        target = _terms!.currentId;
-        _academicTermId = target;
-      } else {
-        try {
-          final t = await service.fetchTerms();
-          if (_disposed || seq != _academicLoadSeq) return;
-          _terms = t;
-          target = t.currentId;
-          _academicTermId = target;
-        } catch (_) {}
-      }
-    }
-    if (_disposed || seq != _academicLoadSeq || target.isEmpty) return;
-
-    final bool termChanged = target != _loadedAcademicTerm;
-
-    if (!forceRefresh) {
-      final cachedExams = await _examCache.load(target);
-      final cachedGrades = await _gradesCache.load(target);
-      if (_disposed || seq != _academicLoadSeq) return;
-      if (cachedExams != null || cachedGrades != null) {
-        _exams = cachedExams?.items ?? const <ExamItem>[];
-        _grades = cachedGrades?.items ?? const <GradeItem>[];
-        _isNotEvaluated = cachedGrades?.isNotEvaluated ?? false;
-        _loadedAcademicTerm = target;
-        _academicError = null;
-        _academicLoading = false;
-        _loadingAcademicTerm = null;
-        academicNotifier.notifyListeners();
-        return;
-      }
-    }
-
-    final existingExams = await _examCache.load(target);
-    final existingGrades = await _gradesCache.load(target);
-    if (_disposed || seq != _academicLoadSeq) return;
-
-    if (termChanged) {
-      // 切换到无缓存的新学期：清空上一学期的残留数据，避免画面串台
-      _exams = const <ExamItem>[];
-      _grades = const <GradeItem>[];
-      _isNotEvaluated = false;
-      _loadedAcademicTerm = target;
-    }
-
-    final bool isDebugCleared = _academicDataClearedForDebug;
-    _academicDataClearedForDebug = false;
-
-    _loadingAcademicTerm = target;
-    _academicLoading = true;
-    _academicError = null;
-    academicNotifier.notifyListeners();
-    if (showHint) {
-      _showHint('正在更新学业数据…', scope: HintScope.academic);
-    }
-    String? changeMsg;
-
-    try {
-      Future<dynamic> safeRun(Future<dynamic> f) async {
-        try {
-          return await f;
-        } catch (e) {
-          return e;
-        }
-      }
-
-      final results = await Future.wait<dynamic>(<Future<dynamic>>[
-        safeRun(academicService.fetchExams(target)),
-        safeRun(academicService.fetchGrades(target)),
-      ]);
-      if (_disposed || seq != _academicLoadSeq) return;
-
-      final examRes = results[0];
-      final gradeRes = results[1];
-
-      if (examRes is List<ExamItem>) {
-        _exams = examRes;
-      } else if (examRes is AcademicError &&
-          examRes.code == ErrorCode.notOpen) {
-        // 考试安排未开放属于正常学期周期状态，保持静默，不提示错误
-      } else if (examRes != null) {
-        _academicError ??= _describeAcademicError(examRes);
-      }
-
-      if (gradeRes is List<GradeItem>) {
-        _grades = gradeRes;
-        _isNotEvaluated = false;
-      } else if (gradeRes is AcademicError &&
-          gradeRes.code == ErrorCode.notEvaluated) {
-        _isNotEvaluated = true;
-        final existing = await _gradesCache.load(target);
-        if (_disposed || seq != _academicLoadSeq) return;
-        if (existing != null && existing.items.isNotEmpty) {
-          _grades = existing.items;
-        }
-      } else if (gradeRes != null) {
-        _academicError ??= _describeAcademicError(gradeRes);
-      }
-
-      final bool examsChanged =
-          (existingExams != null || isDebugCleared) &&
-          examRes is List<ExamItem> &&
-          !listEquals(existingExams?.items ?? const <ExamItem>[], examRes);
-      final bool gradesChanged =
-          (existingGrades != null || isDebugCleared) &&
-          gradeRes is List<GradeItem> &&
-          !listEquals(existingGrades?.items ?? const <GradeItem>[], gradeRes);
-
-      if (examsChanged && gradesChanged) {
-        changeMsg = '学业数据有更新';
-      } else if (examsChanged) {
-        changeMsg = '考试安排有更新';
-      } else if (gradesChanged) {
-        changeMsg = '成绩有更新';
-      }
-    } catch (e) {
-      if (!_disposed && seq == _academicLoadSeq) {
-        _academicError ??= _describeAcademicError(e);
-      }
-    } finally {
-      if (!_disposed && seq == _academicLoadSeq) {
-        _academicLoading = false;
-        _loadingAcademicTerm = null;
-        academicNotifier.notifyListeners();
-        if (_academicError != null) {
-          if (showHint) {
-            _showHint(
-              '更新失败：$_academicError',
-              error: true,
-              clearAfter: const Duration(seconds: 4),
-              scope: HintScope.academic,
-            );
-          }
-        } else if (changeMsg != null) {
-          clearAcademicHint();
-          _showAcademicUpdateHint(changeMsg);
-        } else if (showHint) {
-          _showHint(
-            '已更新',
-            clearAfter: const Duration(milliseconds: 1500),
-            scope: HintScope.academic,
-          );
-        }
-      }
-    }
-  }
-
-  /// 归一化学业数据加载错误，为用户呈现友好且具备指导性的提示文案。
-  String _describeAcademicError(dynamic err) {
-    if (err is AcademicError) {
-      return err.message;
-    }
-    if (err is TimeoutException) {
-      return '网络请求超时，请检查网络后重试';
-    }
-    if (err is SocketException) {
-      return '无法连接教务网，请检查网络或连接校园网后重试';
-    }
-    final errStr = err.toString();
-    if (errStr.contains('SocketException') ||
-        errStr.contains('Connection refused') ||
-        errStr.contains('Network is unreachable')) {
-      return '无法连接教务网，请检查网络或连接校园网后重试';
-    }
-    if (errStr.contains('TimeoutException') || errStr.contains('timed out')) {
-      return '网络请求超时，请检查网络后重试';
-    }
-    return '学业数据加载失败，请重试';
-  }
-
-  /// 手动刷新当前学业数据。
-  Future<void> refreshAcademicData({bool showHint = true}) => loadAcademicData(
-    termId: academicTermId,
-    forceRefresh: true,
+  }) => academic.loadAcademicData(
+    termId: termId,
+    forceRefresh: forceRefresh,
     showHint: showHint,
   );
 
-  /// 距上次成功抓课表是否已经超过用户设置的最小间隔。
-  bool _shouldSilentRefresh(DateTime fetchedAt) =>
-      DateTime.now().difference(fetchedAt) >=
-      Duration(minutes: _preferences.autoRefreshIntervalMinutes);
+  Future<void> refreshAcademicData({bool showHint = true}) =>
+      academic.refreshAcademicData(showHint: showHint);
 
-  /// 把课表写进本地缓存（带当前学校与抓取时间）。
-  Future<void> _saveScheduleCache(Schedule schedule) => _scheduleCache.save(
-    CachedSchedule(
-      baseUrl: _schoolBaseUrl,
-      schedule: schedule,
-      fetchedAt: DateTime.now(),
-    ),
-  );
+  void goToWeek(int week) => scheduleState.goToWeek(week);
+  void nextWeek() => scheduleState.nextWeek();
+  void previousWeek() => scheduleState.previousWeek();
+  void goToThisWeek() => scheduleState.goToThisWeek();
 
-  /// 取课表。
-  ///
-  /// 无论有没有数据，进度都只走「状态弹窗」：不把页面切成整屏 loading。
-  /// [background] 为 true（或已经有数据）时课表继续显示旧内容。
+  Future<void> calibrateCurrentWeek(int week) async {
+    await scheduleState.calibrateCurrentWeek(week);
+    _notifyStateChanged();
+  }
+
+  Future<void> resetCalendar() async {
+    await scheduleState.resetCalendar();
+    _notifyStateChanged();
+  }
+
+  Future<void> syncSilently() =>
+      _loadSchedule(background: true, triggerAcademic: true);
+
+  Future<void> refresh() =>
+      _loadSchedule(background: true, triggerAcademic: false);
+
   Future<void> _loadSchedule({
     String? termId,
     bool background = false,
     bool triggerAcademic = false,
   }) async {
-    final hasData = _schedule != null;
+    final hasData = scheduleState.schedule != null;
     final silent = background || hasData;
 
-    _refreshing = true;
+    scheduleState.setRefreshing(true);
     if (silent) {
-      _showHint('更新中…', scope: HintScope.schedule);
+      hints.showHint('更新中…', scope: HintScope.schedule);
     } else {
       _setStatus(AppStatus.loading);
-      _showHint('获取中…', scope: HintScope.schedule);
+      hints.showHint('获取中…', scope: HintScope.schedule);
     }
 
-    _scheduleLoad = service.getSchedule(termId: termId);
+    final loadFuture = session.service.getSchedule(termId: termId);
+    scheduleState.scheduleLoad = loadFuture;
     try {
-      final schedule = await _scheduleLoad!;
+      final fetched = await loadFuture;
       if (_disposed) return;
-      final previousTermId = _termId;
-      _schedule = schedule;
-      _termId = schedule.termId;
-      _applyCalendar(
-        schedule,
-        resetToToday: !hasData || previousTermId != schedule.termId,
+      scheduleState.applyFetchedSchedule(
+        fetched,
+        baseUrl: schoolBaseUrl,
+        resetToTodayIfNeeded:
+            !hasData || scheduleState.termId != fetched.termId,
       );
-      // 抓到就落缓存：下次冷启动直接展示，不再干等网络。
-      unawaited(_saveScheduleCache(schedule));
-      // 记下抓取时刻：回到前台的"够不够旧"判断用它，别再用缓存的旧时间。
-      _lastFetchedAt = DateTime.now();
-      _refreshing = false;
+      scheduleState.setRefreshing(false);
       _setStatus(AppStatus.ready);
-      clearGlobalHint();
+      hints.clearGlobalHint();
       if (silent) {
-        _showHint(
+        hints.showHint(
           '已更新',
           clearAfter: const Duration(milliseconds: 1500),
           scope: HintScope.schedule,
         );
       } else {
-        clearHint();
+        hints.clearHint();
       }
-      _loadTermsQuietly();
-      _identitySync = _syncIdentityQuietly();
-      if (triggerAcademic && schedule.termId.isNotEmpty) {
-        _academicSync = _syncAcademicQuietly(schedule.termId);
-        unawaited(_academicSync);
+      unawaited(_loadTermsQuietly());
+      unawaited(session.syncIdentityQuietly());
+      if (triggerAcademic && fetched.termId.isNotEmpty) {
+        unawaited(academic.syncQuietly(fetched.termId));
       }
     } on AcademicError catch (error) {
-      _refreshing = false;
+      if (_disposed) return;
+      scheduleState.setRefreshing(false);
       if (silent) {
-        _showHint(
-          '更新失败：${_humanize(error)}',
+        hints.showHint(
+          '更新失败：${HintNoticeController.humanizeError(error)}',
           error: true,
           clearAfter: const Duration(seconds: 3),
           scope: HintScope.schedule,
@@ -1327,9 +539,10 @@ class AppModel extends ChangeNotifier {
         _fail(error);
       }
     } catch (error) {
-      _refreshing = false;
+      if (_disposed) return;
+      scheduleState.setRefreshing(false);
       if (silent) {
-        _showHint(
+        hints.showHint(
           '更新失败：$error',
           error: true,
           clearAfter: const Duration(seconds: 3),
@@ -1341,188 +554,30 @@ class AppModel extends ChangeNotifier {
     }
   }
 
-  /// 学期列表失败不阻塞课表展示（它只用于调试页与学期名反解）。
   Future<void> _loadTermsQuietly() async {
     try {
-      final terms = await service.fetchTerms();
+      final fetched = await session.service.fetchTerms();
       if (_disposed) return;
-      _terms = terms;
-      notifyListeners();
-    } catch (_) {
-      // 忽略：课表已可用。
-    }
+      scheduleState.setTerms(fetched);
+      _notifyStateChanged();
+    } catch (_) {}
   }
 
-  /// 课表就绪后定位"第几周"：
-  /// 用户校准过就用校准值；否则按学期估算（秋季 9 月初 / 春季 2 月底）。
-  ///
-  /// [resetToToday] 为 true 时定位到今天所在周（首次加载或切换学期）；
-  /// 为 false 时保留用户当前查看的周次（仅在超出新课表最大周次时收敛）。
-  void _applyCalendar(Schedule schedule, {bool resetToToday = true}) {
-    final DateTime? previousStart = _termStart;
-    var maxWeek = 0;
-    for (final entry in schedule.entries) {
-      for (final week in entry.weeks) {
-        if (week > maxWeek) maxWeek = week;
-      }
-    }
-    _maxWeek = maxWeek > 0 ? maxWeek : 20;
+  // ---------------------------------------------------------------------------
+  // 回到前台生命周期
+  // ---------------------------------------------------------------------------
 
-    final saved = _preferences.termStartOf(schedule.termId);
-    if (saved != null) {
-      _termStart = saved;
-    } else {
-      final term = _termById(schedule.termId);
-      _termStart = estimateTermStart(term ?? _fallbackTerm(schedule.termId));
-    }
-
-    if (resetToToday) {
-      _setWeek(weekOf(_termStart!, DateTime.now()));
-    } else {
-      // 同学期刷新已有课表时保留用户当前周，仅在 _maxWeek 缩小时收敛。
-      _setWeek(_week);
-    }
-    // 只有起始日**真的变了**才通知。
-    //
-    // 这里每次加载课表都会走到（含后台刷新），无条件通知等于"刷新一次课表，
-    // 设置页就白重建一次"—— 那正是这次要消掉的开销之一。
-    if (_termStart != previousStart) _notifyPrefs();
-  }
-
-  Term? _termById(String termId) {
-    final terms = _terms;
-    if (terms == null) return null;
-    for (final term in terms.items) {
-      if (term.id == termId) return term;
-    }
-    return null;
-  }
-
-  /// 学期列表还没回来时的兜底：从 `2026-2027-1` 反解学年与学期。
-  Term _fallbackTerm(String termId) {
-    final match = RegExp(r'^(\d{4})-').firstMatch(termId);
-    final year = match == null
-        ? DateTime.now().year
-        : int.parse(match.group(1)!);
-    final semester = termId.endsWith('-2') ? 2 : 1;
-    return Term(id: termId, name: termId, year: year, semester: semester);
-  }
-
-  int _clampWeek(int value) =>
-      value < 1 ? 1 : (value > _maxWeek ? _maxWeek : value);
-
-  /// 切到指定周（越界自动收敛）。
-  void goToWeek(int week) {
-    // 只发周次通知：整页重建对"换一页"是白干的（见 weekNotifier 的说明）。
-    final int next = _clampWeek(week);
-    if (next == _week) {
-      weekNotifier.notify();
-      return;
-    }
-    _week = next;
-    weekNotifier.value = next;
-  }
-
-  void nextWeek() => goToWeek(_week + 1);
-
-  void previousWeek() => goToWeek(_week - 1);
-
-  /// 回到"今天所在的周"（按当前校准）。
-  void goToThisWeek() => goToWeek(currentWeekOfToday);
-
-  /// 用户校准："现在其实是第 [week] 周" → 反推开学日并持久化。
-  ///
-  /// 这是唯一能让周视图与真实校历对齐的操作：教务不提供开学日期。
-  Future<void> calibrateCurrentWeek(int week) async {
-    final safe = week < 1 ? 1 : week;
-    final start = termStartFromWeek(DateTime.now(), safe);
-    _termStart = start;
-    _maxWeek = safe > _maxWeek ? safe : _maxWeek;
-    _setWeek(safe);
-    final termId = _termId;
-    if (termId.isNotEmpty) {
-      await _preferences.setTermStart(termId, start);
-    }
-    notifyListeners();
-    _notifyPrefs();
-  }
-
-  /// 清理当前学期的周次校准（回到估算值）。
-  Future<void> resetCalendar() async {
-    final termId = _termId;
-    if (termId.isEmpty) return;
-    final term = _termById(termId) ?? _fallbackTerm(termId);
-    _termStart = estimateTermStart(term);
-    _setWeek(weekOf(_termStart!, DateTime.now()));
-    await _preferences.setTermStart(termId, _termStart!);
-    notifyListeners();
-    _notifyPrefs();
-  }
-
-  /// 静默同步课表与学业数据（后台/回到前台自动更新）。
-  ///
-  /// 先静默更新课表；课程查询成功后，异步非阻塞派发考试与成绩查询，
-  /// 完成学业同步后不弹出或下发通知，避免增加自动同步课表时通知的延迟与负担。
-  Future<void> syncSilently() =>
-      _loadSchedule(background: true, triggerAcademic: true);
-
-  /// 课表页手动刷新：仅刷新课表本身，严格不派发学业数据（考试与成绩）查询。
-  Future<void> refresh() =>
-      _loadSchedule(background: true, triggerAcademic: false);
-
-  // -------------------------------------------------------------------------
-  // 回到前台
-  // -------------------------------------------------------------------------
-
-  /// App 重新回到前台时调用（由 `AppLifecycleListener.onShow` 驱动）。
-  ///
-  /// 两件事，顺序固定：
-  ///  1. 校正"今天"——跨天后重建一次，表头日期与"今天"高亮立刻落到新的一天；
-  ///     用户原本停在当前周时，周次也跟着走。
-  ///  2. 按最小更新间隔决定要不要静默刷一次课表——与冷启动同一套语义，
-  ///     频繁切前后台最多每 N 分钟刷一次。
   Future<void> onAppShown() async {
     if (_disposed) return;
-    _syncCalendarDay();
-    await _refreshIfDue();
-  }
-
-  /// 日期变了就重建一次界面；返回是否真的跨天了。
-  ///
-  /// 只在 App 回到前台时调用，不做定时器：课表页本来就不需要在后台自己动。
-  bool _syncCalendarDay() {
-    final today = dayOnly(DateTime.now());
-    if (today == _lastSeenDay) return false;
-
-    // 周次跟随：只在用户原本就停在"上次看见那天所在的周"时才跟。
-    // 他手翻到第 2 周看课，过了几天再回来，不该被强行拽到当前周。
-    final start = _termStart;
-    if (start != null) {
-      final weekWhenLeft = weekOf(start, _lastSeenDay);
-      if (_week == weekWhenLeft) _setWeek(weekOf(start, today));
+    if (scheduleState.syncCalendarDay()) {
+      _notifyStateChanged();
+      academic.notifyDayChanged();
     }
-    _lastSeenDay = today;
-    notifyListeners();
-    academicNotifier.notifyListeners();
-    return true;
+    if (scheduleState.shouldRefreshWhenShown) {
+      await syncSilently();
+    }
   }
 
-  /// 距上次成功抓取是否已过最小间隔 → 静默刷一次。
-  Future<void> _refreshIfDue() async {
-    final allowed = shouldRefreshOnShow(
-      autoRefresh: _preferences.autoRefresh,
-      refreshing: _refreshing,
-      hasSchedule: _schedule != null,
-      lastFetchedAt: _lastFetchedAt,
-      intervalMinutes: _preferences.autoRefreshIntervalMinutes,
-    );
-    if (!allowed) return;
-    await syncSilently();
-  }
-
-  /// 「回到前台要不要静默刷新」的判定，抽成纯函数以便单测。
-  ///
-  /// 与冷启动的 `_shouldSilentRefresh` 语义一致：同一个最小间隔、同一组开关。
   @visibleForTesting
   static bool shouldRefreshOnShow({
     required bool autoRefresh,
@@ -1531,34 +586,36 @@ class AppModel extends ChangeNotifier {
     required DateTime? lastFetchedAt,
     required int intervalMinutes,
     DateTime? now,
-  }) {
-    // 用户关掉了静默更新 / 正在刷 / 还没有课表（交给 boot 与登录流程）
-    if (!autoRefresh || refreshing || !hasSchedule) return false;
-    final last = lastFetchedAt;
-    // 不知道上次是什么时候抓的（例如本次进程刚起、缓存里没有时间）：放行一次，
-    // 宁可多刷一次也不要让用户看到的是一份不知道多旧的课表。
-    if (last == null) return true;
-    return (now ?? DateTime.now()).difference(last) >=
-        Duration(minutes: intervalMinutes);
-  }
+  }) => ScheduleController.shouldRefreshOnShow(
+    autoRefresh: autoRefresh,
+    refreshing: refreshing,
+    hasSchedule: hasSchedule,
+    lastFetchedAt: lastFetchedAt,
+    intervalMinutes: intervalMinutes,
+    now: now,
+  );
 
-  /// 仅测试用：注入"上次看见的日期"与"上次抓取时刻"，让生命周期逻辑可断言。
   @visibleForTesting
-  void seedLifecycleForTest({DateTime? lastSeenDay, DateTime? lastFetchedAt}) {
-    if (lastSeenDay != null) _lastSeenDay = dayOnly(lastSeenDay);
-    _lastFetchedAt = lastFetchedAt;
-  }
+  void seedLifecycleForTest({DateTime? lastSeenDay, DateTime? lastFetchedAt}) =>
+      scheduleState.seedLifecycleForTest(
+        lastSeenDay: lastSeenDay,
+        lastFetchedAt: lastFetchedAt,
+      );
 
-  // -------------------------------------------------------------------------
-  // 登录
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // 登录、验证码、切线路、退出
+  // ---------------------------------------------------------------------------
 
   Future<void> signIn(String username, String password) async {
-    this.username = username;
+    session.username = username;
     _setStatus(AppStatus.signingIn);
-    _showHint('登录中…');
+    hints.showHint('登录中…');
     try {
-      final state = await service.signIn(username, password, remember: true);
+      final state = await session.service.signIn(
+        username,
+        password,
+        remember: true,
+      );
       if (_disposed) return;
       await _afterAuth(state);
     } on AcademicError catch (error) {
@@ -1568,25 +625,21 @@ class AppModel extends ChangeNotifier {
     }
   }
 
-  /// 提交验证码。两条来路：
-  ///  - 手动登录：service 还持有登录挑战，直接提交；
-  ///  - 自动回登：编排层正挂起等这个码，交给它继续（避免二次消费挑战）。
   Future<void> submitCaptcha(String code) async {
-    if (_captcha == null) return;
-    if (!_captchaCompleter.isCompleted) {
-      _captchaCompleter.complete(code);
+    if (session.captcha == null) return;
+    if (session.hasPendingReloginCaptcha) {
+      session.completePendingCaptcha(code);
       _setStatus(AppStatus.signingIn);
-      final pending = _scheduleLoad;
+      final pending = scheduleState.scheduleLoad;
       if (pending != null) {
         try {
-          final schedule = await pending;
+          final fetched = await pending;
           if (_disposed) return;
-          _schedule = schedule;
-          _termId = schedule.termId;
-          _captcha = null;
+          scheduleState.applyCaptchaRecoveredSchedule(fetched);
+          session.setCaptcha(null);
           _setStatus(AppStatus.ready);
-          _loadTermsQuietly();
-          _identitySync = _syncIdentityQuietly();
+          unawaited(_loadTermsQuietly());
+          unawaited(session.syncIdentityQuietly());
         } on AcademicError catch (error) {
           _fail(error);
         } catch (error) {
@@ -1598,7 +651,7 @@ class AppModel extends ChangeNotifier {
 
     _setStatus(AppStatus.signingIn);
     try {
-      final state = await service.submitCaptcha(code);
+      final state = await session.service.submitCaptcha(code);
       if (_disposed) return;
       await _afterAuth(state);
     } on AcademicError catch (error) {
@@ -1611,19 +664,21 @@ class AppModel extends ChangeNotifier {
   Future<void> _afterAuth(AuthState state) async {
     switch (state) {
       case AuthenticatedState():
-        _captcha = null;
-        if (state.studentName.isNotEmpty) _studentName = state.studentName;
-        if (state.studentId.isNotEmpty) _studentId = state.studentId;
-        // 登录成功才把地址收进地址簿：只记"能用的"地址，避免手滑打错也留着。
-        await _preferences.setCurrentSchool(_schoolBaseUrl);
-        // 同时记住账号与姓名：下次冷启动直接展示并用于计算凭据 key。
-        await _rememberIdentity(
-          studentId: _studentId.isNotEmpty ? _studentId : _username,
-          studentName: _studentName,
+        session.setCaptcha(null);
+        if (state.studentName.isNotEmpty) {
+          session.setIdentity(studentName: state.studentName);
+        }
+        if (state.studentId.isNotEmpty) {
+          session.setIdentity(studentId: state.studentId);
+        }
+        await prefs.raw.setCurrentSchool(schoolBaseUrl);
+        await session.rememberIdentity(
+          studentId: studentId.isNotEmpty ? studentId : username,
+          studentName: studentName,
         );
         await _loadSchedule();
       case CaptchaState():
-        _captcha = state;
+        session.setCaptcha(state);
         _setStatus(AppStatus.needCaptcha, message: '请输入验证码');
       case WebLoginState():
         _setStatus(
@@ -1636,85 +691,52 @@ class AppModel extends ChangeNotifier {
 
   Future<void> refreshCaptcha() async {
     try {
-      final state = await service.refreshCaptcha();
-      _captcha = state;
-      notifyListeners();
+      await session.refreshCaptcha();
     } on AcademicError catch (error) {
       _fail(error);
     }
   }
 
-  /// 验证码页"取消"：解除编排层的挂起，回退到登录页。
   void cancelCaptcha() {
-    if (!_captchaCompleter.isCompleted) _captchaCompleter.complete(null);
-    _captcha = null;
-    _captchaCompleter = Completer<String?>();
-    _setStatus(AppStatus.needLogin, message: '已取消登录');
+    session.cancelCaptcha(
+      onCanceled: () => _setStatus(AppStatus.needLogin, message: '已取消登录'),
+    );
   }
 
-  /// 换教务地址。
-  ///
-  /// [relogin] = true（设置页 → 教务地址里切换）：**沿用当前账号**在新线路直接
-  /// 登录，全程留在课表页 —— 不经过 `needLogin` / `signingIn` 这两个会被根路由
-  /// 判成"该显示登录页"的状态（那正是"闪一下登录页再自动登录"的来源）。
-  ///
-  /// [relogin] = false（登录页里改了地址）：只切地址，随后由调用方用表单里
-  /// 那套账号密码登录 —— 那种场景不该替用户决定用哪套凭据。
-  ///
-  /// 失败一律**只提示、不跳页**：切线路是用户主动发起的，出问题时把话说明白、
-  /// 留在原地让他决定（重试 / 换线路 / 去设置里重登），而不是把人丢到登录页。
   Future<void> changeSchool(String baseUrl, {bool relogin = true}) async {
-    if (sameSchool(_schoolBaseUrl, baseUrl)) return;
+    if (sameSchool(schoolBaseUrl, baseUrl)) return;
 
     final String account = username;
 
-    // ---- 登录页路径：只切地址 ----
     if (!relogin) {
-      _schoolBaseUrl = baseUrl;
-      service.switchSchool(baseUrl);
-      _schedule = null;
-      _terms = null;
-      _termId = '';
-      unawaited(_preferences.setCurrentSchool(baseUrl));
-      unawaited(_scheduleCache.clear());
-      _username = '';
-      _studentId = '';
-      _studentName = '';
-      // 先恢复目标学校的账号，再通知：通知在 `_restoreAccount` 之前发的话，
-      // 设置页会在"账号已清空、还没读回"的中间态上渲染一次。
-      _restoreAccount();
-      _notifyPrefs();
+      session.switchSchoolTarget(baseUrl);
+      scheduleState.clearForSchoolReset();
+      unawaited(prefs.raw.setCurrentSchool(baseUrl));
+      session.resetIdentityFields();
+      session.restoreAccount();
+      prefs.notifyPrefs();
       _setStatus(AppStatus.needLogin);
       return;
     }
 
-    // ---- 设置页路径 ----
-    // 凭据的 key 是「地址|账号」，换完地址就取不到了：先读出来。
-    // 读不到就**什么都不动**（地址、会话、课表保持原样），只把问题说清楚。
     final Credentials? saved = account.isEmpty
         ? null
-        : await service.credentials.get(_accountKey());
+        : await session.service.credentials.get(session.accountKey());
     if (saved == null || saved.password.isEmpty || saved.username.isEmpty) {
-      _showHint('切换失败：本机没有找到已保存的密码。请在「设置 → 账号」重新登录一次再切换', error: true);
+      hints.showHint('切换失败：本机没有找到已保存的密码。请在「设置 → 账号」重新登录一次再切换', error: true);
       return;
     }
 
-    final String previousBase = _schoolBaseUrl;
-    // 先切状态再切地址：`loading` 仍然映射到课表页，用户看到的是原地加载。
+    final String previousBase = schoolBaseUrl;
     _setStatus(AppStatus.loading, message: '正在切换到「${schoolLabel(baseUrl)}」…');
-    _schoolBaseUrl = baseUrl;
-    service.switchSchool(baseUrl);
-    _username = account;
-    _notifyPrefs();
-    // 换的地址记住：下次启动直接用它（否则每次都退回默认学校）。
-    unawaited(_preferences.setCurrentSchool(baseUrl));
-    // 旧线路的课表缓存作废（内容是旧主机抓的）。
-    unawaited(_scheduleCache.clear());
-    // **刻意不清 `_schedule`**：清空后根路由会判定"没课表"，直接回登录页。
-    // 旧课表先留在屏幕上，新数据到了整体替换；失败也只是它继续留着。
+    session.switchSchoolTarget(baseUrl);
+    session.username = account;
+    prefs.notifyPrefs();
+    unawaited(prefs.raw.setCurrentSchool(baseUrl));
+    unawaited(scheduleState.scheduleCache.clear());
 
     try {
-      final AuthState state = await service.signIn(
+      final AuthState state = await session.service.signIn(
         account,
         saved.password,
         remember: true,
@@ -1723,223 +745,39 @@ class AppModel extends ChangeNotifier {
       await _afterAuth(state);
     } on AcademicError catch (error) {
       if (_disposed) return;
-      // 登录失败：**回滚到原线路**，别把用户留在一台连不上的教务上。
-      // 只提示、不跳页 —— 由他决定重试还是换一条。
-      _rollbackSchool(previousBase);
+      session.rollbackSchool(previousBase);
       _setStatus(
         AppStatus.failed,
-        message: '切换失败：${_humanize(error)}（仍停留在原线路）',
+        message: '切换失败：${HintNoticeController.humanizeError(error)}（仍停留在原线路）',
         code: error.code.wire,
       );
     } catch (error) {
       if (_disposed) return;
-      _rollbackSchool(previousBase);
+      session.rollbackSchool(previousBase);
       _fail(error);
     }
   }
 
-  /// 换线路失败后回到原地址：地址、服务端配置、持久化的"当前学校"一起回退。
-  void _rollbackSchool(String baseUrl) {
-    if (sameSchool(_schoolBaseUrl, baseUrl)) return;
-    _schoolBaseUrl = baseUrl;
-    service.switchSchool(baseUrl);
-    unawaited(_preferences.setCurrentSchool(baseUrl));
-    _notifyPrefs();
-  }
-
-  // -------------------------------------------------------------------------
-  // 教务地址簿
-  // -------------------------------------------------------------------------
-
-  /// 已添加的教务地址。
-  ///
-  /// 一定包含当前地址：地址簿是"登录成功才收录"的，但用户可能还停在
-  /// 一个刚手改、尚未成功的地址上——列表里不显示它，界面就会没有"使用中"那一项。
-  List<String> get schools {
-    final saved = _preferences.schools;
-    if (saved.any((item) => sameSchool(item, _schoolBaseUrl))) return saved;
-    return <String>[_schoolBaseUrl, ...saved];
-  }
-
-  Future<void> addSchool(String url) async {
-    await _preferences.addSchool(url);
-    notifyListeners();
-    _notifyPrefs();
-  }
-
-  Future<void> removeSchool(String url) async {
-    await _preferences.removeSchool(url);
-    notifyListeners();
-    _notifyPrefs();
-  }
-
-  /// 冷启动恢复"上次在这个学校登录的账号与姓名"（不联网）。
-  ///
-  /// 作用有两个：
-  ///  1. 调试页 / 设置页立刻能显示学号与姓名，不必等网络把身份读回来；
-  ///  2. 凭据按「地址|账号」存，账号算不出来就取不到密码——Cookie 失效后
-  ///     会变成"明明存了密码却无法自动重登"。
-  void _restoreAccount() {
-    final savedAccount = _preferences.accountOf(_schoolBaseUrl);
-    final savedName = _preferences.studentNameOf(_schoolBaseUrl);
-    if (_username.isEmpty && savedAccount.isNotEmpty) {
-      _username = savedAccount;
-      service.accountHint = savedAccount;
-    }
-    if (_studentId.isEmpty && savedAccount.isNotEmpty) {
-      _studentId = savedAccount;
-    }
-    if (_studentName.isEmpty && savedName.isNotEmpty) {
-      _studentName = savedName;
-    }
-  }
-
-  /// 记住这台设备在这所学校的身份（学号与姓名），供下次冷启动使用。
-  Future<void> _rememberIdentity({
-    required String studentId,
-    String studentName = '',
-  }) async {
-    final id = studentId.trim();
-    final name = studentName.trim();
-    if (id.isEmpty && name.isEmpty) return;
-    if (id.isNotEmpty) {
-      _username = id;
-      service.accountHint = id;
-      _studentId = id;
-    }
-    if (name.isNotEmpty) {
-      _studentName = name;
-    }
-    await _preferences.setIdentityOf(
-      _schoolBaseUrl,
-      studentId: id,
-      studentName: name,
-    );
-    if (_disposed) return;
-    notifyListeners();
-    _notifyPrefs();
-  }
-
-  Future<void>? _academicSync;
+  List<String> get schools => prefs.schoolsWithCurrent(schoolBaseUrl);
+  Future<void> addSchool(String url) => prefs.addSchool(url);
+  Future<void> removeSchool(String url) => prefs.removeSchool(url);
 
   @visibleForTesting
-  Future<void>? get academicSyncForTest => _academicSync;
-
-  /// 课程查询完成后异步非阻塞触发考试与成绩查询。
-  ///
-  /// 完成后只更新缓存与界面状态，绝不弹出提示或下发通知，
-  /// 避免增加自动同步课表时通知的延迟与负担。
-  Future<void> _syncAcademicQuietly(String termId) async {
-    final oldSuppress = _suppressStageHints;
-    _suppressStageHints = true;
-    try {
-      final existingExams = await _examCache.load(termId);
-      final existingGrades = await _gradesCache.load(termId);
-      final bool isDebugCleared = _academicDataClearedForDebug;
-      _academicDataClearedForDebug = false;
-
-      await academicService.syncCurrentTermAsync(termId: termId);
-      if (_disposed || _status == AppStatus.needLogin) return;
-      if (academicTermId == termId) {
-        await _restoreCachedAcademicData(termId);
-      }
-
-      final freshExams = await _examCache.load(termId);
-      final freshGrades = await _gradesCache.load(termId);
-
-      final bool examsChanged =
-          (existingExams != null || isDebugCleared) &&
-          freshExams != null &&
-          !listEquals(
-            existingExams?.items ?? const <ExamItem>[],
-            freshExams.items,
-          );
-      final bool gradesChanged =
-          (existingGrades != null || isDebugCleared) &&
-          freshGrades != null &&
-          !listEquals(
-            existingGrades?.items ?? const <GradeItem>[],
-            freshGrades.items,
-          );
-
-      String? changeMsg;
-      if (examsChanged && gradesChanged) {
-        changeMsg = '学业数据有更新';
-      } else if (examsChanged) {
-        changeMsg = '考试安排有更新';
-      } else if (gradesChanged) {
-        changeMsg = '成绩有更新';
-      }
-
-      if (changeMsg != null) {
-        _showAcademicUpdateHint(changeMsg);
-      }
-    } catch (_) {
-      // 绝不上抛或弹网络错误通知
-    } finally {
-      _suppressStageHints = oldSuppress;
-    }
-  }
-
-  Future<void>? _identitySync;
+  Future<void>? get academicSyncForTest => academic.academicSyncForTest;
 
   @visibleForTesting
-  Future<void>? get identitySyncForTest => _identitySync;
+  Future<void>? get identitySyncForTest => session.identitySyncForTest;
 
-  /// 静默同步身份信息（姓名 / 学号），不阻塞课表更新与主界面。
-  ///
-  /// 绝大多数情况下冷启动已从本地 Preferences 恢复姓名与学号，此时直接跳过（0 额外网络开销）。
-  /// 仅在姓名或学号为空（如升级迁移、初次免登导入）时在后台静默补齐并持久化。
-  Future<void> _syncIdentityQuietly() async {
-    if (_disposed) return;
-    // 如果内存中已具备完整的学号与姓名，无需发起额外的网络探测。
-    if (_studentId.isNotEmpty && _studentName.isNotEmpty) return;
-
-    try {
-      var info = service.sessionInfo;
-      if (info == null || info.studentName.isEmpty || info.studentId.isEmpty) {
-        await service.ensureIdentity();
-        if (_disposed) return;
-        info = service.sessionInfo;
-      }
-      var updated = false;
-      if (info != null) {
-        if (info.studentName.isNotEmpty && _studentName != info.studentName) {
-          _studentName = info.studentName;
-          updated = true;
-        }
-        if (info.studentId.isNotEmpty && _studentId != info.studentId) {
-          _studentId = info.studentId;
-          updated = true;
-        }
-      }
-      if (_studentName.isEmpty && _studentId.isEmpty && username.isNotEmpty) {
-        _studentId = username;
-        updated = true;
-      }
-      if (updated ||
-          (_studentName.isNotEmpty &&
-              _preferences.studentNameOf(_schoolBaseUrl).isEmpty)) {
-        await _rememberIdentity(
-          studentId: _studentId.isNotEmpty ? _studentId : username,
-          studentName: _studentName,
-        );
-      }
-    } catch (_) {
-      // 身份拉取失败不影响课表展示，静默吞掉
-    }
-  }
-
-  /// 修改密码：用新密码重新登录验证一次，成功后保存并刷新课表。
-  ///
-  /// 教务没有开放改密端点，所以这里的语义是**更新本机保存的密码**：
-  /// 用户在教务网页改过密码后，用它把自动重登用的凭据换新。
   Future<void> changePassword(String newPassword) async {
-    final account = service.sessionInfo?.username ?? _username;
+    final account = session.service.sessionInfo?.username ?? username;
     if (account.isEmpty) {
       throw AcademicError(ErrorCode.validationFailed, '还不知道账号，请先退出后重新登录一次');
     }
-    final state = await service.signIn(account, newPassword, remember: true);
+    final state = await session.service.signIn(
+      account,
+      newPassword,
+      remember: true,
+    );
     if (state is CaptchaState) {
       throw AcademicError(
         ErrorCode.captchaRequired,
@@ -1949,28 +787,49 @@ class AppModel extends ChangeNotifier {
     if (state is! AuthenticatedState) {
       throw AcademicError(ErrorCode.sessionExpired, '新密码没有通过验证');
     }
-    _username = account;
-    // 学校偶尔不返回姓名，别把已经读到的名字擦成空串。
-    if (state.studentName.isNotEmpty) _studentName = state.studentName;
-    if (state.studentId.isNotEmpty) _studentId = state.studentId;
+    session.username = account;
+    if (state.studentName.isNotEmpty) {
+      session.setIdentity(studentName: state.studentName);
+    }
+    if (state.studentId.isNotEmpty) {
+      session.setIdentity(studentId: state.studentId);
+    }
     unawaited(
-      _rememberIdentity(
-        studentId: _studentId.isNotEmpty ? _studentId : account,
-        studentName: _studentName,
+      session.rememberIdentity(
+        studentId: studentId.isNotEmpty ? studentId : account,
+        studentName: studentName,
       ),
     );
-    notifyListeners();
-    _notifyPrefs();
+    _notifyStateChanged();
+    prefs.notifyPrefs();
     await _loadSchedule(background: true);
   }
 
-  /// 会话失效且自动重登失败：回到登录页（保留已填账号）。
   void retryAfterSessionLoss() {
-    _captcha = null;
+    session.setCaptcha(null);
     _setStatus(AppStatus.needLogin, message: '会话已过期，请重新登录');
   }
 
-  /// 仅测试用：直接注入一份已就绪的课表状态，避免 widget 测试去碰网络与平台通道。
+  Future<void> signOut() async {
+    await session.signOutReset();
+    if (_disposed) return;
+    scheduleState.resetOnSignOut();
+    academic.resetOnSignOut();
+    prefs.notifyPrefs();
+    _setStatus(AppStatus.needLogin, message: '已退出登录');
+  }
+
+  // ---------------------------------------------------------------------------
+  // 调试与测试辅助
+  // ---------------------------------------------------------------------------
+
+  List<RequestLog> get requestLog => session.requestLog;
+  String? get rawScheduleBody => session.rawScheduleBody;
+  List<Map<String, dynamic>> get rawScheduleRows => session.rawScheduleRows;
+  String? get rawTermsBody => session.rawTermsBody;
+  List<String> get cookieNames => session.cookieNames;
+  int get weekEntryCount => weekEntries.length;
+
   @visibleForTesting
   void hydrateForTest({
     required Schedule schedule,
@@ -1983,386 +842,126 @@ class AppModel extends ChangeNotifier {
     List<GradeItem>? grades,
     bool isNotEvaluated = false,
   }) {
-    final bool identityChanged =
-        _termId != schedule.termId ||
-        _studentName != studentName ||
-        _studentId != studentId;
-    _schedule = schedule;
-    _terms = terms;
-    _termId = schedule.termId;
-    _studentName = studentName;
-    _studentId = studentId;
-    if (exams != null) _exams = exams;
-    if (grades != null) _grades = grades;
-    _isNotEvaluated = isNotEvaluated;
-    if (schedule.termId.isNotEmpty) {
-      _academicTermId = schedule.termId;
-      _loadedAcademicTerm = schedule.termId;
-    }
-    academicNotifier.notifyListeners();
-    if (identityChanged) _notifyPrefs();
-    _applyCalendar(schedule);
-    if (termStart != null) _termStart = termStart;
-    if (week != null) _setWeek(week);
+    final currentScheduleTermId = scheduleState.termId;
+    session.hydrateForTest(
+      termId: schedule.termId,
+      currentScheduleTermId: currentScheduleTermId,
+      studentName: studentName,
+      studentId: studentId,
+    );
+    academic.hydrateForTest(
+      termId: schedule.termId,
+      exams: exams,
+      grades: grades,
+      isNotEvaluated: isNotEvaluated,
+    );
+    scheduleState.hydrateForTest(
+      schedule: schedule,
+      terms: terms,
+      week: week,
+      termStart: termStart,
+    );
     _status = AppStatus.ready;
-    notifyListeners();
+    _notifyRouteChanged();
+    _notifyStateChanged();
   }
 
-  /// 仅测试用：直接设置右上角提示（验证浮层不遮挡课表）。
   @visibleForTesting
   void setHintForTest(
     String message, {
     bool error = false,
     HintScope scope = HintScope.global,
-  }) {
-    _showHint(message, error: error, scope: scope);
-  }
+  }) => hints.showHint(message, error: error, scope: scope);
 
-  /// 仅测试用：按"首次加载"路径取一次课表（不经过 boot 的目录/凭据初始化）。
   @visibleForTesting
   Future<void> loadScheduleForTest() async {
     await _loadSchedule();
-    await _identitySync;
+    await session.identitySyncForTest;
   }
 
-  /// 仅测试用：把状态设为指定值（覆盖 loading / failed 的界面断言）。
   @visibleForTesting
   void setStatusForTest(
     AppStatus status, {
     String message = '',
     String code = '',
-  }) {
-    _setStatus(status, message: message, code: code);
-  }
-
-  /// 退出登录。只有一个入口，且**必定清掉保存的账号密码与身份缓存**——
-  /// 这个 app 的密码只为自动重登存在，用户点退出就是要它别再自动登。
-  Future<void> signOut() async {
-    await service.signOut(forgetCredentials: true);
-    if (_disposed) return;
-    await _preferences.clearIdentityOf(_schoolBaseUrl);
-    _username = '';
-    _studentId = '';
-    _studentName = '';
-    _schedule = null;
-    _terms = null;
-    _termId = '';
-    _academicTermId = '';
-    _loadedAcademicTerm = '';
-    _captcha = null;
-    _exams = const <ExamItem>[];
-    _grades = const <GradeItem>[];
-    _isNotEvaluated = false;
-    _academicError = null;
-    _academicSync = null;
-    academicNotifier.notifyListeners();
-    _notifyPrefs();
-    // 退出登录连缓存课表一起清：那是"这个账号"的数据，不该留下给下一个人看。
-    unawaited(_scheduleCache.clear());
-    unawaited(_examCache.clear());
-    unawaited(_gradesCache.clear());
-    _setStatus(AppStatus.needLogin, message: '已退出登录');
-  }
-
-  // -------------------------------------------------------------------------
-  // 调试信息（DebugPage 消费）
-  // -------------------------------------------------------------------------
-
-  /// 最近请求记录（方法/URL/状态码，不含 Cookie 值与请求体）。
-  List<RequestLog> get requestLog => service.requestLog;
-
-  /// 最近一次课表查询的原始响应文本。
-  String? get rawScheduleBody => service.lastScheduleRawBody;
-
-  /// 最近一次课表解析用的 kbList 原始行。
-  List<Map<String, dynamic>> get rawScheduleRows => service.lastScheduleRows;
-
-  /// 最近一次学期列表查询的原始页面。
-  String? get rawTermsBody => service.lastTermsRawBody;
-
-  /// Cookie 的**名字**列表（绝不输出值）。调试页用来确认"会话在不在"。
-  List<String> get cookieNames {
-    final header = service.cookieHeaderForDebug;
-    if (header.isEmpty) return const <String>[];
-    return header
-        .split(';')
-        .map((part) => part.split('=').first.trim())
-        .where((name) => name.isNotEmpty)
-        .toList();
-  }
-
-  /// 当前查看周的课程数（调试页显示）。
-  int get weekEntryCount => weekEntries.length;
-
-  // -------------------------------------------------------------------------
-  // 内部
-  // -------------------------------------------------------------------------
-
-  String _accountKey({String? username}) =>
-      '$_schoolBaseUrl|${username ?? this.username}';
-
-  /// 自动回登遇到验证码：挂起等用户输入。返回码或 null（取消）。
-  Future<String?> _handleCaptcha(CaptchaState state) async {
-    _captcha = state;
-    _captchaCompleter = Completer<String?>();
-    _setStatus(AppStatus.needCaptcha, message: '自动重登需要验证码');
-    return _captchaCompleter.future;
-  }
-
-  void _rebindRepository(SessionRepository repository) {
-    // service 内部持有 repository 引用；换绑定让后续 save 落到新目录。
-    service.rebindCookieStorage(repository);
-  }
-
-  bool _suppressStageHints = false;
-
-  /// 编排层进入"重新登录"或"重新登录后拉取课表"时更新提示语——用户能看到真实进度流转，但课表不会被遮住。
-  void _onServiceStage(String stage) {
-    if (_disposed || _suppressStageHints) return;
-    if (stage == ScheduleService.stageRelogin) {
-      _refreshing = true;
-      _showHint('正在重新登录…', scope: HintScope.global);
-    } else if (stage == ScheduleService.stageFetchingSchedule) {
-      _refreshing = true;
-      clearGlobalHint();
-      final hasData = _schedule != null;
-      _showHint(hasData ? '更新中…' : '获取中…', scope: HintScope.schedule);
-    }
-  }
-
-  bool _isAcademicUpdateHint = false;
-  bool _academicDataClearedForDebug = false;
-
-  /// 当前展示的全局提示是否为学业数据更新提示。
-  bool get isAcademicUpdateHint =>
-      _isAcademicUpdateHint && _globalHint.isNotEmpty;
-
-  void _showAcademicUpdateHint(String message) {
-    _showHint(
-      message,
-      isAcademicUpdate: true,
-      scope: HintScope.global,
-      clearAfter: const Duration(seconds: 2),
-    );
-  }
+  }) => _setStatus(status, message: message, code: code);
 
   @visibleForTesting
   void showAcademicUpdateHintForTest(String message) =>
-      _showAcademicUpdateHint(message);
+      hints.showAcademicUpdateHint(message);
 
-  /// 清除当前学期的学业数据与缓存（调试专用）。
-  ///
-  /// 清空本地缓存与内存数据并标记调试清除状态，确保随后的学业数据获取能重新拉取网络并触发全局更新气泡通知。
   Future<void> clearAcademicDataForDebug() async {
-    _exams = const <ExamItem>[];
-    _grades = const <GradeItem>[];
-    _isNotEvaluated = false;
-    _loadedAcademicTerm = '';
-    await _examCache.clear();
-    await _gradesCache.clear();
-    _academicDataClearedForDebug = true;
-    clearAcademicHint();
-    academicNotifier.notifyListeners();
-    notifyListeners();
+    await academic.clearDataForDebug();
+    _notifyStateChanged();
   }
 
-  void _showHint(
-    String message, {
-    bool error = false,
-    bool isAcademicUpdate = false,
-    Duration? clearAfter,
-    HintScope scope = HintScope.global,
-  }) {
-    switch (scope) {
-      case HintScope.schedule:
-        _scheduleHint = message;
-        _scheduleHintIsError = error;
-        _scheduleHintTimer?.cancel();
-        if (clearAfter != null) {
-          _scheduleHintTimer = Timer(clearAfter, () {
-            if (_disposed) return;
-            _scheduleHint = '';
-            notifyListeners();
-          });
-        }
-        break;
-      case HintScope.academic:
-        _academicHint = message;
-        _academicHintIsError = error;
-        _academicHintTimer?.cancel();
-        if (clearAfter != null) {
-          _academicHintTimer = Timer(clearAfter, () {
-            if (_disposed) return;
-            _academicHint = '';
-            notifyListeners();
-          });
-        }
-        break;
-      case HintScope.global:
-        _globalHint = message;
-        _globalHintIsError = error;
-        _isAcademicUpdateHint = isAcademicUpdate;
-        _globalHintTimer?.cancel();
-        if (clearAfter != null) {
-          _globalHintTimer = Timer(clearAfter, () {
-            if (_disposed) return;
-            _globalHint = '';
-            _isAcademicUpdateHint = false;
-            notifyListeners();
-          });
-        }
-        break;
-    }
-    notifyListeners();
-  }
+  // ---------------------------------------------------------------------------
+  // 内部回调与状态路由
+  // ---------------------------------------------------------------------------
 
-  void clearScheduleHint() {
-    _scheduleHintTimer?.cancel();
-    if (_scheduleHint.isEmpty) return;
-    _scheduleHint = '';
-    notifyListeners();
-  }
+  Future<String?> _handleCaptcha(CaptchaState state) => session.handleCaptcha(
+    state,
+    onNeedCaptcha: () =>
+        _setStatus(AppStatus.needCaptcha, message: '自动重登需要验证码'),
+  );
 
-  void clearAcademicHint() {
-    _academicHintTimer?.cancel();
-    if (_academicHint.isEmpty) return;
-    _academicHint = '';
-    notifyListeners();
-  }
-
-  void clearGlobalHint() {
-    _globalHintTimer?.cancel();
-    _isAcademicUpdateHint = false;
-    if (_globalHint.isEmpty) return;
-    _globalHint = '';
-    notifyListeners();
-  }
-
-  /// 手动关掉提示：若指定了 [scope] 则关掉对应作用域；不指定则清除所有提示。
-  void clearHint([HintScope? scope]) {
-    if (scope == null) {
-      _scheduleHintTimer?.cancel();
-      _academicHintTimer?.cancel();
-      _globalHintTimer?.cancel();
-      final hasAny =
-          _scheduleHint.isNotEmpty ||
-          _academicHint.isNotEmpty ||
-          _globalHint.isNotEmpty;
-      _scheduleHint = '';
-      _academicHint = '';
-      _globalHint = '';
-      if (hasAny) notifyListeners();
-    } else {
-      switch (scope) {
-        case HintScope.schedule:
-          clearScheduleHint();
-          break;
-        case HintScope.academic:
-          clearAcademicHint();
-          break;
-        case HintScope.global:
-          clearGlobalHint();
-          break;
-      }
+  void _onServiceStage(String stage) {
+    if (_disposed || _suppressStageHints) return;
+    if (stage == ScheduleService.stageRelogin) {
+      scheduleState.setRefreshing(true);
+      hints.showHint('正在重新登录…', scope: HintScope.global);
+    } else if (stage == ScheduleService.stageFetchingSchedule) {
+      scheduleState.setRefreshing(true);
+      hints.clearGlobalHint();
+      final hasData = scheduleState.schedule != null;
+      hints.showHint(hasData ? '更新中…' : '获取中…', scope: HintScope.schedule);
     }
   }
+
+  void clearScheduleHint() => hints.clearScheduleHint();
+  void clearAcademicHint() => hints.clearAcademicHint();
+  void clearGlobalHint() => hints.clearGlobalHint();
+  void clearHint([HintScope? scope]) => hints.clearHint(scope);
 
   void _setStatus(AppStatus status, {String message = '', String code = ''}) {
     _status = status;
     _message = message;
     _errorCode = code;
-    notifyListeners();
+    _notifyRouteChanged();
+    _notifyStateChanged();
   }
 
   void _fail(Object error) {
+    if (_disposed) return;
     final academic = asAcademicError(error);
-    _refreshing = false;
-    clearHint();
+    scheduleState.setRefreshing(false);
+    hints.clearHint();
     _setStatus(
       AppStatus.failed,
-      message: _humanize(academic),
+      message: HintNoticeController.humanizeError(academic),
       code: academic.code.wire,
     );
   }
 
-  /// 关掉错误弹窗：有旧课表就退回"看起来正常"的状态，没有就回登录页。
-  ///
-  /// 错误现在走弹窗（不占整页），所以必须给用户一个干净出口，
-  /// 否则弹窗会一直挂在那里。
   void dismissError() {
-    if (_status != AppStatus.failed) return;
-    if (_schedule != null) {
+    if (_disposed || _status != AppStatus.failed) return;
+    if (scheduleState.schedule != null) {
       _setStatus(AppStatus.ready);
     } else {
       _setStatus(AppStatus.needLogin);
     }
   }
 
-  /// 错误码 → 用户能懂的话。新增错误码时必须在这里补分支。
-  String _humanize(AcademicError error) {
-    switch (error.code) {
-      case ErrorCode.invalidCredentials:
-        return '账号或密码错误，请核对后重试。';
-      case ErrorCode.sessionExpired:
-        return '登录凭证已失效，请重新登录。';
-      case ErrorCode.captchaRequired:
-        return '需要输入验证码，请在验证码页输入后重试。';
-      case ErrorCode.webLoginRequired:
-        return '教务系统要求先完成网页统一认证，暂不支持自动登录。';
-      case ErrorCode.networkRetryable:
-        return '网络不稳定或无法连接教务系统，请检查网络后重试。';
-      case ErrorCode.serverError:
-        // 和"网络不行"分开说：这里网络是通的，是教务那边坏了。
-        final status = error.httpStatus == null
-            ? ''
-            : '（HTTP ${error.httpStatus}）';
-        return '教务系统异常$status：返回错误或维护页面。请稍后重试或切换线路。';
-      case ErrorCode.pageChanged:
-        return '课表数据格式与预期不符。若持续出现，请前往「调试信息」查看请求记录。';
-      case ErrorCode.unsupported:
-        return '该账号无课表查询权限。';
-      case ErrorCode.accessForbidden:
-        return '访问被拒绝（403）：学校限制了外网访问，请连接校园网后重试。';
-      case ErrorCode.untrustedUrl:
-        return '检测到未受信跳转，已中止。若在非校园网环境，请连接校园网后重试；'
-            '若学校更换了入口，请更新教务地址。';
-      case ErrorCode.cancelled:
-        return '操作已取消。';
-      case ErrorCode.validationFailed:
-        return '输入不合法：${error.message}';
-      case ErrorCode.staleContext:
-        return '登录会话已过期，请重新登录。';
-      case ErrorCode.resultUnknown:
-        return '教务系统未返回明确结果，请刷新后查看。';
-      case ErrorCode.notEvaluated:
-        return '本学期教学质量评价未完成，教务系统暂不开放成绩查询，请前往教务网完成评教。';
-      case ErrorCode.notOpen:
-      case ErrorCode.noCapacity:
-      case ErrorCode.conflict:
-      case ErrorCode.alreadySelected:
-      case ErrorCode.creditLimit:
-      case ErrorCode.timeout:
-      case ErrorCode.resourceLimit:
-      case ErrorCode.success:
-        return error.message;
-    }
-  }
-
   @override
   void dispose() {
     _disposed = true;
-    weekNotifier.dispose();
-    prefsNotifier.dispose();
-    academicNotifier.dispose();
-    _scheduleHintTimer?.cancel();
-    _academicHintTimer?.cancel();
-    _globalHintTimer?.cancel();
-    cancelAutoUpdate();
-    _appearanceTimer?.cancel();
-    // 面板没点"完成"就被关掉（比如返回手势）时，别把刚拖好的值丢掉。
-    unawaited(flushAppearance());
+    hints.dispose();
+    academic.dispose();
+    scheduleState.dispose();
+    prefs.dispose();
+    session.dispose();
     updateFlow.dispose();
-    service.dispose();
+    routeNotifier.dispose();
     super.dispose();
   }
 }

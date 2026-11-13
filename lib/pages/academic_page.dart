@@ -133,7 +133,11 @@ class _AcademicPageState extends State<AcademicPage> {
                 top: 6,
                 right: 10,
                 child: ListenableBuilder(
-                  listenable: model,
+                  listenable: Listenable.merge(<Listenable>[
+                    model.hints,
+                    model.routeNotifier,
+                    model.academicNotifier,
+                  ]),
                   builder: (context, _) =>
                       StatusPopup(model: model, scope: HintScope.academic),
                 ),

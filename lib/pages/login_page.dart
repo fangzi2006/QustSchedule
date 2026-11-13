@@ -132,7 +132,7 @@ class _LoginPageState extends State<LoginPage> {
                         // 说明性提示（"已切换教务地址"之类）。失败原因不在这里，
                         // 走右上角弹窗，免得表单上方堆一大块红字。
                         ListenableBuilder(
-                          listenable: model,
+                          listenable: model.routeNotifier,
                           builder: (context, _) {
                             if (model.message.isEmpty ||
                                 model.status == AppStatus.failed) {
@@ -288,7 +288,10 @@ class _LoginPageState extends State<LoginPage> {
             top: MediaQuery.of(context).padding.top + 8,
             right: 10,
             child: ListenableBuilder(
-              listenable: model,
+              listenable: Listenable.merge(<Listenable>[
+                model.hints,
+                model.routeNotifier,
+              ]),
               builder: (context, _) => StatusPopup(model: model),
             ),
           ),

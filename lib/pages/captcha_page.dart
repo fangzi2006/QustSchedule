@@ -192,7 +192,7 @@ class _CaptchaPageState extends State<CaptchaPage> {
                   ],
                   const SizedBox(height: 14),
                   ListenableBuilder(
-                    listenable: model,
+                    listenable: model.routeNotifier,
                     builder: (context, _) {
                       if (model.message.isEmpty) return const SizedBox.shrink();
                       return Text(

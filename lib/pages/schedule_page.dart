@@ -98,42 +98,68 @@ class _SchedulePageState extends State<SchedulePage> {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: model,
-      builder: (BuildContext context, _) => Scaffold(
-        // 这一行不写"某某的课表"：AppBar 左边留给周次选择，右边是刷新与更多。
-        // 之前是"标题一行 + 周次条一行"，两行占了近百像素，格子反而更挤。
-        appBar: AppBar(
-          titleSpacing: 4,
-          title: model.schedule == null
-              ? null
+    return Scaffold(
+      // 这一行不写"某某的课表"：AppBar 左边留给周次选择，右边是刷新与更多。
+      // 之前是"标题一行 + 周次条一行"，两行占了近百像素，格子反而更挤。
+      appBar: AppBar(
+        titleSpacing: 4,
+        title: ListenableBuilder(
+          listenable: Listenable.merge(<Listenable>[
+            model.scheduleState,
+            model.routeNotifier,
+          ]),
+          builder: (BuildContext context, _) => model.schedule == null
+              ? const SizedBox.shrink()
               : _WeekBar(model: model, week: _shownWeek),
-          actions: <Widget>[
-            _UpdateStatusButton(model: model),
-            IconButton(
+        ),
+        actions: <Widget>[
+          _UpdateStatusButton(model: model),
+          ListenableBuilder(
+            listenable: Listenable.merge(<Listenable>[
+              model.routeNotifier,
+              model.refreshingNotifier,
+            ]),
+            builder: (BuildContext context, _) => IconButton(
               icon: const Icon(Icons.refresh_rounded),
               tooltip: '刷新课表',
               onPressed: model.status == AppStatus.ready && !model.refreshing
                   ? model.refresh
                   : null,
             ),
-            _MoreMenu(model: model),
-          ],
-        ),
-        // 备注不固定在这里：它跟着周网格一起滚（放在 _WeekView 的滚动内容底部）。
-        body: Stack(
-          children: <Widget>[
-            Positioned.fill(child: _body(context)),
-            // "今"：只在看非本周时浮出来（替代原来占位置的"回到本周"按钮）。
-            _TodayFab(model: model, week: _shownWeek),
-            // 课表专属提示气泡：附着于课表页，随横向平移手势一同滑入/滑出。
-            Positioned(
-              top: 6,
-              right: 10,
-              child: StatusPopup(model: model, scope: HintScope.schedule),
+          ),
+          _MoreMenu(model: model),
+        ],
+      ),
+      // 备注不固定在这里：它跟着周网格一起滚（放在 _WeekView 的滚动内容底部）。
+      body: Stack(
+        children: <Widget>[
+          Positioned.fill(
+            child: ListenableBuilder(
+              listenable: Listenable.merge(<Listenable>[
+                model.routeNotifier,
+                model.scheduleState,
+                model.prefsNotifier,
+              ]),
+              builder: (BuildContext context, _) => _body(context),
             ),
-          ],
-        ),
+          ),
+          // "今"：只在看非本周时浮出来（替代原来占位置的"回到本周"按钮）。
+          _TodayFab(model: model, week: _shownWeek),
+          // 课表专属提示气泡：附着于课表页，随横向平移手势一同滑入/滑出。
+          Positioned(
+            top: 6,
+            right: 10,
+            child: ListenableBuilder(
+              listenable: Listenable.merge(<Listenable>[
+                model.hints,
+                model.routeNotifier,
+                model.refreshingNotifier,
+              ]),
+              builder: (BuildContext context, _) =>
+                  StatusPopup(model: model, scope: HintScope.schedule),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -172,9 +198,13 @@ class _TodayFab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<int>(
-      valueListenable: week,
-      builder: (BuildContext context, int shown, _) => _build(context, shown),
+    return ListenableBuilder(
+      listenable: Listenable.merge(<Listenable>[
+        week,
+        model.routeNotifier,
+        model.scheduleState,
+      ]),
+      builder: (BuildContext context, _) => _build(context, week.value),
     );
   }
 

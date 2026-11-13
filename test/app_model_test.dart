@@ -427,7 +427,7 @@ void main() {
       final loginCompleter = Completer<AuthState>();
       final scheduleCompleter = Completer<Schedule>();
       final hints = <String>[];
-      rig.model.addListener(() {
+      rig.model.hints.addListener(() {
         if (rig.model.hint.isNotEmpty &&
             (hints.isEmpty || hints.last != rig.model.hint)) {
           hints.add(rig.model.hint);
