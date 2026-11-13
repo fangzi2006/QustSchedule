@@ -19,9 +19,7 @@ if (hasReleaseKey) {
 
 android {
     namespace = "com.fangzi.qustschedule"
-    // Flutter 3.47 默认是 36，但本机 SDK 只装了 android-37.0（build-tools 36.0.0 已装）。
-    // 编译 SDK 允许高于默认值，所以这里用 37；装了 API 36 后可改回 flutter.compileSdkVersion。
-    compileSdk = 37
+    compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -56,25 +54,26 @@ android {
     }
 
     buildTypes {
-        // 方案 A：debug 也复用 release 签名。
-        // 否则 debug.keystore 与 release keystore 证书不同，同包名无法覆盖安装，
-        // Flutter 会先卸载旧包，导致偏好、缓存、Cookie 与 Keystore 密码全部丢失。
-        // 注意：签名后的 debug APK 能覆盖正式版，不要外传。
+        // 调试包与正式包签名彻底分离：
+        // debug 固定使用调试证书，避免可被调试的测试包借用正式证书或误覆盖正式版；
+        // 需要不掉登录态覆盖测试时，直接构建 release 包安装即可。
         debug {
-            signingConfig = if (hasReleaseKey) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
-            }
+            signingConfig = signingConfigs.getByName("debug")
         }
         release {
-            // 有 key.properties 就用自己那把钥匙签；没有就退回 debug 签名
-            // （能装能用，但换了机器就不能覆盖升级）。
+            // 有 key.properties 就用正式发布签名；没有就退回 debug 签名
+            // （本地可正常出包，但无法覆盖正式密钥签出的版本）。
             signingConfig = if (hasReleaseKey) {
                 signingConfigs.getByName("release")
             } else {
                 signingConfigs.getByName("debug")
             }
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }
