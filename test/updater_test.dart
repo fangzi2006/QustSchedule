@@ -335,15 +335,22 @@ void main() {
       expect(find.textContaining('Android (arm64-v8a)'), findsOneWidget);
       expect(find.textContaining('测试更新日志项'), findsOneWidget);
 
-      expect(find.text('稍后再说'), findsOneWidget);
+      expect(find.text('稍后再说'), findsNothing);
+      expect(find.byTooltip('稍后再说'), findsOneWidget);
+      expect(find.byIcon(Icons.close_rounded), findsOneWidget);
       expect(find.text('浏览器下载'), findsOneWidget);
       expect(find.text('立即更新'), findsOneWidget);
+
+      // 验证「浏览器下载」靠左、「立即更新」靠右，且两按钮之间有明显间距
+      final browserRect = tester.getRect(find.widgetWithText(OutlinedButton, '浏览器下载'));
+      final updateRect = tester.getRect(find.widgetWithText(FilledButton, '立即更新'));
+      expect(browserRect.right, lessThan(updateRect.left));
 
       // 验证未附带「查看全部历史版本」与已废弃的「忽略此版」
       expect(find.textContaining('历史版本'), findsNothing);
       expect(find.text('忽略此版'), findsNothing);
 
-      await tester.tap(find.text('稍后再说'));
+      await tester.tap(find.byTooltip('稍后再说'));
       await tester.pumpAndSettle();
       expect(find.text('发现新版本 v1.2.3'), findsNothing);
     });
