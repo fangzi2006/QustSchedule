@@ -135,67 +135,79 @@ Future<void> showUpdateDialog(
           ),
         ),
         actions: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              OutlinedButton(
-                onPressed: () async {
-                  final uri = Uri.parse(finalDownloadUrl);
-                  if (await canLaunchUrl(uri)) {
-                    await launchUrl(uri, mode: LaunchMode.externalApplication);
-                  }
-                },
-                child: const Text('浏览器下载'),
-              ),
-              FilledButton(
-                onPressed: () async {
-                  if (Platform.isAndroid) {
-                    final canInstall =
-                        await AppInstaller.canRequestPackageInstalls();
-                    if (!canInstall && dialogContext.mounted) {
-                      final action = await showDialog<String>(
-                        context: dialogContext,
-                        builder: (ctx) => AlertDialog(
-                          title: const Text('需要安装权限'),
-                          content: const Text(
-                            '青科课表通需要开启「允许安装未知应用」权限才能覆盖升级安装包。\n\n建议先前往系统设置开启权限，开启后返回即可直接更新。',
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () =>
-                                  Navigator.of(ctx).pop('download'),
-                              child: const Text('直接下载'),
-                            ),
-                            FilledButton(
-                              onPressed: () =>
-                                  Navigator.of(ctx).pop('settings'),
-                              child: const Text('去开启权限'),
-                            ),
-                          ],
-                        ),
-                      );
-
-                      if (action == 'settings') {
-                        await AppInstaller.openInstallSettings();
-                        return;
-                      } else if (action == null) {
-                        return;
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: SizedBox(
+              width: double.maxFinite,
+              child: Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 12,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton(
+                    onPressed: () async {
+                      final uri = Uri.parse(finalDownloadUrl);
+                      if (await canLaunchUrl(uri)) {
+                        await launchUrl(
+                          uri,
+                          mode: LaunchMode.externalApplication,
+                        );
                       }
-                    }
-                  }
+                    },
+                    child: const Text('浏览器下载'),
+                  ),
+                  FilledButton(
+                    onPressed: () async {
+                      if (Platform.isAndroid) {
+                        final canInstall =
+                            await AppInstaller.canRequestPackageInstalls();
+                        if (!canInstall && dialogContext.mounted) {
+                          final action = await showDialog<String>(
+                            context: dialogContext,
+                            builder: (ctx) => AlertDialog(
+                              title: const Text('需要安装权限'),
+                              content: const Text(
+                                '青科课表通需要开启「允许安装未知应用」权限才能覆盖升级安装包。\n\n建议先前往系统设置开启权限，开启后返回即可直接更新。',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () =>
+                                      Navigator.of(ctx).pop('download'),
+                                  child: const Text('直接下载'),
+                                ),
+                                FilledButton(
+                                  onPressed: () =>
+                                      Navigator.of(ctx).pop('settings'),
+                                  child: const Text('去开启权限'),
+                                ),
+                              ],
+                            ),
+                          );
 
-                  if (!dialogContext.mounted) return;
-                  Navigator.of(dialogContext).pop();
-                  showDownloadProgressDialog(
-                    context,
-                    asset: asset,
-                    selectedProxy: proxyPrefix,
-                    backupProxies: backupProxies,
-                  );
-                },
-                child: const Text('立即更新'),
+                          if (action == 'settings') {
+                            await AppInstaller.openInstallSettings();
+                            return;
+                          } else if (action == null) {
+                            return;
+                          }
+                        }
+                      }
+
+                      if (!dialogContext.mounted) return;
+                      Navigator.of(dialogContext).pop();
+                      showDownloadProgressDialog(
+                        context,
+                        asset: asset,
+                        selectedProxy: proxyPrefix,
+                        backupProxies: backupProxies,
+                      );
+                    },
+                    child: const Text('立即更新'),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ],
       );

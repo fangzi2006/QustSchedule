@@ -359,6 +359,67 @@ void main() {
       expect(find.text('发现新版本 v1.2.3'), findsNothing);
     });
 
+    testWidgets('极窄屏与超大字体下更新弹窗操作按钮自动换行不溢出', (tester) async {
+      tester.view.physicalSize = const Size(300, 640);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      const asset = ReleaseAsset(
+        name: 'qustschedule-arm64-v8a-release.apk',
+        downloadUrl: 'https://example.com/app.apk',
+        size: 1024 * 1024 * 10,
+        contentType: 'application/vnd.android.package-archive',
+      );
+      const release = ReleaseInfo(
+        tagName: 'v1.2.3',
+        version: '1.2.3',
+        name: '青科课表通 v1.2.3',
+        body: '测试更新日志',
+        publishedAt: null,
+        assets: [asset],
+        htmlUrl: 'https://example.com/release',
+      );
+      const updateResult = UpdateCheckResult(
+        status: UpdateStatus.hasUpdate,
+        release: release,
+        targetAsset: asset,
+        currentArchName: 'Android (arm64-v8a)',
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: const TextScaler.linear(1.8)),
+            child: child!,
+          ),
+          home: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () => showUpdateDialog(
+                context,
+                updateResult: updateResult,
+                proxyPrefix: 'https://gh-proxy.com',
+              ),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      final browserRect = tester.getRect(
+        find.widgetWithText(OutlinedButton, '浏览器下载'),
+      );
+      final updateRect = tester.getRect(
+        find.widgetWithText(FilledButton, '立即更新'),
+      );
+      expect(browserRect.bottom, lessThanOrEqualTo(updateRect.top));
+    });
+
     testWidgets('更新对话框无对应架构产物时展示友好提示', (tester) async {
       const release = ReleaseInfo(
         tagName: 'v1.2.3',
