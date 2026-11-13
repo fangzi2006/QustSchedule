@@ -70,6 +70,14 @@ android {
             }
         }
     }
+
+    // 开启原生 .so 动态库 Deflate 压缩（针对直发 APK 场景将 ~18.8 MB 的 Flutter/App SO 库
+    // 压缩后再打包，显著减小下载体积；代价是安装时需在手机本地解压一份动态库）。
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
 
 kotlin {
