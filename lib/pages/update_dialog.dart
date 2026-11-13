@@ -162,11 +162,13 @@ Future<void> showUpdateDialog(
                           ),
                           actions: [
                             TextButton(
-                              onPressed: () => Navigator.of(ctx).pop('download'),
+                              onPressed: () =>
+                                  Navigator.of(ctx).pop('download'),
                               child: const Text('直接下载'),
                             ),
                             FilledButton(
-                              onPressed: () => Navigator.of(ctx).pop('settings'),
+                              onPressed: () =>
+                                  Navigator.of(ctx).pop('settings'),
                               child: const Text('去开启权限'),
                             ),
                           ],

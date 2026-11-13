@@ -342,8 +342,12 @@ void main() {
       expect(find.text('立即更新'), findsOneWidget);
 
       // 验证「浏览器下载」靠左、「立即更新」靠右，且两按钮之间有明显间距
-      final browserRect = tester.getRect(find.widgetWithText(OutlinedButton, '浏览器下载'));
-      final updateRect = tester.getRect(find.widgetWithText(FilledButton, '立即更新'));
+      final browserRect = tester.getRect(
+        find.widgetWithText(OutlinedButton, '浏览器下载'),
+      );
+      final updateRect = tester.getRect(
+        find.widgetWithText(FilledButton, '立即更新'),
+      );
       expect(browserRect.right, lessThan(updateRect.left));
 
       // 验证未附带「查看全部历史版本」与已废弃的「忽略此版」
