@@ -1,221 +1,72 @@
-/// 软件更新对话框与下载进度管理。
+/// 软件更新对话框与后台下载流转界面。
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../src/formatted_text_span.dart';
-import '../src/updater/app_installer.dart';
+import '../src/updater/update_flow_controller.dart';
 import '../src/updater/update_models.dart';
 import '../src/updater/update_service.dart';
 
-/// 弹出发现新版本提示框。
+/// 弹出统一的应用更新流程弹窗（同一弹窗内流转：版本说明 → 下载进度 → 准备安装）。
+///
+/// 全程禁止点击弹窗外空白处关闭：
+/// - 预览阶段按返回键或右上角关闭仅收起弹窗（顶栏图标常驻保留）；
+/// - 下载阶段按返回键、右上角关闭或点击「后台下载」会收起弹窗并继续在后台下载；
+/// - 只有点击「取消下载」才会中止下载任务。
 Future<void> showUpdateDialog(
   BuildContext context, {
-  required UpdateCheckResult updateResult,
-  required String proxyPrefix,
+  UpdateFlowController? controller,
+  UpdateCheckResult? updateResult,
+  String proxyPrefix = '',
   List<String> backupProxies = const <String>[],
+  UpdateService? updateService,
 }) async {
-  final release = updateResult.release;
-  final asset = updateResult.targetAsset;
-  if (release == null) return;
+  final ownsController = controller == null;
+  final effectiveController =
+      controller ?? UpdateFlowController(updateService: updateService);
 
-  if (asset == null) {
-    // 发现新版本但未匹配到当前架构安装包时给出友好提示
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text('发现新版本 v${release.version}'),
-        content: Text(
-          '检测到新版本，但当前平台与架构 (${updateResult.currentArchName.isNotEmpty ? updateResult.currentArchName : '当前环境'}) 暂未匹配到直接升级安装包。\n\n您可以前往 GitHub Releases 页面查看与下载。',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('知道了'),
-          ),
-          FilledButton(
-            onPressed: () {
-              Navigator.of(dialogContext).pop();
-              if (release.htmlUrl.isNotEmpty) {
-                launchUrl(
-                  Uri.parse(release.htmlUrl),
-                  mode: LaunchMode.externalApplication,
-                );
-              }
-            },
-            child: const Text('前往 Release 页面'),
-          ),
-        ],
-      ),
+  if (updateResult != null) {
+    effectiveController.setAvailableUpdate(
+      result: updateResult,
+      selectedProxy: proxyPrefix,
+      backupProxies: backupProxies,
     );
+  }
+
+  final result = effectiveController.updateResult;
+  final release = effectiveController.release;
+  if (result == null || release == null) {
+    if (ownsController) effectiveController.dispose();
     return;
   }
 
-  final finalDownloadUrl = UpdateService.buildProxiedUrl(
-    asset.downloadUrl,
-    proxyPrefix,
-  );
+  if (effectiveController.isDialogOpen) {
+    if (ownsController) effectiveController.dispose();
+    return;
+  }
 
-  await showDialog<void>(
-    context: context,
-    barrierDismissible: true,
-    builder: (dialogContext) {
-      final theme = Theme.of(dialogContext);
-      return AlertDialog(
-        titlePadding: const EdgeInsets.fromLTRB(24, 16, 12, 0),
-        contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
-        actionsPadding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
-        title: Row(
-          children: [
-            Icon(Icons.system_update_rounded, color: theme.colorScheme.primary),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                '发现新版本 v${release.version}',
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-            IconButton(
-              icon: Icon(
-                Icons.close_rounded,
-                size: 20,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-              tooltip: '稍后再说',
-              visualDensity: VisualDensity.compact,
-              onPressed: () => Navigator.of(dialogContext).pop(),
-            ),
-          ],
-        ),
-        content: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '${release.formattedDate.isNotEmpty ? '发布于 ${release.formattedDate} · ' : ''}${asset.formattedSize} · ${updateResult.currentArchName}',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 12),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 260),
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHighest.withValues(
-                      alpha: 0.5,
-                    ),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: theme.colorScheme.outlineVariant.withValues(
-                        alpha: 0.4,
-                      ),
-                    ),
-                  ),
-                  child: SingleChildScrollView(
-                    child: _ReleaseNotesView(
-                      content: release.cleanBody,
-                      version: release.version,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: SizedBox(
-              width: double.maxFinite,
-              child: Wrap(
-                alignment: WrapAlignment.spaceBetween,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                spacing: 12,
-                runSpacing: 8,
-                children: [
-                  OutlinedButton(
-                    onPressed: () async {
-                      final uri = Uri.parse(finalDownloadUrl);
-                      if (await canLaunchUrl(uri)) {
-                        await launchUrl(
-                          uri,
-                          mode: LaunchMode.externalApplication,
-                        );
-                      }
-                    },
-                    child: const Text('浏览器下载'),
-                  ),
-                  FilledButton(
-                    onPressed: () async {
-                      if (Platform.isAndroid) {
-                        final canInstall =
-                            await AppInstaller.canRequestPackageInstalls();
-                        if (!canInstall && dialogContext.mounted) {
-                          final action = await showDialog<String>(
-                            context: dialogContext,
-                            builder: (ctx) => AlertDialog(
-                              title: const Text('需要安装权限'),
-                              content: const Text(
-                                '青科课表通需要开启「允许安装未知应用」权限才能覆盖升级安装包。\n\n建议先前往系统设置开启权限，开启后返回即可直接更新。',
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () =>
-                                      Navigator.of(ctx).pop('download'),
-                                  child: const Text('直接下载'),
-                                ),
-                                FilledButton(
-                                  onPressed: () =>
-                                      Navigator.of(ctx).pop('settings'),
-                                  child: const Text('去开启权限'),
-                                ),
-                              ],
-                            ),
-                          );
-
-                          if (action == 'settings') {
-                            await AppInstaller.openInstallSettings();
-                            return;
-                          } else if (action == null) {
-                            return;
-                          }
-                        }
-                      }
-
-                      if (!dialogContext.mounted) return;
-                      Navigator.of(dialogContext).pop();
-                      showDownloadProgressDialog(
-                        context,
-                        asset: asset,
-                        selectedProxy: proxyPrefix,
-                        backupProxies: backupProxies,
-                      );
-                    },
-                    child: const Text('立即更新'),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      );
-    },
-  );
+  try {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _UpdateFlowDialog(
+        controller: effectiveController,
+        cancelOnDispose: ownsController,
+      ),
+    );
+  } finally {
+    if (ownsController) {
+      effectiveController.dispose();
+    }
+  }
 }
 
-/// 弹出下载进度弹窗并执行自动安装。
+/// 弹出下载进度弹窗并执行自动安装（兼容直接从下载阶段启动的调用方式）。
 Future<void> showDownloadProgressDialog(
   BuildContext context, {
   required ReleaseAsset asset,
@@ -223,232 +74,291 @@ Future<void> showDownloadProgressDialog(
   List<String> backupProxies = const <String>[],
   UpdateService? updateService,
 }) async {
-  await showDialog<void>(
-    context: context,
-    barrierDismissible: false,
-    builder: (dialogContext) => _DownloadProgressDialog(
-      asset: asset,
-      selectedProxy: selectedProxy,
-      backupProxies: backupProxies,
-      updateService: updateService,
-    ),
+  final controller = UpdateFlowController(updateService: updateService);
+  controller.prepareDirectDownload(
+    asset: asset,
+    selectedProxy: selectedProxy,
+    backupProxies: backupProxies,
   );
+  unawaited(controller.startDownload());
+  try {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) =>
+          _UpdateFlowDialog(controller: controller, cancelOnDispose: true),
+    );
+  } finally {
+    controller.dispose();
+  }
 }
 
-enum _DownloadStage { downloading, readyToInstall, error }
-
-class _DownloadProgressDialog extends StatefulWidget {
-  const _DownloadProgressDialog({
-    required this.asset,
-    required this.selectedProxy,
-    this.backupProxies = const <String>[],
-    this.updateService,
+class _UpdateFlowDialog extends StatefulWidget {
+  const _UpdateFlowDialog({
+    required this.controller,
+    required this.cancelOnDispose,
   });
 
-  final ReleaseAsset asset;
-  final String selectedProxy;
-  final List<String> backupProxies;
-  final UpdateService? updateService;
+  final UpdateFlowController controller;
+  final bool cancelOnDispose;
 
   @override
-  State<_DownloadProgressDialog> createState() =>
-      _DownloadProgressDialogState();
+  State<_UpdateFlowDialog> createState() => _UpdateFlowDialogState();
 }
 
-class _DownloadProgressDialogState extends State<_DownloadProgressDialog>
+class _UpdateFlowDialogState extends State<_UpdateFlowDialog>
     with WidgetsBindingObserver {
-  late final UpdateService _service;
-  late final CancelToken _cancelToken;
+  late int _lastCloseEvent;
+  bool _hasPopped = false;
 
-  DownloadProgress? _currentProgress;
-  String? _errorMessage;
-  late String _currentProxy;
-  bool _downloadStarted = false;
-
-  _DownloadStage _stage = _DownloadStage.downloading;
-  File? _downloadedFile;
-  bool _needsPermission = false;
-  bool _isTriggeringInstall = false;
+  UpdateFlowController get _controller => widget.controller;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _service = widget.updateService ?? UpdateService();
-    _cancelToken = CancelToken();
-    _currentProxy = widget.selectedProxy;
-    _startDownload();
+    _controller.attachDialog();
+    _lastCloseEvent = _controller.requestCloseEvent;
+    _controller.addListener(_onControllerChanged);
   }
 
   @override
   void dispose() {
+    _controller.removeListener(_onControllerChanged);
+    _controller.detachDialog();
     WidgetsBinding.instance.removeObserver(this);
-    _cancelToken.cancel();
+    if (widget.cancelOnDispose &&
+        _controller.stage == UpdateFlowStage.downloading) {
+      _controller.cancelDownload();
+    }
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed &&
-        _stage == _DownloadStage.readyToInstall &&
-        _downloadedFile != null) {
-      _onAppResumedFromSettings();
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_controller.refreshInstallPermissionAndAutoInstall());
     }
   }
 
-  Future<void> _onAppResumedFromSettings() async {
-    if (!Platform.isAndroid || _downloadedFile == null) return;
-    final canInstall = await AppInstaller.canRequestPackageInstalls();
+  void _onControllerChanged() {
     if (!mounted) return;
-    setState(() {
-      _needsPermission = !canInstall;
-    });
+    if (_controller.requestCloseEvent != _lastCloseEvent) {
+      _lastCloseEvent = _controller.requestCloseEvent;
+      _popSelf();
+      return;
+    }
+    setState(() {});
+  }
 
-    if (canInstall) {
-      // 用户从系统设置切回，且已授权，自动唤起安装！
-      await _executeInstall(_downloadedFile!);
+  void _popSelf() {
+    if (_hasPopped || !mounted) return;
+    _hasPopped = true;
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _launchExternalUrl(String rawUrl) async {
+    if (rawUrl.isEmpty) return;
+    final uri = Uri.parse(rawUrl);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
   }
 
-  Future<void> _startDownload() async {
-    if (_downloadStarted) return;
-    _downloadStarted = true;
-
-    try {
-      final file = await _service.downloadAssetWithFallback(
-        asset: widget.asset,
-        selectedProxy: widget.selectedProxy,
-        backupProxies: widget.backupProxies,
-        cancelToken: _cancelToken,
-        onProxySwitched: (proxy) {
-          if (!mounted) return;
-          setState(() {
-            _currentProxy = proxy;
-          });
-        },
-        onProgress: (progress) {
-          if (!mounted) return;
-          setState(() {
-            _currentProgress = progress;
-          });
-        },
-      );
-
-      if (!mounted) return;
-      setState(() {
-        _stage = _DownloadStage.readyToInstall;
-        _downloadedFile = file;
-      });
-
-      // Android 端若已具备安装权限可自动唤起系统安装器；
-      // Windows 端必须等待用户明确确认点击「立即重启更新」，切忌直接退出主程序导致弹窗闪退。
-      if (Platform.isAndroid) {
-        await _executeInstall(file);
-      }
-    } catch (err) {
-      if (_cancelToken.isCancelled) return;
-      if (!mounted) return;
-      setState(() {
-        _stage = _DownloadStage.error;
-        _errorMessage = '下载失败: $err';
-      });
-    }
-  }
-
-  Future<void> _executeInstall(File file) async {
-    if (_isTriggeringInstall) return;
-    _isTriggeringInstall = true;
-
-    try {
-      if (Platform.isAndroid) {
-        final canInstall = await AppInstaller.canRequestPackageInstalls();
-        if (!canInstall) {
-          if (!mounted) return;
-          setState(() {
-            _needsPermission = true;
-          });
-          final grant = await showDialog<bool>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: const Text('安装权限未开启'),
-              content: const Text(
-                '安装包已下载完成！\n\n青科课表通需要「安装未知应用」权限才能覆盖升级安装包，请前往系统设置开启后返回。',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(false),
-                  child: const Text('取消'),
-                ),
-                FilledButton(
-                  onPressed: () => Navigator.of(ctx).pop(true),
-                  child: const Text('去设置'),
-                ),
-              ],
+  Future<void> _onTapUpdateNow() async {
+    if (Platform.isAndroid) {
+      final canInstall = await _controller.canInstallPackages();
+      if (!canInstall && mounted) {
+        final action = await showDialog<String>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('需要安装权限'),
+            content: const Text(
+              '青科课表通需要开启「允许安装未知应用」权限才能覆盖升级安装包。\n\n建议先前往系统设置开启权限，开启后返回即可直接更新。',
             ),
-          );
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop('download'),
+                child: const Text('直接下载'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop('settings'),
+                child: const Text('去开启权限'),
+              ),
+            ],
+          ),
+        );
 
-          if (grant == true) {
-            await AppInstaller.openInstallSettings();
-          }
+        if (action == 'settings') {
+          await _controller.openInstallSettings();
+          return;
+        } else if (action == null) {
           return;
         }
-
-        if (!mounted) return;
-        setState(() {
-          _needsPermission = false;
-        });
-      }
-
-      await AppInstaller.install(file);
-      if (mounted) {
-        Navigator.of(context).pop();
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _errorMessage = '唤起系统安装器失败: $e';
-      });
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isTriggeringInstall = false;
-        });
       }
     }
+
+    if (!mounted) return;
+    unawaited(_controller.startDownload());
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    return switch (_controller.stage) {
+      UpdateFlowStage.idle ||
+      UpdateFlowStage.available => _buildAvailableDialog(theme),
+      UpdateFlowStage.downloading => _buildDownloadingDialog(theme),
+      UpdateFlowStage.readyToInstall => _buildReadyToInstallDialog(theme),
+      UpdateFlowStage.error => _buildErrorDialog(theme),
+    };
+  }
 
-    if (_stage == _DownloadStage.readyToInstall) {
-      return _buildReadyToInstallDialog(theme);
+  Widget _buildAvailableDialog(ThemeData theme) {
+    final result = _controller.updateResult;
+    final release = _controller.release;
+    if (result == null || release == null) {
+      return const SizedBox.shrink();
     }
 
-    final progressVal = _currentProgress?.progress;
-    final percent = _currentProgress?.percentage ?? 0;
+    final asset = _controller.targetAsset;
+    if (asset == null) {
+      // 发现新版本但未匹配到当前架构安装包时给出友好提示
+      return AlertDialog(
+        titlePadding: const EdgeInsets.fromLTRB(24, 16, 12, 0),
+        title: _DialogTitleBar(
+          title: '发现新版本 v${release.version}',
+          closeTooltip: '稍后再说',
+          onClose: _popSelf,
+        ),
+        content: Text(
+          '检测到新版本，但当前平台与架构 (${result.currentArchName.isNotEmpty ? result.currentArchName : '当前环境'}) 暂未匹配到直接升级安装包。\n\n您可以前往 GitHub Releases 页面查看与下载。',
+        ),
+        actions: [
+          _DialogActionsBar(
+            left: TextButton(onPressed: _popSelf, child: const Text('知道了')),
+            right: FilledButton(
+              onPressed: () {
+                _popSelf();
+                unawaited(_launchExternalUrl(release.htmlUrl));
+              },
+              child: const Text('前往 Release 页面'),
+            ),
+          ),
+        ],
+      );
+    }
 
     return AlertDialog(
-      title: Text(_errorMessage != null ? '下载出错' : '正在下载更新'),
+      titlePadding: const EdgeInsets.fromLTRB(24, 16, 12, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
+      title: _DialogTitleBar(
+        leading: Icon(
+          Icons.system_update_rounded,
+          color: theme.colorScheme.primary,
+        ),
+        title: '发现新版本 v${release.version}',
+        closeTooltip: '稍后再说',
+        onClose: _popSelf,
+      ),
       content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 360),
+        constraints: const BoxConstraints(maxWidth: 420),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              widget.asset.name,
+              '${release.formattedDate.isNotEmpty ? '发布于 ${release.formattedDate} · ' : ''}${asset.formattedSize} · ${result.currentArchName}',
               style: TextStyle(
                 fontSize: 12,
                 color: theme.colorScheme.onSurfaceVariant,
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
             ),
-            if (_currentProxy.trim() != widget.selectedProxy.trim()) ...[
+            const SizedBox(height: 12),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 260),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerHighest.withValues(
+                    alpha: 0.5,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: theme.colorScheme.outlineVariant.withValues(
+                      alpha: 0.4,
+                    ),
+                  ),
+                ),
+                child: SingleChildScrollView(
+                  child: _ReleaseNotesView(
+                    content: release.cleanBody,
+                    version: release.version,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        _DialogActionsBar(
+          left: OutlinedButton(
+            onPressed: () =>
+                unawaited(_launchExternalUrl(_controller.proxiedDownloadUrl)),
+            child: const Text('浏览器下载'),
+          ),
+          right: FilledButton(
+            onPressed: _onTapUpdateNow,
+            child: const Text('立即更新'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDownloadingDialog(ThemeData theme) {
+    final progress = _controller.progress;
+    final progressVal = progress?.progress;
+    final percent = progress?.percentage ?? 0;
+    final asset = _controller.targetAsset;
+
+    return AlertDialog(
+      titlePadding: const EdgeInsets.fromLTRB(24, 16, 12, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
+      title: _DialogTitleBar(
+        leading: Icon(
+          Icons.downloading_rounded,
+          color: theme.colorScheme.primary,
+        ),
+        title: '正在下载更新',
+        closeTooltip: '后台下载',
+        onClose: _popSelf,
+      ),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (asset != null)
+              Text(
+                asset.name,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            if (_controller.currentProxy.trim() !=
+                _controller.selectedProxy.trim()) ...[
               const SizedBox(height: 4),
               Text(
-                '已自动回退至: ${displayProxyName(_currentProxy)}',
+                '已自动回退至: ${displayProxyName(_controller.currentProxy)}',
                 style: TextStyle(
                   fontSize: 11,
                   color: theme.colorScheme.primary,
@@ -456,96 +366,156 @@ class _DownloadProgressDialogState extends State<_DownloadProgressDialog>
               ),
             ],
             const SizedBox(height: 14),
-            if (_errorMessage != null)
-              Text(
-                _errorMessage!,
-                style: TextStyle(color: theme.colorScheme.error, fontSize: 13),
-              )
-            else ...[
-              LinearProgressIndicator(value: progressVal),
-              const SizedBox(height: 10),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    _currentProgress == null ? '连接中…' : '$percent%',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                    ),
+            LinearProgressIndicator(value: progressVal),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  progress == null ? '连接中…' : '$percent%',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
                   ),
-                  Text(
-                    _currentProgress == null
+                ),
+                Flexible(
+                  child: Text(
+                    progress == null
                         ? ''
-                        : '${_currentProgress!.formattedReceived} / ${_currentProgress!.formattedTotal} (${_currentProgress!.formattedSpeed})',
+                        : '${progress.formattedReceived} / ${progress.formattedTotal} (${progress.formattedSpeed})',
                     style: TextStyle(
                       fontSize: 12,
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
+                    overflow: TextOverflow.ellipsis,
                   ),
-                ],
-              ),
-            ],
+                ),
+              ],
+            ),
           ],
         ),
       ),
       actions: [
-        TextButton(
-          onPressed: () {
-            _cancelToken.cancel();
-            Navigator.of(context).pop();
-          },
-          child: Text(_errorMessage != null ? '关闭' : '取消'),
-        ),
-        if (_errorMessage != null)
-          FilledButton(
+        _DialogActionsBar(
+          left: TextButton(
             onPressed: () {
-              final finalUrl = UpdateService.buildProxiedUrl(
-                widget.asset.downloadUrl,
-                _currentProxy,
-              );
-              launchUrl(
-                Uri.parse(finalUrl),
-                mode: LaunchMode.externalApplication,
-              );
-              Navigator.of(context).pop();
+              final canReturnToAvailable = _controller.hasAvailableFallback;
+              _controller.cancelDownload();
+              if (!canReturnToAvailable) {
+                _popSelf();
+              }
             },
-            child: const Text('改用浏览器下载'),
+            child: const Text('取消下载'),
           ),
+          right: FilledButton.tonal(
+            onPressed: _popSelf,
+            child: const Text('后台下载'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildErrorDialog(ThemeData theme) {
+    final asset = _controller.targetAsset;
+    final errorMessage = _controller.errorMessage ?? '下载失败，请稍后重试';
+
+    return AlertDialog(
+      titlePadding: const EdgeInsets.fromLTRB(24, 16, 12, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
+      title: _DialogTitleBar(
+        leading: Icon(
+          Icons.error_outline_rounded,
+          color: theme.colorScheme.error,
+        ),
+        title: '下载出错',
+        closeTooltip: '关闭',
+        onClose: _popSelf,
+      ),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (asset != null) ...[
+              Text(
+                asset.name,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 10),
+            ],
+            Text(
+              errorMessage,
+              style: TextStyle(color: theme.colorScheme.error, fontSize: 13),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        _DialogActionsBar(
+          left: OutlinedButton(
+            onPressed: () {
+              final url = _controller.fallbackDownloadUrl;
+              _popSelf();
+              unawaited(_launchExternalUrl(url));
+            },
+            child: const Text('浏览器下载'),
+          ),
+          right: FilledButton(
+            onPressed: () => unawaited(_controller.startDownload()),
+            child: const Text('重试下载'),
+          ),
+        ),
       ],
     );
   }
 
   Widget _buildReadyToInstallDialog(ThemeData theme) {
+    final asset = _controller.targetAsset;
+    final errorMessage = _controller.errorMessage;
+    final needsPermission = _controller.needsPermission;
+    final isTriggeringInstall = _controller.isTriggeringInstall;
+
     return AlertDialog(
-      title: Row(
-        children: [
-          const Icon(
-            Icons.check_circle_rounded,
-            color: Color(0xFF2E7D32),
-            size: 24,
-          ),
-          const SizedBox(width: 8),
-          const Text('下载完成'),
-        ],
+      titlePadding: const EdgeInsets.fromLTRB(24, 16, 12, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
+      title: _DialogTitleBar(
+        leading: const Icon(
+          Icons.check_circle_rounded,
+          color: Color(0xFF2E7D32),
+          size: 24,
+        ),
+        title: '下载完成',
+        closeTooltip: '稍后安装',
+        onClose: _popSelf,
       ),
       content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 360),
+        constraints: const BoxConstraints(maxWidth: 420),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              widget.asset.name,
-              style: TextStyle(
-                fontSize: 12,
-                color: theme.colorScheme.onSurfaceVariant,
+            if (asset != null) ...[
+              Text(
+                asset.name,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 12),
-            if (_errorMessage != null) ...[
+              const SizedBox(height: 12),
+            ],
+            if (errorMessage != null) ...[
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(10),
@@ -556,7 +526,7 @@ class _DownloadProgressDialogState extends State<_DownloadProgressDialog>
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
-                  _errorMessage!,
+                  errorMessage,
                   style: TextStyle(
                     color: theme.colorScheme.onErrorContainer,
                     fontSize: 12,
@@ -565,7 +535,7 @@ class _DownloadProgressDialogState extends State<_DownloadProgressDialog>
               ),
               const SizedBox(height: 10),
             ],
-            if (_needsPermission) ...[
+            if (needsPermission) ...[
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(10),
@@ -615,43 +585,109 @@ class _DownloadProgressDialogState extends State<_DownloadProgressDialog>
         ),
       ),
       actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('稍后安装'),
-        ),
-        if (_needsPermission)
-          FilledButton.icon(
-            icon: const Icon(Icons.settings_outlined, size: 18),
-            onPressed: () => AppInstaller.openInstallSettings(),
-            label: const Text('去开启权限'),
-          )
-        else
-          FilledButton.icon(
-            icon: _isTriggeringInstall
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : Icon(
-                    Platform.isWindows
-                        ? Icons.restart_alt_rounded
-                        : Icons.install_mobile_rounded,
-                    size: 18,
+        _DialogActionsBar(
+          left: TextButton(onPressed: _popSelf, child: const Text('稍后安装')),
+          right: needsPermission
+              ? FilledButton.icon(
+                  icon: const Icon(Icons.settings_outlined, size: 18),
+                  onPressed: () => unawaited(_controller.openInstallSettings()),
+                  label: const Text('去开启权限'),
+                )
+              : FilledButton.icon(
+                  icon: isTriggeringInstall
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Icon(
+                          Platform.isWindows
+                              ? Icons.restart_alt_rounded
+                              : Icons.install_mobile_rounded,
+                          size: 18,
+                        ),
+                  onPressed:
+                      (_controller.downloadedFile == null ||
+                          isTriggeringInstall)
+                      ? null
+                      : () => unawaited(_controller.executeInstall()),
+                  label: Text(
+                    isTriggeringInstall
+                        ? '正在准备更新…'
+                        : (Platform.isWindows ? '立即重启更新' : '立即安装'),
                   ),
-            onPressed: (_downloadedFile == null || _isTriggeringInstall)
-                ? null
-                : () => _executeInstall(_downloadedFile!),
-            label: Text(
-              _isTriggeringInstall
-                  ? '正在准备更新…'
-                  : (Platform.isWindows ? '立即重启更新' : '立即安装'),
-            ),
-          ),
+                ),
+        ),
       ],
+    );
+  }
+}
+
+/// 统一弹窗标题栏（图标 + 标题 + 右上角关闭按钮）。
+class _DialogTitleBar extends StatelessWidget {
+  const _DialogTitleBar({
+    this.leading,
+    required this.title,
+    required this.closeTooltip,
+    required this.onClose,
+  });
+
+  final Widget? leading;
+  final String title;
+  final String closeTooltip;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        if (leading != null) ...[leading!, const SizedBox(width: 10)],
+        Expanded(
+          child: Text(
+            title,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+        ),
+        IconButton(
+          icon: Icon(
+            Icons.close_rounded,
+            size: 20,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          tooltip: closeTooltip,
+          visualDensity: VisualDensity.compact,
+          onPressed: onClose,
+        ),
+      ],
+    );
+  }
+}
+
+/// 统一弹窗底部双按钮容器：宽够时左右分列，极窄屏/大字号自动换行防溢出。
+class _DialogActionsBar extends StatelessWidget {
+  const _DialogActionsBar({required this.left, required this.right});
+
+  final Widget left;
+  final Widget right;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 420),
+      child: SizedBox(
+        width: double.maxFinite,
+        child: Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 12,
+          runSpacing: 8,
+          children: [left, right],
+        ),
+      ),
     );
   }
 }

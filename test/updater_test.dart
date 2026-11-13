@@ -1,16 +1,21 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/pages/about_page.dart';
 import 'package:qustschedule/pages/changelog_page.dart';
+import 'package:qustschedule/pages/home_shell.dart';
 import 'package:qustschedule/pages/update_dialog.dart';
 import 'package:qustschedule/pages/update_proxy_page.dart';
 import 'package:qustschedule/src/app_model.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
+import 'package:qustschedule/src/updater/update_flow_controller.dart';
 import 'package:qustschedule/src/updater/update_models.dart';
 import 'package:qustschedule/src/updater/update_service.dart';
 import 'package:qustschedule/src/updater/version_comparator.dart';
+
+import 'support/fake_backend.dart';
 
 void main() {
   group('版本号比对 (Version Comparator)', () {
@@ -493,9 +498,9 @@ void main() {
 
       expect(find.text('正在下载更新'), findsOneWidget);
       expect(find.text('test_app.apk'), findsOneWidget);
-      expect(find.text('取消'), findsOneWidget);
+      expect(find.text('取消下载'), findsOneWidget);
 
-      await tester.tap(find.text('取消'));
+      await tester.tap(find.text('取消下载'));
       await tester.pumpAndSettle();
 
       expect(find.text('正在下载更新'), findsNothing);
@@ -684,6 +689,303 @@ void main() {
       expect(delayCalls, 2);
     });
   });
+
+  group('统一更新流程与后台下载 (UpdateFlowController & 课表顶栏)', () {
+    testWidgets('单弹窗全程禁止点空白关闭，后台下载收起后不中断且可重开恢复，取消下载回到预览', (tester) async {
+      final service = _MockDownloadUpdateService();
+      final tempDir = Directory.systemTemp.createTempSync('update_flow_test');
+      addTearDown(() => tempDir.deleteSync(recursive: true));
+      final fakeApk = File('${tempDir.path}/app.apk')..writeAsStringSync('apk');
+
+      final controller = UpdateFlowController(
+        updateService: service,
+        canInstallCheck: () async => true,
+        installRunner: (_) async {},
+      );
+      addTearDown(controller.dispose);
+
+      const asset = ReleaseAsset(
+        name: 'qustschedule-setup.exe',
+        downloadUrl: 'https://example.com/setup.exe',
+        size: 1024 * 1024 * 12,
+        contentType: 'application/octet-stream',
+      );
+      const release = ReleaseInfo(
+        tagName: 'v1.6.0',
+        version: '1.6.0',
+        name: 'v1.6.0',
+        body: '新功能',
+        publishedAt: null,
+        assets: [asset],
+        htmlUrl: 'https://example.com/release',
+      );
+      const result = UpdateCheckResult(
+        status: UpdateStatus.hasUpdate,
+        release: release,
+        targetAsset: asset,
+        currentArchName: 'Windows (x64)',
+      );
+      controller.setAvailableUpdate(
+        result: result,
+        selectedProxy: 'https://gh-proxy.com',
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: ElevatedButton(
+                onPressed: () =>
+                    showUpdateDialog(context, controller: controller),
+                child: const Text('OpenUpdate'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      // 1. 打开弹窗，点击弹窗外空白区域不得关闭弹窗
+      await tester.tap(find.text('OpenUpdate'));
+      await tester.pumpAndSettle();
+      expect(find.text('发现新版本 v1.6.0'), findsOneWidget);
+
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+      expect(find.text('发现新版本 v1.6.0'), findsOneWidget);
+
+      // 2. 点击「立即更新」，在同一弹窗内切换为「正在下载更新」
+      await tester.tap(find.text('立即更新'));
+      await tester.pump();
+      expect(find.text('正在下载更新'), findsOneWidget);
+      expect(controller.stage, UpdateFlowStage.downloading);
+
+      // 3. 点击「后台下载」，关闭弹窗但下载任务不取消
+      await tester.tap(find.text('后台下载'));
+      await tester.pumpAndSettle();
+      expect(find.text('正在下载更新'), findsNothing);
+      expect(controller.stage, UpdateFlowStage.downloading);
+      expect(service.lastToken?.isCancelled, isFalse);
+
+      // 4. 重开弹窗直接恢复到下载进度并更新进度条
+      await tester.tap(find.text('OpenUpdate'));
+      await tester.pump();
+      expect(find.text('正在下载更新'), findsOneWidget);
+      service.emitProgress(500, 1000);
+      await tester.pump();
+      expect(find.text('50%'), findsOneWidget);
+
+      // 5. 点击「取消下载」中止任务并回到「发现新版本」预览页
+      await tester.tap(find.text('取消下载'));
+      await tester.pumpAndSettle();
+      expect(service.lastToken?.isCancelled, isTrue);
+      expect(controller.stage, UpdateFlowStage.available);
+      expect(find.text('发现新版本 v1.6.0'), findsOneWidget);
+
+      // 6. 再次启动下载并完成，进入「下载完成」阶段
+      await tester.tap(find.text('立即更新'));
+      await tester.pump();
+      expect(controller.stage, UpdateFlowStage.downloading);
+      service.completeSuccess(fakeApk);
+      await tester.pumpAndSettle();
+      expect(controller.stage, UpdateFlowStage.readyToInstall);
+      expect(find.text('下载完成'), findsOneWidget);
+    });
+
+    testWidgets('下载失败后可点击「重试下载」恢复成功', (tester) async {
+      final service = _MockDownloadUpdateService();
+      final tempDir = Directory.systemTemp.createTempSync('update_retry_test');
+      addTearDown(() => tempDir.deleteSync(recursive: true));
+      final fakeApk = File('${tempDir.path}/app.apk')..writeAsStringSync('apk');
+
+      final controller = UpdateFlowController(
+        updateService: service,
+        canInstallCheck: () async => true,
+        installRunner: (_) async {},
+      );
+      addTearDown(controller.dispose);
+
+      const asset = ReleaseAsset(
+        name: 'app.apk',
+        downloadUrl: 'https://example.com/app.apk',
+        size: 1024,
+        contentType: 'application/vnd.android.package-archive',
+      );
+      const release = ReleaseInfo(
+        tagName: 'v1.6.0',
+        version: '1.6.0',
+        name: 'v1.6.0',
+        body: '日志',
+        publishedAt: null,
+        assets: [asset],
+        htmlUrl: '',
+      );
+      controller.setAvailableUpdate(
+        result: const UpdateCheckResult(
+          status: UpdateStatus.hasUpdate,
+          release: release,
+          targetAsset: asset,
+        ),
+        selectedProxy: '',
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: ElevatedButton(
+                onPressed: () =>
+                    showUpdateDialog(context, controller: controller),
+                child: const Text('Open'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('立即更新'));
+      await tester.pump();
+
+      service.completeError(Exception('network timeout'));
+      await tester.pumpAndSettle();
+      expect(controller.stage, UpdateFlowStage.error);
+      expect(find.text('下载出错'), findsOneWidget);
+      expect(find.text('重试下载'), findsOneWidget);
+
+      await tester.tap(find.text('重试下载'));
+      await tester.pump();
+      expect(controller.stage, UpdateFlowStage.downloading);
+      service.completeSuccess(fakeApk);
+      await tester.pumpAndSettle();
+      expect(controller.stage, UpdateFlowStage.readyToInstall);
+    });
+
+    testWidgets('课表页顶栏更新入口随状态展示，且后台下载完成触发悬浮提示', (tester) async {
+      final service = _MockDownloadUpdateService();
+      final tempDir = Directory.systemTemp.createTempSync('update_bar_test');
+      addTearDown(() => tempDir.deleteSync(recursive: true));
+      final fakeApk = File('${tempDir.path}/app.apk')..writeAsStringSync('apk');
+
+      final flow = UpdateFlowController(
+        updateService: service,
+        canInstallCheck: () async => true,
+        installRunner: (_) async {},
+      );
+      final model = AppModel(
+        preferences: Preferences.inMemory(),
+        updateFlow: flow,
+      );
+      addTearDown(model.dispose);
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+      await tester.pumpWidget(MaterialApp(home: HomeShell(model: model)));
+      await tester.pump();
+
+      const updateButtonKey = ValueKey<String>('schedule-update-button');
+      expect(find.byKey(updateButtonKey), findsNothing);
+
+      const asset = ReleaseAsset(
+        name: 'app.apk',
+        downloadUrl: 'https://example.com/app.apk',
+        size: 1024,
+        contentType: 'application/vnd.android.package-archive',
+      );
+      const release = ReleaseInfo(
+        tagName: 'v1.6.0',
+        version: '1.6.0',
+        name: 'v1.6.0',
+        body: '新版本说明',
+        publishedAt: null,
+        assets: [asset],
+        htmlUrl: '',
+      );
+      flow.setAvailableUpdate(
+        result: const UpdateCheckResult(
+          status: UpdateStatus.hasUpdate,
+          release: release,
+          targetAsset: asset,
+        ),
+        selectedProxy: '',
+      );
+      await tester.pump();
+
+      // 检测到新版本后图标立即常驻出现在「刷新课表」左侧
+      expect(find.byKey(updateButtonKey), findsOneWidget);
+      final updateRect = tester.getRect(find.byKey(updateButtonKey));
+      final refreshRect = tester.getRect(
+        find.widgetWithIcon(IconButton, Icons.refresh_rounded),
+      );
+      expect(updateRect.right, lessThanOrEqualTo(refreshRect.left));
+
+      // 点击顶栏图标打开弹窗，启动下载并点击后台下载收起
+      await tester.tap(find.byKey(updateButtonKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('立即更新'));
+      await tester.pump();
+      await tester.tap(find.text('后台下载'));
+      // 下载中顶栏存在不定进度条无限动画，不能用 pumpAndSettle
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('正在下载更新'), findsNothing);
+      expect(find.byKey(updateButtonKey), findsOneWidget);
+      expect(find.byIcon(Icons.arrow_downward_rounded), findsOneWidget);
+
+      // 后台下载完成：弹窗未打开时通过 AppSnackBar 提醒并可点击安装
+      service.completeSuccess(fakeApk);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(flow.stage, UpdateFlowStage.readyToInstall);
+      expect(find.text('新版本 v1.6.0 下载完成'), findsOneWidget);
+      expect(find.text('立即安装'), findsOneWidget);
+      expect(find.byIcon(Icons.download_done_rounded), findsOneWidget);
+    });
+  });
+}
+
+class _MockDownloadUpdateService extends UpdateService {
+  Completer<File>? _completer;
+  void Function(DownloadProgress)? _onProgress;
+  CancelToken? lastToken;
+
+  @override
+  Future<File> downloadAssetWithFallback({
+    required ReleaseAsset asset,
+    required String selectedProxy,
+    List<String> backupProxies = const <String>[],
+    required void Function(DownloadProgress progress) onProgress,
+    void Function(String currentProxy)? onProxySwitched,
+    CancelToken? cancelToken,
+    String? expectedSha256,
+  }) {
+    _completer = Completer<File>();
+    _onProgress = onProgress;
+    lastToken = cancelToken;
+    return _completer!.future;
+  }
+
+  void emitProgress(int received, int total) {
+    _onProgress?.call(
+      DownloadProgress(
+        receivedBytes: received,
+        totalBytes: total,
+        speedBytesPerSec: 102400,
+      ),
+    );
+  }
+
+  void completeSuccess(File file) {
+    if (_completer != null && !_completer!.isCompleted) {
+      _completer!.complete(file);
+    }
+  }
+
+  void completeError(Object error) {
+    if (_completer != null && !_completer!.isCompleted) {
+      _completer!.completeError(error);
+    }
+  }
 }
 
 class _MockRetryUpdateService extends UpdateService {

@@ -29,6 +29,7 @@ import 'schedule_cache.dart';
 import 'term_calendar.dart';
 import 'timetable.dart';
 import 'app_version.dart';
+import 'updater/update_flow_controller.dart';
 import 'updater/update_models.dart';
 import 'updater/update_service.dart';
 
@@ -89,8 +90,10 @@ class AppModel extends ChangeNotifier {
     ExamCache? examCache,
     GradesCache? gradesCache,
     AcademicService? academicService,
+    UpdateFlowController? updateFlow,
     String? schoolBaseUrl,
   }) : _schoolBaseUrl = schoolBaseUrl ?? defaultSchool.baseUrl,
+       updateFlow = updateFlow ?? UpdateFlowController(),
        // 构造时显式给了地址（测试注入）就别被设置里的"上次用的学校"覆盖。
        _schoolFixed = schoolBaseUrl != null,
        service =
@@ -556,11 +559,22 @@ class AppModel extends ChangeNotifier {
   // 软件更新设置
   // ---------------------------------------------------------------------------
 
+  /// 全局软件更新状态机（供顶栏提示图标、更新弹窗与关于页共享）。
+  final UpdateFlowController updateFlow;
+
   String get selectedUpdateProxy => _preferences.selectedUpdateProxy;
+
+  void _syncUpdateProxy() {
+    updateFlow.updateProxySelection(
+      selectedProxy: selectedUpdateProxy,
+      backupProxies: allUpdateProxies,
+    );
+  }
 
   Future<void> setSelectedUpdateProxy(String value) async {
     if (_preferences.selectedUpdateProxy == value.trim()) return;
     await _preferences.setSelectedUpdateProxy(value);
+    _syncUpdateProxy();
     _notifyPrefs();
     notifyListeners();
   }
@@ -570,6 +584,7 @@ class AppModel extends ChangeNotifier {
   Future<void> setUpdateProxyUrl(String value) async {
     if (_preferences.updateProxyUrl == value.trim()) return;
     await _preferences.setUpdateProxyUrl(value);
+    _syncUpdateProxy();
     _notifyPrefs();
     notifyListeners();
   }
@@ -580,12 +595,14 @@ class AppModel extends ChangeNotifier {
 
   Future<void> addCustomUpdateProxy(String url) async {
     await _preferences.addCustomUpdateProxy(url);
+    _syncUpdateProxy();
     _notifyPrefs();
     notifyListeners();
   }
 
   Future<void> removeCustomUpdateProxy(String url) async {
     await _preferences.removeCustomUpdateProxy(url);
+    _syncUpdateProxy();
     _notifyPrefs();
     notifyListeners();
   }
@@ -631,7 +648,14 @@ class AppModel extends ChangeNotifier {
 
         if (result.status == UpdateStatus.hasUpdate) {
           _hasCheckedAutoUpdate = true;
-          if (result.release != null) onHasUpdate(result);
+          if (result.release != null) {
+            updateFlow.setAvailableUpdate(
+              result: result,
+              selectedProxy: selectedUpdateProxy,
+              backupProxies: allUpdateProxies,
+            );
+            onHasUpdate(result);
+          }
         } else if (result.status == UpdateStatus.noUpdate) {
           _hasCheckedAutoUpdate = true;
         } else if (result.status == UpdateStatus.networkError) {
@@ -2283,6 +2307,7 @@ class AppModel extends ChangeNotifier {
     _appearanceTimer?.cancel();
     // 面板没点"完成"就被关掉（比如返回手势）时，别把刚拖好的值丢掉。
     unawaited(flushAppearance());
+    updateFlow.dispose();
     service.dispose();
     super.dispose();
   }

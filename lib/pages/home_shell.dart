@@ -18,12 +18,14 @@ import 'package:flutter/material.dart';
 
 import '../src/app_model.dart';
 import '../src/reminder_service.dart';
+import '../widgets/app_snack_bar.dart';
 import '../widgets/floating_dock.dart';
 import '../widgets/status_popup.dart';
 import 'academic_page.dart';
 import 'debug_page.dart';
 import 'schedule_page.dart';
 import 'settings_page.dart';
+import 'update_dialog.dart';
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key, required this.model, this.reminders});
@@ -58,6 +60,79 @@ class _HomeShellState extends State<HomeShell> {
 
   int _index = 0;
   final GlobalKey<FloatingDockState> _dockKey = GlobalKey<FloatingDockState>();
+
+  late int _lastUpdateReadyEvent;
+  late int _lastUpdateErrorEvent;
+
+  @override
+  void initState() {
+    super.initState();
+    final flow = widget.model.updateFlow;
+    _lastUpdateReadyEvent = flow.backgroundReadyEvent;
+    _lastUpdateErrorEvent = flow.backgroundErrorEvent;
+    flow.addListener(_onUpdateFlowChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant HomeShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.model.updateFlow != widget.model.updateFlow) {
+      oldWidget.model.updateFlow.removeListener(_onUpdateFlowChanged);
+      final flow = widget.model.updateFlow;
+      _lastUpdateReadyEvent = flow.backgroundReadyEvent;
+      _lastUpdateErrorEvent = flow.backgroundErrorEvent;
+      flow.addListener(_onUpdateFlowChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.model.updateFlow.removeListener(_onUpdateFlowChanged);
+    super.dispose();
+  }
+
+  void _onUpdateFlowChanged() {
+    if (!mounted) return;
+    final flow = widget.model.updateFlow;
+    final isTopRoute = ModalRoute.of(context)?.isCurrent ?? true;
+
+    if (flow.backgroundReadyEvent != _lastUpdateReadyEvent) {
+      _lastUpdateReadyEvent = flow.backgroundReadyEvent;
+      final version = flow.release?.version ?? '';
+      showAppSnackBar(
+        context,
+        message: version.isNotEmpty ? '新版本 v$version 下载完成' : '新版本安装包下载完成',
+        type: AppSnackBarType.success,
+        aboveDock: isTopRoute,
+        duration: const Duration(seconds: 5),
+        action: SnackBarAction(
+          label: '立即安装',
+          onPressed: () {
+            if (!mounted) return;
+            showUpdateDialog(context, controller: flow);
+          },
+        ),
+      );
+    }
+
+    if (flow.backgroundErrorEvent != _lastUpdateErrorEvent) {
+      _lastUpdateErrorEvent = flow.backgroundErrorEvent;
+      showAppSnackBar(
+        context,
+        message: '更新下载失败，可点击查看重试',
+        type: AppSnackBarType.error,
+        aboveDock: isTopRoute,
+        duration: const Duration(seconds: 4),
+        action: SnackBarAction(
+          label: '查看',
+          onPressed: () {
+            if (!mounted) return;
+            showUpdateDialog(context, controller: flow);
+          },
+        ),
+      );
+    }
+  }
 
   /// 课表页的 widget 实例**只创建一次**。
   ///

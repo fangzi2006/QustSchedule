@@ -26,6 +26,7 @@ import 'package:zf_academic/zf_academic.dart';
 import '../src/app_model.dart';
 import '../src/reschedule.dart';
 import '../src/term_calendar.dart';
+import '../src/updater/update_flow_controller.dart';
 import '../widgets/app_menu.dart';
 import '../widgets/course_detail_sheet.dart';
 import '../widgets/course_tile.dart';
@@ -73,14 +74,9 @@ class _SchedulePageState extends State<SchedulePage> {
     model.weekNotifier.addListener(_syncShownWeek);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       widget.model.checkAutoUpdate(
-        onHasUpdate: (result) {
+        onHasUpdate: (_) {
           if (!mounted) return;
-          showUpdateDialog(
-            context,
-            updateResult: result,
-            proxyPrefix: widget.model.selectedUpdateProxy,
-            backupProxies: widget.model.allUpdateProxies,
-          );
+          showUpdateDialog(context, controller: widget.model.updateFlow);
         },
       );
     });
@@ -113,6 +109,7 @@ class _SchedulePageState extends State<SchedulePage> {
               ? null
               : _WeekBar(model: model, week: _shownWeek),
           actions: <Widget>[
+            _UpdateStatusButton(model: model),
             IconButton(
               icon: const Icon(Icons.refresh_rounded),
               tooltip: '刷新课表',
@@ -228,6 +225,112 @@ class _TodayFab extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 课表页顶栏更新入口图标：检测到新版本或后台下载/待安装时显示，点击恢复弹窗。
+class _UpdateStatusButton extends StatelessWidget {
+  const _UpdateStatusButton({required this.model});
+
+  final AppModel model;
+
+  @override
+  Widget build(BuildContext context) {
+    final flow = model.updateFlow;
+    final scheme = Theme.of(context).colorScheme;
+
+    return ListenableBuilder(
+      listenable: flow,
+      builder: (context, _) {
+        if (!flow.hasUpdate) {
+          return const SizedBox.shrink();
+        }
+
+        final version = flow.release?.version ?? '';
+        final (Widget icon, String tooltip) = switch (flow.stage) {
+          UpdateFlowStage.idle => (const SizedBox.shrink(), ''),
+          UpdateFlowStage.available => (
+            _BadgedActionIcon(
+              icon: Icon(Icons.system_update_rounded, color: scheme.primary),
+            ),
+            version.isNotEmpty ? '发现新版本 v$version' : '发现新版本',
+          ),
+          UpdateFlowStage.downloading => (
+            SizedBox(
+              width: 22,
+              height: 22,
+              child: Stack(
+                alignment: Alignment.center,
+                children: <Widget>[
+                  CircularProgressIndicator(
+                    value: flow.progress?.progress,
+                    strokeWidth: 2.2,
+                  ),
+                  Icon(
+                    Icons.arrow_downward_rounded,
+                    size: 12,
+                    color: scheme.primary,
+                  ),
+                ],
+              ),
+            ),
+            flow.progress == null
+                ? '正在下载更新…'
+                : '正在下载更新 ${flow.progress!.percentage}%',
+          ),
+          UpdateFlowStage.readyToInstall => (
+            const _BadgedActionIcon(
+              icon: Icon(Icons.download_done_rounded, color: Color(0xFF1E8E3E)),
+            ),
+            '新版本已就绪，点击安装',
+          ),
+          UpdateFlowStage.error => (
+            Icon(Icons.error_outline_rounded, color: scheme.error),
+            '更新下载失败，点击查看',
+          ),
+        };
+
+        return IconButton(
+          key: const ValueKey<String>('schedule-update-button'),
+          icon: icon,
+          tooltip: tooltip,
+          onPressed: () => showUpdateDialog(context, controller: flow),
+        );
+      },
+    );
+  }
+}
+
+/// 顶栏更新图标右上角统一红色角标（向外微移并用顶栏底色描边，避免压住图标）。
+class _BadgedActionIcon extends StatelessWidget {
+  const _BadgedActionIcon({required this.icon});
+
+  final Icon icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final ringColor =
+        theme.appBarTheme.backgroundColor ?? theme.scaffoldBackgroundColor;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: <Widget>[
+        icon,
+        Positioned(
+          top: -2,
+          right: -3,
+          child: Container(
+            width: 9,
+            height: 9,
+            decoration: BoxDecoration(
+              color: theme.colorScheme.error,
+              shape: BoxShape.circle,
+              border: Border.all(color: ringColor, width: 1.5),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

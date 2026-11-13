@@ -65,6 +65,7 @@ class _AboutPageState extends State<AboutPage> {
           });
           await showUpdateDialog(
             context,
+            controller: widget.model.updateFlow,
             updateResult: result,
             proxyPrefix: widget.model.selectedUpdateProxy,
             backupProxies: widget.model.allUpdateProxies,
