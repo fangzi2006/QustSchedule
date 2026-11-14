@@ -1297,9 +1297,7 @@ class _MenuTile<T> extends StatelessWidget {
                 ),
                 if (item.trailing != null) ...<Widget>[
                   const SizedBox(width: 16),
-                  opacity >= 1.0
-                      ? item.trailing!
-                      : Opacity(opacity: opacity, child: item.trailing!),
+                  Opacity(opacity: opacity, child: item.trailing!),
                 ],
               ],
             ),

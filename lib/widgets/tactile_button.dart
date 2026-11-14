@@ -382,12 +382,12 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
           );
         }
 
-        if ((scale - 1.0).abs() > 0.0005) {
-          body = Transform.scale(scale: scale, child: body);
-        }
-        if (drag.distanceSquared > 0.001) {
-          body = Transform.translate(offset: drag, child: body);
-        }
+        // 保持动画子树结构在静态 / 按压 / 拖拽各帧间完全一致，避免动态增删 Transform
+        // 导致内嵌 Material 按钮的 Element 与 TapGestureRecognizer 在按压中途被销毁。
+        body = Transform.translate(
+          offset: drag,
+          child: Transform.scale(scale: scale, child: body),
+        );
         if (hasMenuTrigger) {
           body = FadeTransition(
             opacity: AlwaysStoppedAnimation<double>(morphOpacity),

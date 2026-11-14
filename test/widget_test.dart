@@ -4595,5 +4595,65 @@ void main() {
       }
       expect(find.byType(TactileActionButton), findsAtLeastNWidgets(1));
     });
+
+    testWidgets('触感按钮在跨帧按压与微抖动后松手仍可靠触发单次点击', (tester) async {
+      var tonalCount = 0;
+      var textCount = 0;
+      var iconCount = 0;
+      var backCount = 0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: Scaffold(
+            body: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  TactileActionButton(
+                    onPressed: () => tonalCount++,
+                    label: const Text('确认操作'),
+                  ),
+                  TactileActionButton(
+                    variant: TactileActionVariant.text,
+                    onPressed: () => textCount++,
+                    label: const Text('取消操作'),
+                  ),
+                  TactileIconButton(
+                    icon: const Icon(Icons.refresh_rounded),
+                    onPressed: () => iconCount++,
+                  ),
+                  TactileBackButton(onPressed: () => backCount++),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      Future<void> humanTap(Finder target) async {
+        final gesture = await tester.startGesture(tester.getCenter(target));
+        // 模拟真实触控：跨过多帧并叠加微小手指抖动，确保弹簧与拖拽不会重建手势识别器。
+        await tester.pump(const Duration(milliseconds: 24));
+        await tester.pump(const Duration(milliseconds: 36));
+        await gesture.moveBy(const Offset(1.5, 1.5));
+        await tester.pump(const Duration(milliseconds: 30));
+        await gesture.up();
+        await tester.pumpAndSettle();
+      }
+
+      await humanTap(find.text('确认操作'));
+      expect(tonalCount, 1);
+
+      await humanTap(find.text('取消操作'));
+      expect(textCount, 1);
+
+      await humanTap(find.byIcon(Icons.refresh_rounded));
+      expect(iconCount, 1);
+
+      await humanTap(find.byType(BackButton));
+      expect(backCount, 1);
+    });
   });
 }
