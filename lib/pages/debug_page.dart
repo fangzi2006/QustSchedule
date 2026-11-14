@@ -259,7 +259,8 @@ class _RequestsTab extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
-              TextButton.icon(
+              TactileActionButton(
+                variant: TactileActionVariant.text,
                 icon: const Icon(Icons.copy, size: 16),
                 label: const Text('复制'),
                 onPressed: () => _copyText(
@@ -395,7 +396,8 @@ class _RawTab extends StatelessWidget {
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                     ),
-                    TextButton.icon(
+                    TactileActionButton(
+                      variant: TactileActionVariant.text,
                       icon: const Icon(Icons.copy, size: 16),
                       label: const Text('复制'),
                       onPressed: body == null
@@ -453,7 +455,8 @@ class _RawRowTile extends StatelessWidget {
               children: <Widget>[
                 Align(
                   alignment: Alignment.centerRight,
-                  child: TextButton.icon(
+                  child: TactileActionButton(
+                    variant: TactileActionVariant.text,
                     icon: const Icon(Icons.copy, size: 16),
                     label: const Text('复制这行 JSON'),
                     onPressed: () => _copyText(context, text, '已复制第 $index 行'),
@@ -499,7 +502,8 @@ class _ParsedTab extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
-              TextButton.icon(
+              TactileActionButton(
+                variant: TactileActionVariant.text,
                 icon: const Icon(Icons.copy, size: 16),
                 label: const Text('复制'),
                 onPressed: () => _copyText(
@@ -600,9 +604,10 @@ class _CollapsibleTextState extends State<_CollapsibleText> {
         if (long)
           Align(
             alignment: Alignment.centerLeft,
-            child: TextButton(
+            child: TactileActionButton(
+              variant: TactileActionVariant.text,
               onPressed: () => setState(() => _expanded = !_expanded),
-              child: Text(_expanded ? '收起' : '展开全部（${text.length} 字符）'),
+              label: Text(_expanded ? '收起' : '展开全部（${text.length} 字符）'),
             ),
           ),
       ],

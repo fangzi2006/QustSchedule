@@ -153,8 +153,6 @@ class _ChangelogPageState extends State<ChangelogPage> {
               appVersion != '-' && release.version == appVersion;
 
           return Card(
-            elevation: isCurrentVersion ? 2.0 : 0.5,
-            color: theme.colorScheme.surface,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(20),
               side: isCurrentVersion

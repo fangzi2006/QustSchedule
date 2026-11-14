@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 
 import '../src/app_model.dart';
 import '../src/preferences_repository.dart';
+import '../widgets/tactile_button.dart';
 
 /// 弹出外观面板。
 Future<void> showAppearanceSheet(BuildContext context, AppModel model) {
@@ -89,14 +90,15 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
                   children: <Widget>[
                     Text('外观', style: theme.textTheme.titleMedium),
                     const Spacer(),
-                    TextButton(
+                    TactileActionButton(
+                      variant: TactileActionVariant.text,
                       onPressed: () {
                         model.setCellHeight(defaultCellHeight);
                         model.setCourseTextScale(defaultCourseTextScale);
                         _heightAtDefault = true;
                         _scaleAtDefault = true;
                       },
-                      child: const Text('恢复默认'),
+                      label: const Text('恢复默认'),
                     ),
                   ],
                 ),

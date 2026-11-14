@@ -152,13 +152,15 @@ class TimetableListPage extends StatelessWidget {
         title: const Text('删除作息表'),
         content: Text('「${table.name}」将被删除，课表会改用其余表里生效日期最近的一张。'),
         actions: <Widget>[
-          TextButton(
+          TactileActionButton(
+            variant: TactileActionVariant.text,
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
+            label: const Text('取消'),
           ),
-          FilledButton(
+          TactileActionButton(
+            variant: TactileActionVariant.filled,
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('删除'),
+            label: const Text('删除'),
           ),
         ],
       ),

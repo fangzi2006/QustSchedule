@@ -855,11 +855,14 @@ class _WeekView extends StatelessWidget {
                             child: Stack(
                               children: <Widget>[
                                 Positioned.fill(
-                                  child: CustomPaint(
-                                    painter: _GridPainter(
-                                      rows: rows,
-                                      rowHeight: rowHeight,
-                                      lineColor: AppColors.of(context).gridLine,
+                                  child: RepaintBoundary(
+                                    child: CustomPaint(
+                                      painter: _GridPainter(
+                                        rows: rows,
+                                        rowHeight: rowHeight,
+                                        lineColor: AppColors.of(context)
+                                            .gridLine,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -899,6 +902,17 @@ class _WeekView extends StatelessWidget {
   /// 多一个标签只是占掉一行高度。
   List<Widget> _buildTimeLabels(BuildContext context, int rows) {
     final theme = Theme.of(context);
+    final periodStyle = TextStyle(
+      fontSize: 14,
+      height: 1.1,
+      fontWeight: FontWeight.w600,
+      color: theme.colorScheme.onSurface,
+    );
+    final clockStyle = TextStyle(
+      fontSize: 10,
+      height: 1.25,
+      color: AppColors.of(context).timeAxisText,
+    );
     final widgets = <Widget>[];
     for (var period = 1; period <= rows; period++) {
       final start = model.startLabelOf(period);
@@ -919,17 +933,9 @@ class _WeekView extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: <Widget>[
-                Text(
-                  '$period',
-                  style: TextStyle(
-                    fontSize: 14,
-                    height: 1.1,
-                    fontWeight: FontWeight.w600,
-                    color: theme.colorScheme.onSurface,
-                  ),
-                ),
-                if (start.isNotEmpty) _clock(context, start),
-                if (end.isNotEmpty) _clock(context, end),
+                Text('$period', style: periodStyle),
+                if (start.isNotEmpty) _clock(start, clockStyle),
+                if (end.isNotEmpty) _clock(end, clockStyle),
               ],
             ),
           ),
@@ -943,16 +949,8 @@ class _WeekView extends StatelessWidget {
   ///
   /// 整列已经套了 `FittedBox`，这里的子项拿到的宽度无界、不会折行，
   /// 所以只需保持单行，具体缩放交给外层统一处理。
-  static Widget _clock(BuildContext context, String text) => Text(
-    text,
-    maxLines: 1,
-    softWrap: false,
-    style: TextStyle(
-      fontSize: 10,
-      height: 1.25,
-      color: AppColors.of(context).timeAxisText,
-    ),
-  );
+  static Widget _clock(String text, TextStyle style) =>
+      Text(text, maxLines: 1, softWrap: false, style: style);
 
   List<Widget> _buildCourseBlocks(
     BuildContext context,

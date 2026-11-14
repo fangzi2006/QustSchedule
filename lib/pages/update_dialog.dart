@@ -13,6 +13,7 @@ import '../src/updater/update_models.dart';
 import '../src/updater/update_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/changelog_category_badge.dart';
+import '../widgets/tactile_button.dart';
 
 /// 弹出统一的应用更新流程弹窗（同一弹窗内流转：版本说明 → 下载进度 → 准备安装）。
 ///
@@ -179,13 +180,15 @@ class _UpdateFlowDialogState extends State<_UpdateFlowDialog>
               '青科课表通需要开启「允许安装未知应用」权限才能覆盖升级安装包。\n\n建议先前往系统设置开启权限，开启后返回即可直接更新。',
             ),
             actions: [
-              TextButton(
+              TactileActionButton(
+                variant: TactileActionVariant.text,
                 onPressed: () => Navigator.of(ctx).pop('download'),
-                child: const Text('直接下载'),
+                label: const Text('直接下载'),
               ),
-              FilledButton(
+              TactileActionButton(
+                variant: TactileActionVariant.filled,
                 onPressed: () => Navigator.of(ctx).pop('settings'),
-                child: const Text('去开启权限'),
+                label: const Text('去开启权限'),
               ),
             ],
           ),
@@ -238,13 +241,18 @@ class _UpdateFlowDialogState extends State<_UpdateFlowDialog>
         ),
         actions: [
           _DialogActionsBar(
-            left: TextButton(onPressed: _popSelf, child: const Text('知道了')),
-            right: FilledButton(
+            left: TactileActionButton(
+              variant: TactileActionVariant.text,
+              onPressed: _popSelf,
+              label: const Text('知道了'),
+            ),
+            right: TactileActionButton(
+              variant: TactileActionVariant.filled,
               onPressed: () {
                 _popSelf();
                 unawaited(_launchExternalUrl(release.htmlUrl));
               },
-              child: const Text('前往 Release 页面'),
+              label: const Text('前往 Release 页面'),
             ),
           ),
         ],
@@ -307,14 +315,16 @@ class _UpdateFlowDialogState extends State<_UpdateFlowDialog>
       ),
       actions: [
         _DialogActionsBar(
-          left: OutlinedButton(
+          left: TactileActionButton(
+            variant: TactileActionVariant.outlined,
             onPressed: () =>
                 unawaited(_launchExternalUrl(_controller.proxiedDownloadUrl)),
-            child: const Text('浏览器下载'),
+            label: const Text('浏览器下载'),
           ),
-          right: FilledButton(
+          right: TactileActionButton(
+            variant: TactileActionVariant.filled,
             onPressed: _onTapUpdateNow,
-            child: const Text('立即更新'),
+            label: const Text('立即更新'),
           ),
         ),
       ],
@@ -399,7 +409,8 @@ class _UpdateFlowDialogState extends State<_UpdateFlowDialog>
       ),
       actions: [
         _DialogActionsBar(
-          left: TextButton(
+          left: TactileActionButton(
+            variant: TactileActionVariant.text,
             onPressed: () {
               final canReturnToAvailable = _controller.hasAvailableFallback;
               _controller.cancelDownload();
@@ -407,11 +418,12 @@ class _UpdateFlowDialogState extends State<_UpdateFlowDialog>
                 _popSelf();
               }
             },
-            child: const Text('取消下载'),
+            label: const Text('取消下载'),
           ),
-          right: FilledButton.tonal(
+          right: TactileActionButton(
+            variant: TactileActionVariant.tonal,
             onPressed: _popSelf,
-            child: const Text('后台下载'),
+            label: const Text('后台下载'),
           ),
         ),
       ],
@@ -462,17 +474,19 @@ class _UpdateFlowDialogState extends State<_UpdateFlowDialog>
       ),
       actions: [
         _DialogActionsBar(
-          left: OutlinedButton(
+          left: TactileActionButton(
+            variant: TactileActionVariant.outlined,
             onPressed: () {
               final url = _controller.fallbackDownloadUrl;
               _popSelf();
               unawaited(_launchExternalUrl(url));
             },
-            child: const Text('浏览器下载'),
+            label: const Text('浏览器下载'),
           ),
-          right: FilledButton(
+          right: TactileActionButton(
+            variant: TactileActionVariant.filled,
             onPressed: () => unawaited(_controller.startDownload()),
-            child: const Text('重试下载'),
+            label: const Text('重试下载'),
           ),
         ),
       ],
@@ -588,14 +602,20 @@ class _UpdateFlowDialogState extends State<_UpdateFlowDialog>
       ),
       actions: [
         _DialogActionsBar(
-          left: TextButton(onPressed: _popSelf, child: const Text('稍后安装')),
+          left: TactileActionButton(
+            variant: TactileActionVariant.text,
+            onPressed: _popSelf,
+            label: const Text('稍后安装'),
+          ),
           right: needsPermission
-              ? FilledButton.icon(
+              ? TactileActionButton(
+                  variant: TactileActionVariant.filled,
                   icon: const Icon(Icons.settings_outlined, size: 18),
                   onPressed: () => unawaited(_controller.openInstallSettings()),
                   label: const Text('去开启权限'),
                 )
-              : FilledButton.icon(
+              : TactileActionButton(
+                  variant: TactileActionVariant.filled,
                   icon: isTriggeringInstall
                       ? SizedBox(
                           width: 18,
@@ -654,14 +674,13 @@ class _DialogTitleBar extends StatelessWidget {
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
         ),
-        IconButton(
-          icon: Icon(
-            Icons.close_rounded,
-            size: 20,
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
+        TactileIconButton(
+          icon: const Icon(Icons.close_rounded),
+          size: 32,
+          iconSize: 18,
+          color: theme.colorScheme.onSurfaceVariant,
+          surfaceStyle: TactileSurfaceStyle.tinted,
           tooltip: closeTooltip,
-          visualDensity: VisualDensity.compact,
           onPressed: onClose,
         ),
       ],

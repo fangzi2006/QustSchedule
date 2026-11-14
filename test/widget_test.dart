@@ -4315,7 +4315,7 @@ void main() {
       expect(cardBox.boxShadow, isNull);
       expect(cardBox.border, isNull);
 
-      // 按住「检查更新」与背景按钮，均不应出现旧版按压边框。
+      // 按住「检查更新」与背景按钮，透明表面不额外包 DecoratedBox、也不应出现按压边框。
       final checkBtn = find.text('检查更新');
       final gesture1 = await tester.startGesture(tester.getCenter(checkBtn));
       await tester.pump(const Duration(milliseconds: 60));
@@ -4323,12 +4323,10 @@ void main() {
         of: checkBtn,
         matching: find.byType(TactileSurfaceButton),
       );
-      final actionDecor = tester.widget<DecoratedBox>(
-        find
-            .descendant(of: actionSurface, matching: find.byType(DecoratedBox))
-            .first,
+      expect(
+        find.descendant(of: actionSurface, matching: find.byType(DecoratedBox)),
+        findsNothing,
       );
-      expect((actionDecor.decoration as BoxDecoration).border, isNull);
       await gesture1.up();
       await tester.pumpAndSettle();
 
@@ -4438,6 +4436,164 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(picked, 'c');
+    });
+  });
+
+  group('架构优化与性能回归', () {
+    testWidgets('CourseBlock 布局预算 LRU 缓存命中同一规格课程块而不重复排版', (tester) async {
+      CourseBlock.clearBlockPlanCacheForTest();
+      final baseline = CourseBlock.debugBlockPlanSolveCountForTest;
+      const entry = ScheduleEntry(
+        id: 'c1',
+        name: '高等数学（一）',
+        teacher: '李四',
+        location: 'M1-101',
+        day: 1,
+        startPeriod: 1,
+        endPeriod: 2,
+        weeks: <int>[1, 2],
+      );
+
+      Widget buildCell(ScheduleEntry e, Key key) => wrap(
+        Center(
+          child: SizedBox(
+            width: 68,
+            height: 112,
+            child: CourseBlock(key: key, entry: e, onTap: () {}),
+          ),
+        ),
+      );
+
+      await tester.pumpWidget(buildCell(entry, const ValueKey<int>(1)));
+      expect(CourseBlock.debugBlockPlanSolveCountForTest, baseline + 1);
+
+      // 以相同排版尺寸与文字重建另一个实例（不同 id/key）：应直接命中缓存，不重复求解。
+      const sameLayoutEntry = ScheduleEntry(
+        id: 'c2',
+        name: '高等数学（一）',
+        teacher: '李四',
+        location: 'M1-101',
+        day: 2,
+        startPeriod: 3,
+        endPeriod: 4,
+        weeks: <int>[3],
+      );
+      await tester.pumpWidget(
+        buildCell(sameLayoutEntry, const ValueKey<int>(2)),
+      );
+      expect(CourseBlock.debugBlockPlanSolveCountForTest, baseline + 1);
+
+      // 课程名改变导致文本样式测量键变化：应触发一次新的求解。
+      const changedEntry = ScheduleEntry(
+        id: 'c3',
+        name: '线性代数',
+        teacher: '李四',
+        location: 'M1-101',
+        day: 2,
+        startPeriod: 3,
+        endPeriod: 4,
+        weeks: <int>[3],
+      );
+      await tester.pumpWidget(buildCell(changedEntry, const ValueKey<int>(3)));
+      expect(CourseBlock.debugBlockPlanSolveCountForTest, baseline + 2);
+    });
+
+    testWidgets('TactileSurfaceButton 非菜单按钮默认不包 ClipRRect 且不受菜单形变监听影响', (
+      tester,
+    ) async {
+      var childBuilds = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: Scaffold(
+            body: Center(
+              child: TactileSurfaceButton(
+                onTap: () {},
+                child: Builder(
+                  builder: (_) {
+                    childBuilds++;
+                    return const Text('普通操作');
+                  },
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final surfaceFinder = find.byType(TactileSurfaceButton);
+      expect(
+        find.descendant(of: surfaceFinder, matching: find.byType(ClipRRect)),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: surfaceFinder,
+          matching: find.byType(FadeTransition),
+        ),
+        findsNothing,
+      );
+      expect(childBuilds, 1);
+
+      // 即使全局菜单正在展开，普通按钮也不会收到 activeAppMenuMorph 的重建通知。
+      activeAppMenuMorph.value = (null, 0.5);
+      await tester.pump();
+      activeAppMenuMorph.value = (null, 0.0);
+      await tester.pump();
+      expect(childBuilds, 1);
+    });
+
+    testWidgets('HomeShell 按目标按需懒加载：直达设置页时不提前构建学业页', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AcademicPage), findsNothing);
+      expect(find.byType(SettingsPage), findsNothing);
+
+      // 从课表直接点「设置」，仅惰性构建 SettingsPage，不应附带构建 AcademicPage。
+      await tester.tap(find.text('设置'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SettingsPage), findsOneWidget);
+      expect(find.byType(AcademicPage), findsNothing);
+
+      // 再切换到「学业」，才懒加载 AcademicPage。
+      await tester.tap(find.text('学业'));
+      await tester.pumpAndSettle();
+      expect(find.byType(AcademicPage), findsOneWidget);
+    });
+
+    testWidgets('UpdateProxyPage 卡片统一零阴影并采用 TactileActionButton', (
+      tester,
+    ) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: UpdateProxyPage(model: model),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final cards = tester.widgetList<Card>(find.byType(Card)).toList();
+      expect(cards, isNotEmpty);
+      for (final card in cards) {
+        expect(card.elevation, isNull);
+        final cardMaterial = tester.widget<Material>(
+          find
+              .descendant(
+                of: find.byWidget(card),
+                matching: find.byType(Material),
+              )
+              .first,
+        );
+        expect(cardMaterial.elevation, 0);
+      }
+      expect(find.byType(TactileActionButton), findsAtLeastNWidgets(1));
     });
   });
 }

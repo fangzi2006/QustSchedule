@@ -289,13 +289,15 @@ class SettingsPage extends StatelessWidget {
         title: const Text('退出登录？'),
         content: const Text('会清除当前会话与保存的学号密码，下次需要重新输入。'),
         actions: <Widget>[
-          TextButton(
+          TactileActionButton(
+            variant: TactileActionVariant.text,
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
+            label: const Text('取消'),
           ),
-          FilledButton(
+          TactileActionButton(
+            variant: TactileActionVariant.filled,
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('退出'),
+            label: const Text('退出'),
           ),
         ],
       ),
@@ -408,11 +410,16 @@ class _PasswordDialogState extends State<_PasswordDialog> {
         ),
       ),
       actions: <Widget>[
-        TextButton(
+        TactileActionButton(
+          variant: TactileActionVariant.text,
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('取消'),
+          label: const Text('取消'),
         ),
-        FilledButton(onPressed: _submit, child: const Text('确定')),
+        TactileActionButton(
+          variant: TactileActionVariant.filled,
+          onPressed: _submit,
+          label: const Text('确定'),
+        ),
       ],
     );
   }

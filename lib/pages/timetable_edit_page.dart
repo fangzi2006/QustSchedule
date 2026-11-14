@@ -123,13 +123,15 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
         title: const Text('放弃修改？'),
         content: Text(_isNew ? '这张作息表还没保存，离开后不会创建。' : '这张作息表有未保存的改动，离开后会丢失。'),
         actions: <Widget>[
-          TextButton(
+          TactileActionButton(
+            variant: TactileActionVariant.text,
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('继续编辑'),
+            label: const Text('继续编辑'),
           ),
-          FilledButton(
+          TactileActionButton(
+            variant: TactileActionVariant.filled,
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('放弃'),
+            label: const Text('放弃'),
           ),
         ],
       ),
@@ -500,13 +502,15 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
           ),
         ),
         actions: <Widget>[
-          TextButton(
+          TactileActionButton(
+            variant: TactileActionVariant.text,
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
+            label: const Text('取消'),
           ),
-          FilledButton(
+          TactileActionButton(
+            variant: TactileActionVariant.filled,
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('应用'),
+            label: const Text('应用'),
           ),
         ],
       ),
@@ -530,13 +534,15 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
         title: const Text('删除作息表'),
         content: Text('「${draft.name}」将被删除。'),
         actions: <Widget>[
-          TextButton(
+          TactileActionButton(
+            variant: TactileActionVariant.text,
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
+            label: const Text('取消'),
           ),
-          FilledButton(
+          TactileActionButton(
+            variant: TactileActionVariant.filled,
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('删除'),
+            label: const Text('删除'),
           ),
         ],
       ),
@@ -874,13 +880,15 @@ class _RenameDialogState extends State<_RenameDialog> {
         onSubmitted: (value) => Navigator.of(context).pop(value),
       ),
       actions: <Widget>[
-        TextButton(
+        TactileActionButton(
+          variant: TactileActionVariant.text,
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('取消'),
+          label: const Text('取消'),
         ),
-        FilledButton(
+        TactileActionButton(
+          variant: TactileActionVariant.filled,
           onPressed: () => Navigator.of(context).pop(_controller.text),
-          child: const Text('确定'),
+          label: const Text('确定'),
         ),
       ],
     );

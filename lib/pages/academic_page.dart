@@ -483,29 +483,30 @@ class _ExamSection extends StatelessWidget {
           if (remainingExams.isNotEmpty) const SizedBox(height: 12),
         ],
         if (remainingExams.isNotEmpty)
-          Card(
-            key: const Key('academic-exam-list-card'),
-            elevation: 0,
-            clipBehavior: Clip.antiAlias,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
-              side: BorderSide(
-                color: scheme.outlineVariant.withValues(alpha: 0.5),
+          RepaintBoundary(
+            child: Card(
+              key: const Key('academic-exam-list-card'),
+              elevation: 0,
+              clipBehavior: Clip.antiAlias,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: BorderSide(
+                  color: scheme.outlineVariant.withValues(alpha: 0.5),
+                ),
               ),
-            ),
-            child: ListView.separated(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: remainingExams.length,
-              separatorBuilder: (_, _) => const Divider(height: 0, indent: 16),
-              itemBuilder: (context, index) {
-                final exam = remainingExams[index];
-                return _ExamListTile(
-                  exam: exam,
-                  isNext: false,
-                  isPast: isExamPast(exam, current),
-                );
-              },
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  for (var i = 0; i < remainingExams.length; i++) ...<Widget>[
+                    if (i > 0) const Divider(height: 0, indent: 16),
+                    _ExamListTile(
+                      exam: remainingExams[i],
+                      isNext: false,
+                      isPast: isExamPast(remainingExams[i], current),
+                    ),
+                  ],
+                ],
+              ),
             ),
           ),
       ],
@@ -848,24 +849,25 @@ class _GradeSection extends StatelessWidget {
       children: <Widget>[
         _GpaStatsCard(stats: stats),
         const SizedBox(height: 12),
-        Card(
-          elevation: 0,
-          clipBehavior: Clip.antiAlias,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-            side: BorderSide(
-              color: scheme.outlineVariant.withValues(alpha: 0.5),
+        RepaintBoundary(
+          child: Card(
+            elevation: 0,
+            clipBehavior: Clip.antiAlias,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+              side: BorderSide(
+                color: scheme.outlineVariant.withValues(alpha: 0.5),
+              ),
             ),
-          ),
-          child: ListView.separated(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: grades.length,
-            separatorBuilder: (_, _) => const Divider(height: 0, indent: 16),
-            itemBuilder: (context, index) {
-              final grade = grades[index];
-              return _GradeListTile(grade: grade);
-            },
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                for (var i = 0; i < grades.length; i++) ...<Widget>[
+                  if (i > 0) const Divider(height: 0, indent: 16),
+                  _GradeListTile(grade: grades[i]),
+                ],
+              ],
+            ),
           ),
         ),
       ],
@@ -1144,13 +1146,12 @@ class _ErrorBanner extends StatelessWidget {
               ),
             ),
           ),
-          TextButton(
+          TactileActionButton(
+            variant: TactileActionVariant.text,
             onPressed: onRetry,
-            style: TextButton.styleFrom(
-              visualDensity: VisualDensity.compact,
-              foregroundColor: scheme.error,
-            ),
-            child: const Text('重试'),
+            visualDensity: VisualDensity.compact,
+            foregroundColor: scheme.error,
+            label: const Text('重试'),
           ),
         ],
       ),

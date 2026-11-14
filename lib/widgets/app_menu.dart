@@ -1131,19 +1131,23 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     final start = 0.05 + step * 0.035;
     final end = math.min(1.0, start + 0.42);
     final raw = ((t - start) / math.max(0.01, end - start)).clamp(0.0, 1.0);
-    final itemT = Curves.easeOutCubic.transform(raw);
+    final itemT = t >= 1.0 ? 1.0 : Curves.easeOutCubic.transform(raw);
 
     final Widget child;
     if (item.isDivider) {
+      final baseColor = divider.color;
       child = Divider(
         height: 1,
         thickness: divider.thickness,
-        color: divider.color,
+        color: baseColor == null || itemT >= 1.0
+            ? baseColor
+            : baseColor.withValues(alpha: baseColor.a * itemT),
       );
     } else {
       child = _MenuTile<T>(
         item: item,
         hovered: _hoveredIndex == index || _pressedScrollableIndex == index,
+        opacity: itemT,
         onTap: () => _commitSelection(index),
         onPressChanged: (pressed) {
           if (!_isScrollable || !mounted) return;
@@ -1154,10 +1158,7 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
       );
     }
 
-    return KeyedSubtree(
-      key: _itemKeys[index],
-      child: t >= 1.0 ? child : Opacity(opacity: itemT, child: child),
-    );
+    return KeyedSubtree(key: _itemKeys[index], child: child);
   }
 }
 
@@ -1219,12 +1220,14 @@ class _MenuTile<T> extends StatelessWidget {
     super.key,
     required this.item,
     required this.hovered,
+    required this.opacity,
     required this.onTap,
     required this.onPressChanged,
   });
 
   final AppMenuItem<T> item;
   final bool hovered;
+  final double opacity;
   final VoidCallback onTap;
   final ValueChanged<bool> onPressChanged;
 
@@ -1233,11 +1236,20 @@ class _MenuTile<T> extends StatelessWidget {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final highlighted = item.selected || hovered;
-    final color = !item.enabled
+    final baseColor = !item.enabled
         ? theme.hintColor
         : highlighted
         ? scheme.primary
         : scheme.onSurface;
+    final baseIconColor = item.enabled
+        ? (highlighted ? scheme.primary : scheme.onSurfaceVariant)
+        : theme.hintColor;
+    final color = opacity >= 1.0
+        ? baseColor
+        : baseColor.withValues(alpha: baseColor.a * opacity);
+    final iconColor = opacity >= 1.0
+        ? baseIconColor
+        : baseIconColor.withValues(alpha: baseIconColor.a * opacity);
     final fontWeight = highlighted ? FontWeight.w600 : FontWeight.normal;
     return InkWell(
       // 彻底屏蔽旧版 Material 水波纹与灰底阴影，仅留无障碍与可测试句柄，高亮全权交给滑动胶囊。
@@ -1268,15 +1280,7 @@ class _MenuTile<T> extends StatelessWidget {
                 if (item.icon != null) ...<Widget>[
                   Transform.scale(
                     scale: hovered ? 1.08 : 1.0,
-                    child: Icon(
-                      item.icon,
-                      size: 18,
-                      color: item.enabled
-                          ? (highlighted
-                                ? scheme.primary
-                                : scheme.onSurfaceVariant)
-                          : theme.hintColor,
-                    ),
+                    child: Icon(item.icon, size: 18, color: iconColor),
                   ),
                   const SizedBox(width: 12),
                 ],
@@ -1293,7 +1297,9 @@ class _MenuTile<T> extends StatelessWidget {
                 ),
                 if (item.trailing != null) ...<Widget>[
                   const SizedBox(width: 16),
-                  item.trailing!,
+                  opacity >= 1.0
+                      ? item.trailing!
+                      : Opacity(opacity: opacity, child: item.trailing!),
                 ],
               ],
             ),

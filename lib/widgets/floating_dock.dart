@@ -53,6 +53,7 @@ class FloatingDock extends StatefulWidget {
     this.onDragEnd,
     this.onPillProgress,
     this.onPressStart,
+    this.onTargetIndexHint,
   });
 
   final List<FloatingDockItem> items;
@@ -70,6 +71,9 @@ class FloatingDock extends StatefulWidget {
   /// 指针按下的那一帧（还没动）：外壳利用这瞬间提前唤醒下一页。
   final VoidCallback? onPressStart;
 
+  /// 指针按下或横向滑动进入某分段时通知目标下标，便于按需单页懒建。
+  final ValueChanged<int>? onTargetIndexHint;
+
   /// 外壳用它加底部留白：让页面最后一行不被悬浮条压住。
   static const double height = 58;
   static const double bottomMargin = 16;
@@ -82,7 +86,7 @@ class FloatingDock extends StatefulWidget {
 
   @visibleForTesting
   static Path buildOutsideLensClipForTest(Rect rect, Size size) =>
-      _OutsideLensClipper(rect: rect).getClip(size);
+      _OutsideLensClipper(rect: rect, path: _buildLensPath(rect)).getClip(size);
 
   @override
   State<FloatingDock> createState() => FloatingDockState();
@@ -93,6 +97,10 @@ class FloatingDockState extends State<FloatingDock>
   final GlobalKey _stackKey = GlobalKey();
   final List<GlobalKey> _itemKeys = <GlobalKey>[];
   List<Rect> _rects = const <Rect>[];
+  List<_LensGlyphEntry> _cachedGlyphs = const <_LensGlyphEntry>[];
+  Color? _cachedGlyphPrimaryColor;
+  List<FloatingDockItem>? _cachedGlyphItems;
+  List<Rect>? _cachedGlyphRects;
 
   /// 拖动中的即时高亮项（指针还没松，index 还没真切过去）。
   late int _preview;
@@ -221,6 +229,7 @@ class FloatingDockState extends State<FloatingDock>
 
   @override
   void dispose() {
+    _disposeGlyphCache();
     _slide.removeListener(_reportPillProgress);
     _physics.dispose();
     _physicsFrame.dispose();
@@ -228,6 +237,43 @@ class FloatingDockState extends State<FloatingDock>
     _lift.dispose();
     _edge.dispose();
     super.dispose();
+  }
+
+  void _disposeGlyphCache() {
+    for (final entry in _cachedGlyphs) {
+      entry.dispose();
+    }
+    _cachedGlyphs = const <_LensGlyphEntry>[];
+    _cachedGlyphPrimaryColor = null;
+    _cachedGlyphItems = null;
+    _cachedGlyphRects = null;
+  }
+
+  List<_LensGlyphEntry> _resolveGlyphs(Color primaryColor) {
+    final count = math.min(widget.items.length, _rects.length);
+    if (_cachedGlyphPrimaryColor == primaryColor &&
+        listEquals(_cachedGlyphItems, widget.items) &&
+        identical(_cachedGlyphRects, _rects) &&
+        _cachedGlyphs.length == count) {
+      return _cachedGlyphs;
+    }
+    _disposeGlyphCache();
+    final entries = <_LensGlyphEntry>[
+      for (var i = 0; i < count; i++)
+        _LensGlyphEntry.layout(
+          item: widget.items[i],
+          itemRect: _rects[i],
+          primaryColor: primaryColor,
+        ),
+    ];
+    _cachedGlyphs = entries;
+    _cachedGlyphPrimaryColor = primaryColor;
+    _cachedGlyphItems = List<FloatingDockItem>.of(
+      widget.items,
+      growable: false,
+    );
+    _cachedGlyphRects = _rects;
+    return entries;
   }
 
   void _syncKeys() {
@@ -245,6 +291,7 @@ class FloatingDockState extends State<FloatingDock>
   /// 编程式平滑滑动到指定项（例如点击通知气泡时由外壳驱动）。
   void animateToIndex(int target) {
     if (target < 0 || target >= widget.items.length) return;
+    widget.onTargetIndexHint?.call(target);
     if (_rects.length != widget.items.length) {
       _preview = target;
       return;
@@ -521,9 +568,10 @@ class FloatingDockState extends State<FloatingDock>
   /// 指针按下（还没拖）：透镜鼓起并立刻滑向指针；同时页面开始跟着走。
   void _onPressDown(DragDownDetails details) {
     if (_rects.length != widget.items.length) return;
-    widget.onPressStart?.call();
     final double x = _clampX(_rawLocalX(details.globalPosition));
     final int target = _indexAt(x);
+    widget.onTargetIndexHint?.call(target);
+    widget.onPressStart?.call();
     if (target != _preview) _hapticTick();
     setState(() {
       _pressed = true;
@@ -539,7 +587,10 @@ class FloatingDockState extends State<FloatingDock>
     _rawDragX = _rawLocalX(details.globalPosition);
     final double x = _clampX(_rawDragX);
     final int nextPreview = _indexAt(x);
-    if (nextPreview != _preview) _hapticTick();
+    if (nextPreview != _preview) {
+      _hapticTick();
+      widget.onTargetIndexHint?.call(nextPreview);
+    }
     // 透镜从它当前所在的位置开始追手指，而不是瞬移到手指下。
     final double startX = _livePillRect.center.dx;
     setState(() {
@@ -563,6 +614,7 @@ class FloatingDockState extends State<FloatingDock>
     final int nextPreview = _indexAt(x);
     if (nextPreview != _preview) {
       _hapticTick();
+      widget.onTargetIndexHint?.call(nextPreview);
       setState(() => _preview = nextPreview);
     }
     _dragX = x;
@@ -746,61 +798,26 @@ class FloatingDockState extends State<FloatingDock>
                       ),
                     );
                   },
-                  child: Stack(
-                    key: _stackKey,
-                    // 透镜鼓起时比 dock 还高，不能被裁掉。
-                    clipBehavior: Clip.none,
-                    // 必须显式居中：Stack 默认 topStart，按钮会被顶到胶囊上沿。
-                    alignment: Alignment.center,
-                    children: <Widget>[
-                      Positioned.fill(
-                        child: IgnorePointer(
-                          child: AnimatedBuilder(
-                            animation: Listenable.merge(<Listenable>[
-                              _slide,
-                              _lift,
-                              _physicsFrame,
-                            ]),
-                            builder: (context, _) {
-                              final base = _livePillRect;
-                              if (!_isValidLensRect(base)) {
-                                return const SizedBox.shrink();
-                              }
-                              return CustomPaint(
-                                painter: _LensBackdropPainter(
-                                  rect: _lensRect(base, _lift.value, _stretch),
-                                  lift: _lift.value.clamp(0.0, 1.0),
-                                  // 必须先与纯白底色预混合，避免 Color.lerp 在半透插值中段产生暗灰蓝色阶下陷（变深→变浅）。
-                                  restColor: Color.alphaBlend(
-                                    scheme.primary.withValues(alpha: 0.11),
-                                    scheme.surfaceContainerLowest,
-                                  ),
-                                  lensColor: Color.alphaBlend(
-                                    scheme.primary.withValues(alpha: 0.04),
-                                    scheme.surfaceContainerLowest,
-                                  ).withValues(alpha: 0.92),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                      AnimatedBuilder(
+                  child: Builder(
+                    builder: (context) {
+                      // 必须先与纯白底色预混合，避免 Color.lerp 在半透插值中段产生暗灰蓝色阶下陷（变深→变浅）。
+                      final restColor = Color.alphaBlend(
+                        scheme.primary.withValues(alpha: 0.11),
+                        scheme.surfaceContainerLowest,
+                      );
+                      final lensColor = Color.alphaBlend(
+                        scheme.primary.withValues(alpha: 0.04),
+                        scheme.surfaceContainerLowest,
+                      ).withValues(alpha: 0.92);
+                      final rimColor = scheme.primary.withValues(alpha: 0.22);
+                      final glyphs = _resolveGlyphs(scheme.primary);
+
+                      return AnimatedBuilder(
                         animation: Listenable.merge(<Listenable>[
                           _slide,
                           _lift,
                           _physicsFrame,
                         ]),
-                        builder: (context, child) {
-                          final base = _livePillRect;
-                          final lensRect = _isValidLensRect(base)
-                              ? _lensRect(base, _lift.value, _stretch)
-                              : Rect.zero;
-                          return ClipPath(
-                            clipper: _OutsideLensClipper(rect: lensRect),
-                            child: child,
-                          );
-                        },
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
@@ -818,40 +835,67 @@ class FloatingDockState extends State<FloatingDock>
                             ],
                           ],
                         ),
-                      ),
-                      Positioned.fill(
-                        child: IgnorePointer(
-                          child: AnimatedBuilder(
-                            animation: Listenable.merge(<Listenable>[
-                              _slide,
-                              _lift,
-                              _physicsFrame,
-                            ]),
-                            builder: (context, _) {
-                              final base = _livePillRect;
-                              if (!_isValidLensRect(base)) {
-                                return const SizedBox.shrink();
-                              }
-                              return CustomPaint(
-                                painter: _LensForegroundPainter(
-                                  rect: _lensRect(base, _lift.value, _stretch),
-                                  lift: _lift.value.clamp(0.0, 1.0),
-                                  items: widget.items,
-                                  itemRects: List<Rect>.of(
-                                    _rects,
-                                    growable: false,
-                                  ),
-                                  primaryColor: scheme.primary,
-                                  rimColor: scheme.primary.withValues(
-                                    alpha: 0.22,
+                        builder: (context, child) {
+                          final base = _livePillRect;
+                          final valid = _isValidLensRect(base);
+                          final lensRect = valid
+                              ? _lensRect(base, _lift.value, _stretch)
+                              : Rect.zero;
+                          final Path lensPath = valid
+                              ? _buildLensPath(lensRect)
+                              : Path();
+                          final double liftClamped = _lift.value.clamp(
+                            0.0,
+                            1.0,
+                          );
+
+                          return Stack(
+                            key: _stackKey,
+                            // 透镜鼓起时比 dock 还高，不能被裁掉。
+                            clipBehavior: Clip.none,
+                            // 必须显式居中：Stack 默认 topStart，按钮会被顶到胶囊上沿。
+                            alignment: Alignment.center,
+                            children: <Widget>[
+                              if (valid)
+                                Positioned.fill(
+                                  child: IgnorePointer(
+                                    child: CustomPaint(
+                                      painter: _LensBackdropPainter(
+                                        rect: lensRect,
+                                        path: lensPath,
+                                        lift: liftClamped,
+                                        restColor: restColor,
+                                        lensColor: lensColor,
+                                      ),
+                                    ),
                                   ),
                                 ),
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                    ],
+                              ClipPath(
+                                clipper: _OutsideLensClipper(
+                                  rect: lensRect,
+                                  path: lensPath,
+                                ),
+                                child: child,
+                              ),
+                              if (valid)
+                                Positioned.fill(
+                                  child: IgnorePointer(
+                                    child: CustomPaint(
+                                      painter: _LensForegroundPainter(
+                                        rect: lensRect,
+                                        path: lensPath,
+                                        lift: liftClamped,
+                                        glyphs: glyphs,
+                                        rimColor: rimColor,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          );
+                        },
+                      );
+                    },
                   ),
                 ),
               ),
@@ -880,9 +924,10 @@ Path _buildLensPath(Rect rect) {
 
 /// 反向裁剪底层普通图标/文字：透镜区域内部完全掏空，避免与透镜层主色放大内容重影。
 class _OutsideLensClipper extends CustomClipper<Path> {
-  _OutsideLensClipper({required this.rect});
+  _OutsideLensClipper({required this.rect, required this.path});
 
   final Rect rect;
+  final Path path;
 
   @override
   Path getClip(Size size) {
@@ -895,7 +940,7 @@ class _OutsideLensClipper extends CustomClipper<Path> {
     return Path()
       ..fillType = PathFillType.evenOdd
       ..addRect(outer)
-      ..addPath(_buildLensPath(rect), Offset.zero);
+      ..addPath(path, Offset.zero);
   }
 
   @override
@@ -907,12 +952,14 @@ class _OutsideLensClipper extends CustomClipper<Path> {
 class _LensBackdropPainter extends CustomPainter {
   _LensBackdropPainter({
     required this.rect,
+    required this.path,
     required this.lift,
     required this.restColor,
     required this.lensColor,
   });
 
   final Rect rect;
+  final Path path;
   final double lift;
   final Color restColor;
   final Color lensColor;
@@ -922,7 +969,6 @@ class _LensBackdropPainter extends CustomPainter {
     if (!_isValidLensRect(rect)) {
       return;
     }
-    final path = _buildLensPath(rect);
     final double elev = Curves.easeOut.transform(lift.clamp(0.0, 1.0));
     canvas.drawPath(
       path,
@@ -938,23 +984,92 @@ class _LensBackdropPainter extends CustomPainter {
       oldDelegate.lensColor != lensColor;
 }
 
+/// 预排版缓存的透镜单项字形与标签绘制数据，避免每次动画帧重复创建与排版 [TextPainter]。
+class _LensGlyphEntry {
+  _LensGlyphEntry._({
+    required this.itemRect,
+    required this.iconPainter,
+    required this.labelPainter,
+    required this.iconOffset,
+    required this.labelOffset,
+  });
+
+  factory _LensGlyphEntry.layout({
+    required FloatingDockItem item,
+    required Rect itemRect,
+    required Color primaryColor,
+  }) {
+    final iconPainter = TextPainter(
+      text: TextSpan(
+        text: String.fromCharCode(item.activeIcon.codePoint),
+        style: TextStyle(
+          fontFamily: item.activeIcon.fontFamily,
+          package: item.activeIcon.fontPackage,
+          fontSize: 20,
+          height: 1.0,
+          color: primaryColor,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final labelPainter = TextPainter(
+      text: TextSpan(
+        text: item.label,
+        style: TextStyle(
+          fontSize: 11,
+          height: 1.15,
+          color: primaryColor,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+    )..layout();
+
+    final double contentHeight = 20.0 + 2.0 + labelPainter.height;
+    final double topY = itemRect.center.dy - contentHeight / 2;
+    return _LensGlyphEntry._(
+      itemRect: itemRect,
+      iconPainter: iconPainter,
+      labelPainter: labelPainter,
+      iconOffset: Offset(
+        itemRect.center.dx - iconPainter.width / 2,
+        topY + (20.0 - iconPainter.height) / 2,
+      ),
+      labelOffset: Offset(
+        itemRect.center.dx - labelPainter.width / 2,
+        topY + 20.0 + 2.0,
+      ),
+    );
+  }
+
+  final Rect itemRect;
+  final TextPainter iconPainter;
+  final TextPainter labelPainter;
+  final Offset iconOffset;
+  final Offset labelOffset;
+
+  void dispose() {
+    iconPainter.dispose();
+    labelPainter.dispose();
+  }
+}
+
 /// 液态透镜前景层：在连续圆角胶囊边界内裁剪绘制主色图标与文字（以各自中心原地放大，不随透镜横向漂移），
 /// 并在外缘叠加干净的细描边（无模糊高光带）。
 class _LensForegroundPainter extends CustomPainter {
   _LensForegroundPainter({
     required this.rect,
+    required this.path,
     required this.lift,
-    required this.items,
-    required this.itemRects,
-    required this.primaryColor,
+    required this.glyphs,
     required this.rimColor,
   });
 
   final Rect rect;
+  final Path path;
   final double lift;
-  final List<FloatingDockItem> items;
-  final List<Rect> itemRects;
-  final Color primaryColor;
+  final List<_LensGlyphEntry> glyphs;
   final Color rimColor;
 
   @override
@@ -962,7 +1077,6 @@ class _LensForegroundPainter extends CustomPainter {
     if (!_isValidLensRect(rect)) {
       return;
     }
-    final path = _buildLensPath(rect);
     final double elev = Curves.easeOut.transform(lift.clamp(0.0, 1.0));
     final double zoom = 1.0 + 0.28 * elev;
 
@@ -970,57 +1084,17 @@ class _LensForegroundPainter extends CustomPainter {
     canvas.save();
     canvas.clipPath(path);
 
-    final int count = math.min(items.length, itemRects.length);
-    for (var i = 0; i < count; i++) {
-      final itemRect = itemRects[i];
-      if (!_isValidLensRect(itemRect)) continue;
-      final item = items[i];
-      final iconPainter = TextPainter(
-        text: TextSpan(
-          text: String.fromCharCode(item.activeIcon.codePoint),
-          style: TextStyle(
-            fontFamily: item.activeIcon.fontFamily,
-            package: item.activeIcon.fontPackage,
-            fontSize: 20,
-            height: 1.0,
-            color: primaryColor,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      final labelPainter = TextPainter(
-        text: TextSpan(
-          text: item.label,
-          style: TextStyle(
-            fontSize: 11,
-            height: 1.15,
-            color: primaryColor,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-        maxLines: 1,
-      )..layout();
-
-      final double contentHeight = 20.0 + 2.0 + labelPainter.height;
-      final double topY = itemRect.center.dy - contentHeight / 2;
+    for (final entry in glyphs) {
+      final itemRect = entry.itemRect;
+      if (!_isValidLensRect(itemRect) || !itemRect.overlaps(rect)) continue;
 
       canvas.save();
       final Offset pivot = itemRect.center;
       canvas.translate(pivot.dx, pivot.dy);
       canvas.scale(zoom, zoom);
       canvas.translate(-pivot.dx, -pivot.dy);
-      iconPainter.paint(
-        canvas,
-        Offset(
-          itemRect.center.dx - iconPainter.width / 2,
-          topY + (20.0 - iconPainter.height) / 2,
-        ),
-      );
-      labelPainter.paint(
-        canvas,
-        Offset(itemRect.center.dx - labelPainter.width / 2, topY + 20.0 + 2.0),
-      );
+      entry.iconPainter.paint(canvas, entry.iconOffset);
+      entry.labelPainter.paint(canvas, entry.labelOffset);
       canvas.restore();
     }
     canvas.restore();
@@ -1042,10 +1116,8 @@ class _LensForegroundPainter extends CustomPainter {
   bool shouldRepaint(covariant _LensForegroundPainter oldDelegate) =>
       oldDelegate.rect != rect ||
       oldDelegate.lift != lift ||
-      oldDelegate.primaryColor != primaryColor ||
       oldDelegate.rimColor != rimColor ||
-      !listEquals(oldDelegate.items, items) ||
-      !listEquals(oldDelegate.itemRects, itemRects);
+      !identical(oldDelegate.glyphs, glyphs);
 }
 
 /// 单个按钮（图标在上、文字在下），底层始终保持 1.0× 中性色，

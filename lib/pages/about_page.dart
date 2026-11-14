@@ -175,9 +175,8 @@ class _AboutPageState extends State<AboutPage> {
           body: ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
             children: [
-              // 顶部头部卡片：App 图标、标题、当前版本与内联「检查更新」按钮 (FlClash 风格)
+              // 顶部头部卡片：App 图标、标题、当前版本与内联「检查更新」按钮
               Card(
-                elevation: 0.8,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(20),
                 ),

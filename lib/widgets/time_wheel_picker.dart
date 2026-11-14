@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 
 import '../src/term_calendar.dart';
 import '../src/timetable.dart';
+import 'tactile_button.dart';
 
 /// 弹出时间轮，返回从 00:00 起的分钟数；取消返回 null。
 Future<int?> showTimeWheel(
@@ -264,9 +265,10 @@ class _WheelShell extends StatelessWidget {
           children: <Widget>[
             Row(
               children: <Widget>[
-                TextButton(
+                TactileActionButton(
+                  variant: TactileActionVariant.text,
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('取消'),
+                  label: const Text('取消'),
                 ),
                 Expanded(
                   child: Text(
@@ -275,9 +277,10 @@ class _WheelShell extends StatelessWidget {
                     style: theme.textTheme.titleSmall,
                   ),
                 ),
-                TextButton(
+                TactileActionButton(
+                  variant: TactileActionVariant.text,
                   onPressed: confirmEnabled ? onConfirm : null,
-                  child: const Text('确定'),
+                  label: const Text('确定'),
                 ),
               ],
             ),
@@ -765,9 +768,10 @@ class _CalibrateSheetState extends State<_CalibrateSheet> {
       title: '校准当前周次',
       suffix: suffix,
       onConfirm: () => Navigator.of(context).pop(_week),
-      extraAction: TextButton(
+      extraAction: TactileActionButton(
+        variant: TactileActionVariant.text,
         onPressed: () => Navigator.of(context).pop(0),
-        child: const Text('恢复默认估算'),
+        label: const Text('恢复默认估算'),
       ),
       wheels: _Wheel(
         labels: <String>[for (var w = 1; w <= widget.max; w++) '第 $w 周'],

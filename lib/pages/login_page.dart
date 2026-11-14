@@ -211,7 +211,8 @@ class _LoginPageState extends State<LoginPage> {
                           ),
                         ),
                         const SizedBox(height: 10),
-                        TextButton.icon(
+                        TactileActionButton(
+                          variant: TactileActionVariant.text,
                           onPressed: () =>
                               setState(() => _advanced = !_advanced),
                           icon: AnimatedRotation(

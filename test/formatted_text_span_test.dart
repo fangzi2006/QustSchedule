@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/pages/changelog_page.dart';
 import 'package:qustschedule/src/app_version.dart';
 import 'package:qustschedule/src/formatted_text_span.dart';
+import 'package:qustschedule/theme/app_theme.dart';
 
 void main() {
   group('buildFormattedTextSpan 单元测试', () {
@@ -230,7 +231,7 @@ void main() {
       expect(foundCode, isTrue);
     });
 
-    testWidgets('当前版本卡片展示高对比纯白底色、2.0 阴影与专属胶囊徽章', (tester) async {
+    testWidgets('当前版本卡片统一零阴影纯白卡片主题、主色边框与专属胶囊徽章', (tester) async {
       final currentVer = appVersion != '-' ? appVersion : '1.5.0';
       final mockReleases = [
         ReleaseLog(
@@ -243,12 +244,34 @@ void main() {
         ),
       ];
 
+      final theme = buildLightTheme();
       await tester.pumpWidget(
-        MaterialApp(home: ChangelogPage(initialReleases: mockReleases)),
+        MaterialApp(
+          theme: theme,
+          home: ChangelogPage(initialReleases: mockReleases),
+        ),
       );
 
       final card = tester.widget<Card>(find.byType(Card).first);
-      expect(card.color, isNotNull);
+      expect(card.elevation, isNull);
+      expect(card.color, isNull);
+      final shape = card.shape as RoundedRectangleBorder;
+      final expectsCurrent = appVersion != '-';
+      expect(shape.side.width, expectsCurrent ? 1.5 : 1.0);
+      if (expectsCurrent) {
+        expect(shape.side.color, theme.colorScheme.primary);
+        expect(find.text('当前版本'), findsOneWidget);
+      }
+      final material = tester.widget<Material>(
+        find
+            .descendant(
+              of: find.byType(Card).first,
+              matching: find.byType(Material),
+            )
+            .first,
+      );
+      expect(material.elevation, 0);
+      expect(material.color, theme.colorScheme.surfaceContainerLowest);
       expect(find.text('v$currentVer'), findsOneWidget);
       expect(find.textContaining('核心亮点速览'), findsOneWidget);
     });

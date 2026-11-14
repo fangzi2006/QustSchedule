@@ -117,13 +117,15 @@ class SchoolAddressPage extends StatelessWidget {
           '$address',
         ),
         actions: <Widget>[
-          TextButton(
+          TactileActionButton(
+            variant: TactileActionVariant.text,
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
+            label: const Text('取消'),
           ),
-          FilledButton(
+          TactileActionButton(
+            variant: TactileActionVariant.filled,
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('切换'),
+            label: const Text('切换'),
           ),
         ],
       ),
@@ -153,13 +155,15 @@ class SchoolAddressPage extends StatelessWidget {
         title: const Text('删除教务地址'),
         content: Text(address),
         actions: <Widget>[
-          TextButton(
+          TactileActionButton(
+            variant: TactileActionVariant.text,
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
+            label: const Text('取消'),
           ),
-          FilledButton(
+          TactileActionButton(
+            variant: TactileActionVariant.filled,
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('删除'),
+            label: const Text('删除'),
           ),
         ],
       ),
@@ -244,11 +248,16 @@ class _AddressDialogState extends State<_AddressDialog> {
           ],
         ),
         actions: <Widget>[
-          TextButton(
+          TactileActionButton(
+            variant: TactileActionVariant.text,
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
+            label: const Text('取消'),
           ),
-          FilledButton(onPressed: _submit, child: const Text('添加')),
+          TactileActionButton(
+            variant: TactileActionVariant.filled,
+            onPressed: _submit,
+            label: const Text('添加'),
+          ),
         ],
       ),
     );

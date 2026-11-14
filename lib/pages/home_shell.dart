@@ -162,15 +162,12 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
-  void _ensureLazyPages() {
-    if (_academicPage != null && _settingsPage != null) return;
-    setState(() {
-      _academicPage ??= AcademicPage(model: widget.model);
-      _settingsPage ??= SettingsPage(
-        model: widget.model,
-        reminders: widget.reminders,
-      );
-    });
+  void _ensurePageForIndex(int index) {
+    if (index == 1) {
+      _ensureAcademicPage();
+    } else if (index == 2) {
+      _ensureSettingsPage();
+    }
   }
 
   final GlobalKey<_ShellPagerState> _pagerKey = GlobalKey<_ShellPagerState>();
@@ -207,8 +204,8 @@ class _HomeShellState extends State<HomeShell> {
               index: _index,
               items: _items,
               onPillProgress: _onPillProgress,
-              // 按下 dock 就把懒加载页面建好：等滑到一半再建，那一帧必卡。
-              onPressStart: _ensureLazyPages,
+              // 按下或滑动到哪一页只懒建对应目标页，避免首触同帧双页并发构建。
+              onTargetIndexHint: _ensurePageForIndex,
             ),
           ),
           // 全局系统状态弹窗挂在外壳顶层：登录中 / 重新登录 / 连接中 / 报错都在这里出。

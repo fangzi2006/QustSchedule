@@ -393,9 +393,10 @@ class _ReminderSettingsCardState extends State<_ReminderSettingsCard> {
                     padding: const EdgeInsets.fromLTRB(56, 0, 16, 8),
                     child: Align(
                       alignment: Alignment.centerLeft,
-                      child: TextButton(
+                      child: TactileActionButton(
+                        variant: TactileActionVariant.text,
                         onPressed: widget.onStopFluid,
-                        child: const Text('立即收起卡片'),
+                        label: const Text('立即收起卡片'),
                       ),
                     ),
                   );
@@ -644,7 +645,11 @@ class _PermissionTile extends StatelessWidget {
       leading: Icon(icon, size: 20),
       title: Text(title),
       subtitle: Text(value, style: TextStyle(color: color)),
-      trailing: TextButton(onPressed: onAction, child: Text(actionLabel)),
+      trailing: TactileActionButton(
+        variant: TactileActionVariant.text,
+        onPressed: onAction,
+        label: Text(actionLabel),
+      ),
     );
   }
 }

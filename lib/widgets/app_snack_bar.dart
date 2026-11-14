@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 import 'floating_dock.dart';
+import 'tactile_button.dart';
 
 /// 统一 SnackBar 语义类型。
 enum AppSnackBarType {
@@ -189,21 +190,20 @@ class _AppSnackBarPill extends StatelessWidget {
                     Flexible(child: Text(message, style: messageStyle)),
                     if (action != null) ...<Widget>[
                       const SizedBox(width: 6),
-                      TextButton(
-                        style: TextButton.styleFrom(
-                          minimumSize: Size.zero,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 6,
-                          ),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          foregroundColor: action!.textColor ?? scheme.primary,
+                      TactileActionButton(
+                        variant: TactileActionVariant.text,
+                        minimumSize: Size.zero,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
                         ),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        foregroundColor: action!.textColor ?? scheme.primary,
                         onPressed: () {
                           ScaffoldMessenger.of(context).hideCurrentSnackBar();
                           action!.onPressed();
                         },
-                        child: Text(action!.label, style: actionLabelStyle),
+                        label: Text(action!.label, style: actionLabelStyle),
                       ),
                     ],
                   ],

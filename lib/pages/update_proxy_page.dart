@@ -90,13 +90,15 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
         title: const Text('删除代理'),
         content: Text('确定要删除加速代理「$url」吗？'),
         actions: [
-          TextButton(
+          TactileActionButton(
+            variant: TactileActionVariant.text,
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('取消'),
+            label: const Text('取消'),
           ),
-          FilledButton(
+          TactileActionButton(
+            variant: TactileActionVariant.filled,
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('删除'),
+            label: const Text('删除'),
           ),
         ],
       ),
@@ -231,7 +233,6 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
     final isCustom = proxy.isNotEmpty && !presetUpdateProxies.contains(proxy);
 
     return Card(
-      elevation: isSelected ? 1.5 : 0.5,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
         side: isSelected
@@ -492,11 +493,16 @@ class _AddProxyDialogState extends State<_AddProxyDialog> {
         ],
       ),
       actions: [
-        TextButton(
+        TactileActionButton(
+          variant: TactileActionVariant.text,
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('取消'),
+          label: const Text('取消'),
         ),
-        FilledButton(onPressed: _submit, child: const Text('添加')),
+        TactileActionButton(
+          variant: TactileActionVariant.filled,
+          onPressed: _submit,
+          label: const Text('添加'),
+        ),
       ],
     );
   }

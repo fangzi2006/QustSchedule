@@ -15,6 +15,7 @@
 /// 因此样式里统一显式 `letterSpacing: 0`，并把 merge 后的结果同时交给两边。
 library;
 
+import 'dart:collection' show LinkedHashMap;
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -57,6 +58,14 @@ class CourseBlock extends StatelessWidget {
     fontWeight: FontWeight.w500,
     letterSpacing: 0,
   );
+
+  @visibleForTesting
+  static int get debugBlockPlanSolveCountForTest => _BlockPlan.debugSolveCount;
+
+  @visibleForTesting
+  static void clearBlockPlanCacheForTest() {
+    _BlockPlan.clearCache();
+  }
 
   // 教师 / 地点比课名再小一号：课名是主信息，教师地点是次信息。
   static const TextStyle detailStyle = TextStyle(
@@ -104,6 +113,8 @@ class CourseBlock extends StatelessWidget {
     final scaler = MediaQuery.textScalerOf(context);
     final textDirection = Directionality.of(context);
     final locale = Localizations.maybeLocaleOf(context);
+    final scheme = Theme.of(context).colorScheme;
+    final conflictColor = conflict ? AppColors.of(context).conflictBadge : null;
 
     return Material(
       color: color.background,
@@ -191,12 +202,10 @@ class CourseBlock extends StatelessWidget {
                   width: 6,
                   height: 6,
                   decoration: BoxDecoration(
-                    color: AppColors.of(context).conflictBadge,
+                    color: conflictColor,
                     shape: BoxShape.circle,
                     border: Border.all(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .surfaceContainerLowest,
+                      color: scheme.surfaceContainerLowest,
                       width: 1,
                     ),
                   ),
@@ -232,6 +241,16 @@ class _BlockPlan {
 
   /// 仅用于消除 IEEE 754 双精度浮点加法的尾数误差（如 30.000000000000004 > 30.0）。
   static const double _epsilon = 1e-4;
+  static const int _maxCacheEntries = 512;
+  static const Color _cacheDummyColor = Color(0xFF000000);
+  static final LinkedHashMap<_BlockPlanCacheKey, _BlockPlan> _cache =
+      LinkedHashMap<_BlockPlanCacheKey, _BlockPlan>();
+  static int debugSolveCount = 0;
+
+  static void clearCache() {
+    _cache.clear();
+    debugSolveCount = 0;
+  }
 
   factory _BlockPlan.solve({
     required String title,
@@ -253,6 +272,56 @@ class _BlockPlan {
     final teacherText = teacher?.trim() ?? '';
     final locationText = location.trim();
 
+    final key = _BlockPlanCacheKey(
+      title: titleText,
+      teacher: teacherText,
+      location: locationText,
+      widthMilli: (width * 1000).round(),
+      heightMilli: (height * 1000).round(),
+      scaler: scaler,
+      textDirection: textDirection,
+      locale: locale,
+      titleLayoutStyle: titleStyle.copyWith(color: _cacheDummyColor),
+      detailLayoutStyle: detailStyle.copyWith(color: _cacheDummyColor),
+    );
+    final cached = _cache.remove(key);
+    if (cached != null) {
+      _cache[key] = cached;
+      return cached;
+    }
+
+    debugSolveCount++;
+    final solved = _BlockPlan._compute(
+      titleText: titleText,
+      teacherText: teacherText,
+      locationText: locationText,
+      width: width,
+      height: height,
+      scaler: scaler,
+      textDirection: textDirection,
+      locale: locale,
+      titleStyle: titleStyle,
+      detailStyle: detailStyle,
+    );
+    if (_cache.length >= _maxCacheEntries) {
+      _cache.remove(_cache.keys.first);
+    }
+    _cache[key] = solved;
+    return solved;
+  }
+
+  factory _BlockPlan._compute({
+    required String titleText,
+    required String teacherText,
+    required String locationText,
+    required double width,
+    required double height,
+    required TextScaler scaler,
+    required TextDirection textDirection,
+    required Locale? locale,
+    required TextStyle titleStyle,
+    required TextStyle detailStyle,
+  }) {
     final titleMeasure = titleText.isEmpty
         ? (lines: 0, lineHeight: 0.0)
         : _measure(titleText, titleStyle, width, scaler, textDirection, locale);
@@ -430,4 +499,59 @@ class _BlockPlan {
     painter.dispose();
     return (lines: lines, lineHeight: lineHeight);
   }
+}
+
+final class _BlockPlanCacheKey {
+  const _BlockPlanCacheKey({
+    required this.title,
+    required this.teacher,
+    required this.location,
+    required this.widthMilli,
+    required this.heightMilli,
+    required this.scaler,
+    required this.textDirection,
+    required this.locale,
+    required this.titleLayoutStyle,
+    required this.detailLayoutStyle,
+  });
+
+  final String title;
+  final String teacher;
+  final String location;
+  final int widthMilli;
+  final int heightMilli;
+  final TextScaler scaler;
+  final TextDirection textDirection;
+  final Locale? locale;
+  final TextStyle titleLayoutStyle;
+  final TextStyle detailLayoutStyle;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is _BlockPlanCacheKey &&
+          other.title == title &&
+          other.teacher == teacher &&
+          other.location == location &&
+          other.widthMilli == widthMilli &&
+          other.heightMilli == heightMilli &&
+          other.scaler == scaler &&
+          other.textDirection == textDirection &&
+          other.locale == locale &&
+          other.titleLayoutStyle == titleLayoutStyle &&
+          other.detailLayoutStyle == detailLayoutStyle;
+
+  @override
+  int get hashCode => Object.hash(
+    title,
+    teacher,
+    location,
+    widthMilli,
+    heightMilli,
+    scaler,
+    textDirection,
+    locale,
+    titleLayoutStyle,
+    detailLayoutStyle,
+  );
 }

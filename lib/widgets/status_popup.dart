@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 
 import '../src/app_model.dart';
 import '../theme/app_theme.dart';
+import 'tactile_button.dart';
 
 class StatusPopup extends StatelessWidget {
   const StatusPopup({
@@ -285,15 +286,14 @@ class _Bubble extends StatelessWidget {
                   _TinyAction(label: '关闭', onTap: onDismiss),
                   if (canRetry) ...<Widget>[
                     const SizedBox(width: 4),
-                    FilledButton(
+                    TactileActionButton(
+                      variant: TactileActionVariant.filled,
                       onPressed: onRetry,
-                      style: FilledButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        minimumSize: const Size(0, 30),
-                        textStyle: const TextStyle(fontSize: 12),
-                      ),
-                      child: Text(retryLabel),
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      minimumSize: const Size(0, 30),
+                      textStyle: const TextStyle(fontSize: 12),
+                      label: Text(retryLabel),
                     ),
                   ],
                 ],
@@ -313,15 +313,14 @@ class _TinyAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return TextButton(
+    return TactileActionButton(
+      variant: TactileActionVariant.text,
       onPressed: onTap,
-      style: TextButton.styleFrom(
-        visualDensity: VisualDensity.compact,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        minimumSize: const Size(0, 30),
-        textStyle: const TextStyle(fontSize: 12),
-      ),
-      child: Text(label),
+      visualDensity: VisualDensity.compact,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      minimumSize: const Size(0, 30),
+      textStyle: const TextStyle(fontSize: 12),
+      label: Text(label),
     );
   }
 }

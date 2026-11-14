@@ -76,10 +76,48 @@ class ReschedulePage extends StatelessWidget {
               ),
             ],
           ),
-          floatingActionButton: FloatingActionButton.extended(
-            onPressed: () => _showAddSheet(context),
-            icon: const Icon(Icons.add_rounded),
-            label: const Text('添加调课'),
+          floatingActionButton: TactileSurfaceButton(
+            minSize: const Size(0, 48),
+            borderRadius: BorderRadius.circular(24),
+            filled: false,
+            onTap: () => _showAddSheet(context),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primaryContainer,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: <BoxShadow>[
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.12),
+                    blurRadius: 14,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 12,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Icon(
+                      Icons.add_rounded,
+                      size: 20,
+                      color: Theme.of(context).colorScheme.onPrimaryContainer,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '添加调课',
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: Theme.of(context).colorScheme.onPrimaryContainer,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
         );
       },
@@ -217,12 +255,14 @@ class _AddRescheduleSheetState extends State<_AddRescheduleSheet> {
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: <Widget>[
-              TextButton(
+              TactileActionButton(
+                variant: TactileActionVariant.text,
                 onPressed: () => Navigator.of(context).pop(),
-                child: const Text('取消'),
+                label: const Text('取消'),
               ),
               const SizedBox(width: 8),
-              FilledButton(
+              TactileActionButton(
+                variant: TactileActionVariant.filled,
                 onPressed: _same
                     ? null
                     : () {
@@ -245,7 +285,7 @@ class _AddRescheduleSheetState extends State<_AddRescheduleSheet> {
                         }
                         Navigator.of(context).pop();
                       },
-                child: const Text('确定'),
+                label: const Text('确定'),
               ),
             ],
           ),
