@@ -19,7 +19,8 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter/gestures.dart'
     show GestureBinding, PointerDeviceKind, kPrimaryButton;
 import 'package:flutter/material.dart';
-import 'package:flutter/physics.dart' show SpringDescription, SpringSimulation;
+import 'package:flutter/physics.dart'
+    show SpringDescription, SpringSimulation, Tolerance;
 import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
 import 'package:flutter/services.dart' show HapticFeedback;
 
@@ -272,6 +273,25 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     damping: 26.0,
   );
 
+  /// 容器宽度弹簧：敏捷舒展并带轻微 Q 弹过冲，视觉上率先打开横向空间。
+  static const SpringDescription _widthSpring = SpringDescription(
+    mass: 1.0,
+    stiffness: 320.0,
+    damping: 24.5,
+  );
+
+  /// 容器高度弹簧：略缓于宽度约 30ms，形成从触发按钮顺滑“涌出”的层次感。
+  static const SpringDescription _heightSpring = SpringDescription(
+    mass: 1.0,
+    stiffness: 250.0,
+    damping: 21.0,
+  );
+
+  static const Tolerance _morphTolerance = Tolerance(
+    distance: 1e-3,
+    velocity: 1e-2,
+  );
+
   /// 滑出菜单外松手后的整卡橡皮筋回弹弹簧。
   static const SpringDescription _rubberSpring = SpringDescription(
     mass: 1.0,
@@ -286,8 +306,16 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
 
   late final AnimationController _openAnim = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 240),
-    reverseDuration: const Duration(milliseconds: 170),
+    duration: const Duration(milliseconds: 350),
+    reverseDuration: const Duration(milliseconds: 230),
+  );
+  late final AnimationController _widthMorph = AnimationController.unbounded(
+    vsync: this,
+    value: 0.0,
+  );
+  late final AnimationController _heightMorph = AnimationController.unbounded(
+    vsync: this,
+    value: 0.0,
   );
   late final AnimationController _pillSlide = AnimationController.unbounded(
     vsync: this,
@@ -316,18 +344,6 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
   bool _openUp = false;
   bool _alignRight = false;
   bool _isScrollable = false;
-
-  static const Curve _morphOpenCurve = Cubic(0.18, 1.14, 0.32, 1.0);
-  static const Curve _morphCloseCurve = Curves.easeInCubic;
-
-  double _morphProgress(double rawT) {
-    final t = rawT.clamp(0.0, 1.0);
-    if (t == 0.0 || t == 1.0) return t;
-    final reverse = _openAnim.status == AnimationStatus.reverse;
-    return reverse
-        ? _morphCloseCurve.transform(t)
-        : _morphOpenCurve.transform(t);
-  }
 
   void _syncAnchorMorph() {
     if (!mounted) return;
@@ -369,6 +385,28 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     }
 
     _openAnim.forward();
+    unawaited(
+      _widthMorph.animateWith(
+        SpringSimulation(
+          _widthSpring,
+          0.0,
+          1.0,
+          0.0,
+          tolerance: _morphTolerance,
+        ),
+      ),
+    );
+    unawaited(
+      _heightMorph.animateWith(
+        SpringSimulation(
+          _heightSpring,
+          0.0,
+          1.0,
+          0.0,
+          tolerance: _morphTolerance,
+        ),
+      ),
+    );
   }
 
   void _attachGlobalPointerRouter() {
@@ -432,12 +470,21 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     }
   }
 
+  Rect _morphedCardRect(Rect target) {
+    final wx = _widthMorph.value.clamp(0.0, 1.15);
+    final hy = _heightMorph.value.clamp(0.0, 1.15);
+    return Rect.fromLTRB(
+      lerpDouble(widget.anchor.left, target.left, wx) ?? target.left,
+      lerpDouble(widget.anchor.top, target.top, hy) ?? target.top,
+      lerpDouble(widget.anchor.right, target.right, wx) ?? target.right,
+      lerpDouble(widget.anchor.bottom, target.bottom, hy) ?? target.bottom,
+    );
+  }
+
   Rect get _currentVisualMenuRect {
     final target = _targetRect;
     if (target == null) return widget.anchor;
-    final morphT = _morphProgress(_openAnim.value);
-    final rect = Rect.lerp(widget.anchor, target, morphT) ?? target;
-    return rect.shift(_rubberOffset.value);
+    return _morphedCardRect(target).shift(_rubberOffset.value);
   }
 
   void _syncRubberOffset() {
@@ -481,6 +528,8 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     _rubberOffset.dispose();
     _scrollController.dispose();
     _openAnim.dispose();
+    _widthMorph.dispose();
+    _heightMorph.dispose();
     _pillSlide.dispose();
     _pillPresence.dispose();
     _pillStretch.dispose();
@@ -739,6 +788,20 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     _committed = true;
     _detachGlobalPointerRouter();
     widget.onDismissed(picked);
+    unawaited(
+      _widthMorph.animateTo(
+        0.0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeInCubic,
+      ),
+    );
+    unawaited(
+      _heightMorph.animateTo(
+        0.0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeInCubic,
+      ),
+    );
     _openAnim.reverse().whenCompleteOrCancel(() {
       widget.onEntryDisposeReady();
     });
@@ -865,10 +928,10 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
                 final stretch = _pillStretch.value.clamp(0.0, 1.0);
                 final scale = 0.90 + 0.10 * presence;
                 final insetRect = Rect.fromLTRB(
-                  rect.left + 5,
-                  rect.top + 2.5,
-                  rect.right - 5,
-                  rect.bottom - 2.5,
+                  rect.left + 6,
+                  rect.top + 3,
+                  rect.right - 6,
+                  rect.bottom - 3,
                 );
                 final stretched = Rect.fromCenter(
                   center: insetRect.center,
@@ -890,13 +953,16 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
           animation: _openAnim,
           builder: (context, _) {
             final t = _openAnim.value.clamp(0.0, 1.0);
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                for (var i = 0; i < widget.items.length; i++)
-                  _buildStaggeredItem(divider, i, t),
-              ],
+            return ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 168.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  for (var i = 0; i < widget.items.length; i++)
+                    _buildStaggeredItem(divider, i, t),
+                ],
+              ),
             );
           },
         ),
@@ -905,7 +971,7 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
 
     final innerContent = ConstrainedBox(
       constraints: BoxConstraints(
-        maxWidth: math.max(120.0, widget.overlaySize.width - 16.0),
+        maxWidth: math.max(168.0, widget.overlaySize.width - 16.0),
         maxHeight: widget.maxHeight,
       ),
       child: SingleChildScrollView(
@@ -943,10 +1009,10 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     final alignX = _alignRight ? 1.0 : -1.0;
     final align = Alignment(alignX, alignY);
 
-    final fadeAnim = CurvedAnimation(
+    final shellFade = CurvedAnimation(
       parent: _openAnim,
-      curve: const Interval(0.0, 0.42, curve: Curves.easeOut),
-      reverseCurve: const Interval(0.35, 1.0, curve: Curves.easeIn),
+      curve: const Interval(0.0, 0.18, curve: Curves.easeOut),
+      reverseCurve: const Interval(0.0, 0.30, curve: Curves.easeIn),
     );
 
     return Positioned.fill(
@@ -955,54 +1021,70 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
           AnimatedBuilder(
             animation: Listenable.merge(<Listenable>[
               _openAnim,
+              _widthMorph,
+              _heightMorph,
               _pressLift,
               _rubberOffset,
             ]),
             builder: (context, child) {
-              final t = _openAnim.value.clamp(0.0, 1.0);
-              final morphT = _morphProgress(t);
-              final clampedMorph = morphT.clamp(0.0, 1.0);
-              final currentRect =
-                  Rect.lerp(widget.anchor, targetRect, morphT) ?? targetRect;
+              final settledOpen =
+                  _openAnim.value >= 1.0 &&
+                  !_widthMorph.isAnimating &&
+                  !_heightMorph.isAnimating &&
+                  (_widthMorph.value - 1.0).abs() < 0.001 &&
+                  (_heightMorph.value - 1.0).abs() < 0.001;
+              final currentRect = _morphedCardRect(targetRect);
+              final avgMorph = ((_widthMorph.value + _heightMorph.value) * 0.5)
+                  .clamp(0.0, 1.0);
+              final heightClamped = _heightMorph.value.clamp(0.0, 1.0);
               final currentRadius =
-                  lerpDouble(widget.anchorRadius, 20.0, clampedMorph) ?? 20.0;
+                  lerpDouble(widget.anchorRadius, 20.0, avgMorph) ?? 20.0;
+              final contentScale =
+                  lerpDouble(0.86, 1.0, _heightMorph.value.clamp(0.0, 1.05)) ??
+                  1.0;
               final interactiveScale = 1.0 + 0.016 * _pressLift.value;
               final rubber = _rubberOffset.value;
+
+              final innerScaled = settledOpen
+                  ? child
+                  : Transform.scale(
+                      alignment: align,
+                      scale: contentScale,
+                      child: OverflowBox(
+                        alignment: align,
+                        minWidth: targetRect.width,
+                        maxWidth: targetRect.width,
+                        minHeight: targetRect.height,
+                        maxHeight: targetRect.height,
+                        child: child,
+                      ),
+                    );
 
               Widget card = Material(
                 color: scheme.surfaceContainerLowest,
                 surfaceTintColor: Colors.transparent,
-                elevation: 6 * clampedMorph,
+                elevation: 8 * heightClamped,
                 shadowColor: Colors.black.withValues(alpha: 0.16),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(currentRadius),
                   side: BorderSide(
                     color: scheme.outlineVariant.withValues(
-                      alpha: 0.38 - 0.14 * clampedMorph,
+                      alpha: 0.36 - 0.14 * avgMorph,
                     ),
                     width: 1.0,
                   ),
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: SizedBox(
-                  width: currentRect.width,
-                  height: currentRect.height,
-                  child: t >= 1.0
-                      ? child
-                      : OverflowBox(
-                          alignment: align,
-                          minWidth: targetRect.width,
-                          maxWidth: targetRect.width,
-                          minHeight: targetRect.height,
-                          maxHeight: targetRect.height,
-                          child: child,
-                        ),
+                  width: math.max(0.0, currentRect.width),
+                  height: math.max(0.0, currentRect.height),
+                  child: innerScaled,
                 ),
               );
 
               if ((interactiveScale - 1.0).abs() > 0.0005) {
                 card = Transform.scale(
-                  alignment: Alignment(alignX, alignY),
+                  alignment: align,
                   scale: interactiveScale,
                   child: card,
                 );
@@ -1014,10 +1096,10 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
               return Positioned(
                 left: currentRect.left,
                 top: currentRect.top,
-                width: currentRect.width,
-                height: currentRect.height,
+                width: math.max(0.0, currentRect.width),
+                height: math.max(0.0, currentRect.height),
                 child: FadeTransition(
-                  opacity: fadeAnim,
+                  opacity: shellFade,
                   child: KeyedSubtree(
                     key: _restBoxKey,
                     child: MouseRegion(
@@ -1047,15 +1129,15 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     );
   }
 
-  /// 单项错峰浮现：全部由当前帧 `t` 纯函数算出，任意时刻反转都能无跳变回退。
+  /// 单项错峰浮现：在容器展开约 20% 后依序滑入，任意时刻反转均可无跳变回退。
   Widget _buildStaggeredItem(DividerThemeData divider, int index, double t) {
     final item = widget.items[index];
     final step = index < 6 ? index : 6;
-    final start = step * 0.04;
-    final end = start + 0.65;
-    final raw = ((t - start) / (end - start)).clamp(0.0, 1.0);
+    final start = 0.14 + step * 0.06;
+    final end = math.min(1.0, start + 0.56);
+    final raw = ((t - start) / math.max(0.01, end - start)).clamp(0.0, 1.0);
     final itemT = Curves.easeOutCubic.transform(raw);
-    final dy = (1.0 - itemT) * (_openUp ? 5.0 : -5.0);
+    final dy = (1.0 - itemT) * (_openUp ? 10.0 : -10.0);
 
     final Widget child;
     if (item.isDivider) {
@@ -1097,7 +1179,7 @@ class _FallbackMeasureLayout extends SingleChildLayoutDelegate {
   @override
   BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
       BoxConstraints(
-        maxWidth: math.max(120.0, constraints.maxWidth - 16),
+        maxWidth: math.max(168.0, constraints.maxWidth - 16),
         maxHeight: math.max(120.0, constraints.maxHeight - 16),
       );
 
@@ -1183,37 +1265,46 @@ class _MenuTile<T> extends StatelessWidget {
               onTap();
             }
           : null,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            if (item.icon != null) ...<Widget>[
-              Transform.scale(
-                scale: hovered ? 1.08 : 1.0,
-                child: Icon(
-                  item.icon,
-                  size: 18,
-                  color: item.enabled
-                      ? (highlighted ? scheme.primary : scheme.onSurfaceVariant)
-                      : theme.hintColor,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 46),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          widthFactor: 1.0,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                if (item.icon != null) ...<Widget>[
+                  Transform.scale(
+                    scale: hovered ? 1.08 : 1.0,
+                    child: Icon(
+                      item.icon,
+                      size: 18,
+                      color: item.enabled
+                          ? (highlighted
+                                ? scheme.primary
+                                : scheme.onSurfaceVariant)
+                          : theme.hintColor,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                ],
+                Text(
+                  item.label,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: color,
+                    fontWeight: fontWeight,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 10),
-            ],
-            Text(
-              item.label,
-              style: TextStyle(
-                fontSize: 14,
-                color: color,
-                fontWeight: fontWeight,
-              ),
+                if (item.trailing != null) ...<Widget>[
+                  const SizedBox(width: 16),
+                  item.trailing!,
+                ],
+              ],
             ),
-            if (item.trailing != null) ...<Widget>[
-              const SizedBox(width: 16),
-              item.trailing!,
-            ],
-          ],
+          ),
         ),
       ),
     );

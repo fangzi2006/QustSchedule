@@ -64,20 +64,22 @@ class _AcademicPageState extends State<AcademicPage> {
                 serverCurrentTermId: model.terms?.currentId,
                 onSelected: (termId) => model.setAcademicTerm(termId),
               ),
-              IconButton(
-                icon: model.academicLoading
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.refresh_rounded),
-                tooltip: '刷新学业数据',
-                onPressed: model.academicLoading
-                    ? null
-                    : () => model.refreshAcademicData(),
+              Padding(
+                padding: const EdgeInsets.only(left: 6, right: 10),
+                child: TactileIconButton(
+                  icon: model.academicLoading
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh_rounded),
+                  tooltip: '刷新学业数据',
+                  onPressed: model.academicLoading
+                      ? null
+                      : () => model.refreshAcademicData(),
+                ),
               ),
-              const SizedBox(width: 4),
             ],
           ),
           body: Stack(

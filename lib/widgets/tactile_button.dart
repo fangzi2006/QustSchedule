@@ -46,16 +46,34 @@ class TactileSurfaceButton extends StatefulWidget {
   final bool filled;
   final String? tooltip;
 
-  /// 给内嵌 [IconButton] 使用的干净样式：关闭旧式水波纹与灰底阴影，保留无障碍与查找兼容性。
-  static ButtonStyle cleanIconButtonStyle(ColorScheme scheme) =>
-      IconButton.styleFrom(
-        splashFactory: NoSplash.splashFactory,
-        highlightColor: Colors.transparent,
-        hoverColor: Colors.transparent,
-        focusColor: Colors.transparent,
-        foregroundColor: scheme.onSurface,
-        disabledForegroundColor: scheme.onSurface.withValues(alpha: 0.34),
-      );
+  /// 给内嵌 [IconButton] 或 [BackButton] 使用的干净样式：关闭旧式水波纹与灰底叠加层，
+  /// 并对齐 36×36 触控盒尺寸，同时保留无障碍与单测句柄兼容性。
+  static ButtonStyle cleanIconButtonStyle(
+    ColorScheme scheme, {
+    Color? foregroundColor,
+    double size = 36,
+    double iconSize = 20,
+  }) {
+    final fg = foregroundColor ?? scheme.onSurface;
+    return IconButton.styleFrom(
+      splashFactory: NoSplash.splashFactory,
+      backgroundColor: Colors.transparent,
+      disabledBackgroundColor: Colors.transparent,
+      shadowColor: Colors.transparent,
+      highlightColor: Colors.transparent,
+      hoverColor: Colors.transparent,
+      focusColor: Colors.transparent,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      minimumSize: Size(size, size),
+      fixedSize: Size(size, size),
+      padding: EdgeInsets.zero,
+      iconSize: iconSize,
+      foregroundColor: fg,
+      disabledForegroundColor: fg.withValues(alpha: 0.34),
+    ).copyWith(
+      overlayColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
+    );
+  }
 
   @override
   State<TactileSurfaceButton> createState() => _TactileSurfaceButtonState();
@@ -265,16 +283,16 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
       builder: (_, child) {
         final p = _press.value;
         final pressT = p.clamp(0.0, 1.2);
-        final scale = 1.0 - 0.055 * p;
         final drag = _dragOffset.value;
 
         final (morphTarget, morphT) = activeAppMenuMorph.value;
         final isOwnMenuOpen =
             morphTarget != null &&
             identical(morphTarget, context.findRenderObject());
-        final morphOpacity = isOwnMenuOpen
-            ? (1.0 - morphT * 3.5).clamp(0.0, 1.0)
-            : 1.0;
+        final fadePhase = (morphT * 2.8).clamp(0.0, 1.0);
+        final morphOpacity = isOwnMenuOpen ? (1.0 - fadePhase) : 1.0;
+        final morphScale = isOwnMenuOpen ? (1.0 - 0.12 * fadePhase) : 1.0;
+        final scale = (1.0 - 0.055 * p) * morphScale;
 
         // 统一柔和浅灰底胶囊：平时无生硬白框，仅靠柔和底色统一形制；按下时带微主色反馈。
         final restFill = scheme.surfaceContainerHigh.withValues(
@@ -341,5 +359,95 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     }
 
     return Semantics(button: true, enabled: _interactive, child: surface);
+  }
+}
+
+/// 统一触控圆形图标按钮：内嵌无波纹 [IconButton] 保证测试与无障碍兼容，
+/// 外层由 [TactileSurfaceButton] 提供柔和浅灰胶囊、按压回弹与轻跟随手感。
+class TactileIconButton extends StatelessWidget {
+  const TactileIconButton({
+    super.key,
+    this.buttonKey,
+    required this.icon,
+    this.tooltip,
+    this.onPressed,
+    this.color,
+    this.size = 36,
+    this.iconSize = 20,
+    this.filled = true,
+  });
+
+  final Key? buttonKey;
+  final Widget icon;
+  final String? tooltip;
+  final VoidCallback? onPressed;
+  final Color? color;
+  final double size;
+  final double iconSize;
+  final bool filled;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return TactileSurfaceButton(
+      minSize: Size(size, size),
+      borderRadius: BorderRadius.circular(size / 2),
+      enabled: onPressed != null,
+      filled: filled,
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: IconButton(
+          key: buttonKey,
+          icon: icon,
+          iconSize: iconSize,
+          tooltip: tooltip,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(),
+          style: TactileSurfaceButton.cleanIconButtonStyle(
+            scheme,
+            foregroundColor: color,
+            size: size,
+            iconSize: iconSize,
+          ),
+          onPressed: onPressed,
+        ),
+      ),
+    );
+  }
+}
+
+/// 二级页统一触控返回按钮：内部保留原生 [BackButton] 以完整兼容 `find.byType(BackButton)`
+/// 与 `tester.pageBack()`，外观统一为 36×36 柔和圆胶囊并屏蔽 Material 旧水波纹。
+class TactileBackButton extends StatelessWidget {
+  const TactileBackButton({super.key, this.onPressed});
+
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Padding(
+        padding: const EdgeInsets.only(left: 12),
+        child: TactileSurfaceButton(
+          minSize: const Size(36, 36),
+          borderRadius: BorderRadius.circular(18),
+          child: SizedBox(
+            width: 36,
+            height: 36,
+            child: BackButton(
+              onPressed: onPressed,
+              style: TactileSurfaceButton.cleanIconButtonStyle(
+                scheme,
+                size: 36,
+                iconSize: 20,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

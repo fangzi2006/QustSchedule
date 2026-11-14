@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 
 import '../src/app_model.dart';
 import '../theme/app_theme.dart';
+import '../widgets/tactile_button.dart';
 
 class CaptchaPage extends StatefulWidget {
   const CaptchaPage({super.key, required this.model});
@@ -70,10 +71,16 @@ class _CaptchaPageState extends State<CaptchaPage> {
 
     return Scaffold(
       appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.close_rounded),
-          tooltip: '取消',
-          onPressed: model.cancelCaptcha,
+        leading: Align(
+          alignment: Alignment.centerLeft,
+          child: Padding(
+            padding: const EdgeInsets.only(left: 12),
+            child: TactileIconButton(
+              icon: const Icon(Icons.close_rounded),
+              tooltip: '取消',
+              onPressed: model.cancelCaptcha,
+            ),
+          ),
         ),
         title: const Text('输入验证码'),
       ),

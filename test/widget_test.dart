@@ -24,6 +24,7 @@ import 'package:qustschedule/widgets/changelog_category_badge.dart';
 import 'package:qustschedule/widgets/course_tile.dart';
 import 'package:qustschedule/widgets/floating_dock.dart';
 import 'package:qustschedule/widgets/section_title.dart';
+import 'package:qustschedule/widgets/tactile_button.dart';
 import 'package:qustschedule/src/app_model.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
 import 'package:qustschedule/src/reminder_gateway.dart';
@@ -1558,7 +1559,7 @@ void main() {
       expect(find.text('退出登录'), findsNothing, reason: '危险操作只在设置页');
     });
 
-    testWidgets('菜单没有外边距，且 240ms 内原地变形展开完', (tester) async {
+    testWidgets('菜单没有外边距，保持舒展宽高且约 350ms 弹簧原地变形展开完', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(SchedulePage(model: model)));
@@ -1568,7 +1569,7 @@ void main() {
 
       await tester.tap(triggerFinder);
       await tester.pump(); // 起动画
-      await tester.pump(const Duration(milliseconds: 240));
+      await tester.pump(const Duration(milliseconds: 370));
 
       final label = find.text('校准当前周次');
       final card = find
@@ -1591,6 +1592,8 @@ void main() {
         reason: '左右不该留白',
       );
       expect((cardRect.right - tileRect.right).abs(), lessThan(1));
+      expect(cardRect.width, greaterThanOrEqualTo(168));
+      expect(tileRect.height, greaterThanOrEqualTo(46));
       expect(
         cardRect.contains(triggerRect.center),
         isTrue,
@@ -1600,7 +1603,7 @@ void main() {
       final fade = tester.widget<FadeTransition>(
         find.ancestor(of: label, matching: find.byType(FadeTransition)).first,
       );
-      expect(fade.opacity.value, 1, reason: '240ms 内内容与展开变形必须完成');
+      expect(fade.opacity.value, 1, reason: '370ms 内内容与双弹簧展开必须落定');
     });
 
     testWidgets('作息时间表 / 教务地址都能从菜单进到对应页面', (tester) async {
@@ -1963,13 +1966,17 @@ void main() {
       final capsule = tester.getRect(
         find.descendant(of: dock, matching: find.byType(Container)).first,
       );
-      final label = tester.getRect(
-        find.descendant(of: dock, matching: find.text('课表')),
+      final labelFinder = find.descendant(of: dock, matching: find.text('课表'));
+      final buttonBox = tester.getRect(
+        find
+            .ancestor(of: labelFinder, matching: find.byType(ConstrainedBox))
+            .first,
       );
 
       // Stack 默认 topStart，不给 alignment 时整排按钮贴着胶囊上沿，
       // 指示块也就跟着错位（上沿贴住胶囊上沿）。
-      expect((label.center.dy - capsule.center.dy).abs(), lessThan(2));
+      expect(buttonBox.top, greaterThan(capsule.top + 3));
+      expect((buttonBox.center.dy - capsule.center.dy).abs(), lessThan(2));
     });
 
     testWidgets('从课表往右拖到设置，再拖回来', (tester) async {
@@ -2200,6 +2207,103 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(shellPagePosition(tester), 0, reason: '首段内松手，仍留在课表');
+    });
+
+    testWidgets('dock 图标在上文字在下、58dp 高度且窄屏自适应压缩间距不溢出', (tester) async {
+      final items = const <FloatingDockItem>[
+        FloatingDockItem(
+          icon: Icons.calendar_today_outlined,
+          activeIcon: Icons.calendar_today,
+          label: '课表',
+        ),
+        FloatingDockItem(
+          icon: Icons.school_outlined,
+          activeIcon: Icons.school,
+          label: '学业',
+        ),
+        FloatingDockItem(
+          icon: Icons.tune_outlined,
+          activeIcon: Icons.tune,
+          label: '设置',
+        ),
+      ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.bottomCenter,
+              child: SizedBox(
+                width: 400,
+                child: FloatingDock(items: items, index: 0),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final dock = find.byType(FloatingDock);
+      final capsule = tester.getRect(
+        find.descendant(of: dock, matching: find.byType(Container)).first,
+      );
+      expect(capsule.height, closeTo(58, 0.5));
+
+      final scheduleIcon = tester.getCenter(find.byIcon(Icons.calendar_today));
+      final scheduleLabel = tester.getCenter(find.text('课表'));
+      expect(scheduleIcon.dy, lessThan(scheduleLabel.dy), reason: '图标必须在文字上方');
+      expect(
+        (scheduleIcon.dx - scheduleLabel.dx).abs(),
+        lessThan(1.0),
+        reason: '图标与文字应在各自格内居中对齐',
+      );
+
+      // 窄屏压缩宽度（240dp）下应自动缩紧间距而不触发溢出异常。
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.bottomCenter,
+              child: SizedBox(
+                width: 240,
+                child: FloatingDock(items: items, index: 0),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      final narrowCapsule = tester.getRect(
+        find.descendant(of: dock, matching: find.byType(Container)).first,
+      );
+      expect(narrowCapsule.width, lessThan(capsule.width));
+      expect(narrowCapsule.width, lessThanOrEqualTo(240));
+    });
+
+    testWidgets('学业页与二级页顶栏按钮均统一使用 36×36 TactileSurfaceButton', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+
+      await tester.pumpWidget(wrap(AcademicPage(model: model)));
+      await tester.pumpAndSettle();
+
+      final academicRefresh = find.widgetWithIcon(
+        TactileIconButton,
+        Icons.refresh_rounded,
+      );
+      expect(academicRefresh, findsOneWidget);
+      expect(tester.getSize(academicRefresh), const Size(36, 36));
+
+      await tester.pumpWidget(wrap(SchoolAddressPage(model: model)));
+      await tester.pumpAndSettle();
+
+      final backButton = find.byType(TactileBackButton);
+      expect(backButton, findsOneWidget);
+      expect(find.byType(BackButton), findsOneWidget);
+      final addBtn = find.widgetWithIcon(TactileIconButton, Icons.add_rounded);
+      expect(addBtn, findsOneWidget);
+      expect(tester.getSize(addBtn), const Size(36, 36));
     });
   });
 

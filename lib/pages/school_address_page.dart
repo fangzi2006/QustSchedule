@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 
 import '../src/app_model.dart';
 import '../src/school.dart';
+import '../widgets/tactile_button.dart';
 
 class SchoolAddressPage extends StatelessWidget {
   const SchoolAddressPage({super.key, required this.model});
@@ -27,12 +28,16 @@ class SchoolAddressPage extends StatelessWidget {
         final addresses = model.schools;
         return Scaffold(
           appBar: AppBar(
+            leading: const TactileBackButton(),
             title: const Text('教务地址'),
             actions: <Widget>[
-              IconButton(
-                icon: const Icon(Icons.add_rounded),
-                tooltip: '新增地址',
-                onPressed: () => _add(context),
+              Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: TactileIconButton(
+                  icon: const Icon(Icons.add_rounded),
+                  tooltip: '新增地址',
+                  onPressed: () => _add(context),
+                ),
               ),
             ],
           ),
@@ -74,11 +79,10 @@ class SchoolAddressPage extends StatelessWidget {
                         : null,
                     trailing: sameSchool(address, model.schoolBaseUrl)
                         ? null
-                        : IconButton(
-                            icon: const Icon(
-                              Icons.delete_outline_rounded,
-                              size: 20,
-                            ),
+                        : TactileIconButton(
+                            icon: const Icon(Icons.delete_outline_rounded),
+                            size: 32,
+                            iconSize: 18,
                             tooltip: '删除',
                             onPressed: () => _remove(context, address),
                           ),

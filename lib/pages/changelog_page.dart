@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../src/app_version.dart';
 import '../src/formatted_text_span.dart';
 import '../widgets/changelog_category_badge.dart';
+import '../widgets/tactile_button.dart';
 
 /// 更新日志页面。
 class ChangelogPage extends StatefulWidget {
@@ -88,7 +89,10 @@ class _ChangelogPageState extends State<ChangelogPage> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('更新日志')),
+      appBar: AppBar(
+        leading: const TactileBackButton(),
+        title: const Text('更新日志'),
+      ),
       body: SafeArea(child: _buildBody(theme)),
     );
   }

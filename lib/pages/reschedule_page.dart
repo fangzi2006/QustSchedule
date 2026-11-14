@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import '../src/app_model.dart';
 import '../src/reschedule.dart' show RescheduleRule;
 import '../src/timetable.dart' show formatMonthDay;
+import '../widgets/tactile_button.dart';
 import '../widgets/time_wheel_picker.dart' show showMonthDayWheel;
 
 class ReschedulePage extends StatelessWidget {
@@ -23,7 +24,10 @@ class ReschedulePage extends StatelessWidget {
       builder: (context, _) {
         final rules = model.reschedules;
         return Scaffold(
-          appBar: AppBar(title: const Text('调课')),
+          appBar: AppBar(
+            leading: const TactileBackButton(),
+            title: const Text('调课'),
+          ),
           body: Column(
             children: <Widget>[
               Padding(
@@ -54,11 +58,10 @@ class ReschedulePage extends StatelessWidget {
                                 '  →  ${formatMonthDay(rule.toMonth, rule.toDay)}',
                               ),
                               subtitle: const Text('点击可修改 · 这一天的课整体调过去'),
-                              trailing: IconButton(
-                                icon: const Icon(
-                                  Icons.delete_outline_rounded,
-                                  size: 20,
-                                ),
+                              trailing: TactileIconButton(
+                                icon: const Icon(Icons.delete_outline_rounded),
+                                size: 32,
+                                iconSize: 18,
                                 tooltip: '删除',
                                 onPressed: () =>
                                     model.removeReschedule(rule.id),

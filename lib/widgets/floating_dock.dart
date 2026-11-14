@@ -70,7 +70,7 @@ class FloatingDock extends StatefulWidget {
   final VoidCallback? onPressStart;
 
   /// 外壳用它加底部留白：让页面最后一行不被悬浮条压住。
-  static const double height = 54;
+  static const double height = 58;
   static const double bottomMargin = 16;
 
   static double contentInset(BuildContext context) =>
@@ -115,7 +115,7 @@ class FloatingDockState extends State<FloatingDock>
     velocity: 4e-2,
   );
 
-  /// 透镜鼓起：欠阻尼，鼓出来时带一下过冲；缩回时也有一点回弹。
+  /// 透镜鼓起：鼓起带轻微弹性过冲；回落使用接近临界阻尼，避免零点往复触发阴影闪烁。
   static const SpringDescription _liftUpSpring = SpringDescription(
     mass: 1.0,
     stiffness: 520.0,
@@ -124,7 +124,7 @@ class FloatingDockState extends State<FloatingDock>
   static const SpringDescription _liftDownSpring = SpringDescription(
     mass: 1.0,
     stiffness: 420.0,
-    damping: 20.0,
+    damping: 36.0,
   );
 
   /// 边缘橡皮筋回弹。
@@ -641,12 +641,12 @@ class FloatingDockState extends State<FloatingDock>
 
   /// 透镜的最终绘制矩形：在中心位置的基础上叠加鼓起与速度形变。
   Rect _lensRect(Rect base, double lift, double stretch) {
-    final double l = lift.clamp(-0.2, 1.3);
+    final double l = lift.clamp(-0.15, 1.3);
     final double s = stretch.clamp(-1.2, 1.2);
     final double mag = s.abs();
-    // 鼓起：宽 +16%、高 +42%（44 → ~62，比 60 高的 dock 还高一点，"鼓"出来）。
+    // 鼓起：宽 +16%、高 +34%（46 → ~62，温和鼓出 58 高的 dock 上下沿）。
     double w = base.width * (1 + 0.16 * l);
-    double h = base.height * (1 + 0.42 * l);
+    double h = base.height * (1 + 0.34 * l);
     // 形变：沿运动方向拉长、竖向收窄；反向过冲时（s 与运动方向相反）同样成立，
     // 视觉上就是停下瞬间"挤一下再回圆"。
     w *= 1 + 0.30 * mag;
@@ -673,135 +673,173 @@ class FloatingDockState extends State<FloatingDock>
         bottom:
             FloatingDock.bottomMargin + MediaQuery.of(context).padding.bottom,
       ),
-      child: Center(
-        child: MouseRegion(
-          onEnter: (_) {
-            _hovering = true;
-            _syncLift();
-          },
-          onExit: (_) {
-            _hovering = false;
-            _syncLift();
-          },
-          child: GestureDetector(
-            // 整条胶囊都是操作区：按钮之间的留白、两侧内边距都算。
-            behavior: HitTestBehavior.opaque,
-            onTapUp: _onTapUp,
-            onTapCancel: _onTapCancel,
-            onHorizontalDragDown: _onPressDown,
-            onHorizontalDragStart: _onDragStart,
-            onHorizontalDragUpdate: _onDragUpdate,
-            onHorizontalDragEnd: _onDragEnd,
-            onHorizontalDragCancel: _onDragCancel,
-            child: AnimatedBuilder(
-              animation: Listenable.merge(<Listenable>[_lift, _edge]),
-              builder: (context, child) {
-                final double t = _lift.value.clamp(0.0, 1.2);
-                return Transform.translate(
-                  offset: Offset(_edge.value, 0),
-                  child: Transform.scale(
-                    // 整条 dock 只做很轻的呼吸，主角是透镜。
-                    scale: 1 + 0.015 * t,
-                    child: Container(
-                      height: FloatingDock.height,
-                      padding: const EdgeInsets.symmetric(horizontal: 5),
-                      decoration: BoxDecoration(
-                        color: scheme.surfaceContainerLowest,
-                        borderRadius: BorderRadius.circular(
-                          FloatingDock.height / 2,
-                        ),
-                        boxShadow: <BoxShadow>[
-                          BoxShadow(
-                            color: Colors.black.withValues(
-                              alpha: 0.08 + 0.03 * t.clamp(0.0, 1.0),
-                            ),
-                            blurRadius: 22 + 8 * t,
-                            offset: const Offset(0, 6),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          const idealItemWidth = 74.0;
+          const idealGap = 10.0;
+          const shellHPad = 6.0;
+          final count = widget.items.length;
+          final idealTotal =
+              shellHPad * 2 +
+              count * idealItemWidth +
+              math.max(0, count - 1) * idealGap;
+          final maxAvailable = constraints.maxWidth.isFinite
+              ? math.max(120.0, constraints.maxWidth - 24.0)
+              : idealTotal;
+          final ratio = maxAvailable >= idealTotal
+              ? 1.0
+              : ((maxAvailable - shellHPad * 2) /
+                        math.max(1.0, idealTotal - shellHPad * 2))
+                    .clamp(0.58, 1.0);
+          final itemMinWidth = idealItemWidth * ratio;
+          final itemGap = maxAvailable >= idealTotal
+              ? idealGap
+              : math.max(2.0, idealGap * ratio);
+
+          return Center(
+            child: MouseRegion(
+              onEnter: (_) {
+                _hovering = true;
+                _syncLift();
+              },
+              onExit: (_) {
+                _hovering = false;
+                _syncLift();
+              },
+              child: GestureDetector(
+                // 整条胶囊都是操作区：按钮之间的留白、两侧内边距都算。
+                behavior: HitTestBehavior.opaque,
+                onTapUp: _onTapUp,
+                onTapCancel: _onTapCancel,
+                onHorizontalDragDown: _onPressDown,
+                onHorizontalDragStart: _onDragStart,
+                onHorizontalDragUpdate: _onDragUpdate,
+                onHorizontalDragEnd: _onDragEnd,
+                onHorizontalDragCancel: _onDragCancel,
+                child: AnimatedBuilder(
+                  animation: Listenable.merge(<Listenable>[_lift, _edge]),
+                  builder: (context, child) {
+                    final double t = _lift.value.clamp(0.0, 1.2);
+                    final double shadowT = Curves.easeOut.transform(
+                      t.clamp(0.0, 1.0),
+                    );
+                    return Transform.translate(
+                      offset: Offset(_edge.value, 0),
+                      child: Transform.scale(
+                        // 整条 dock 只做很轻的呼吸，主角是透镜。
+                        scale: 1 + 0.015 * t,
+                        child: Container(
+                          height: FloatingDock.height,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: shellHPad,
                           ),
-                        ],
-                        border: Border.all(
-                          color: scheme.outlineVariant.withValues(alpha: 0.34),
+                          decoration: BoxDecoration(
+                            color: scheme.surfaceContainerLowest,
+                            borderRadius: BorderRadius.circular(
+                              FloatingDock.height / 2,
+                            ),
+                            boxShadow: <BoxShadow>[
+                              BoxShadow(
+                                color: Colors.black.withValues(
+                                  alpha: 0.17 + 0.04 * shadowT,
+                                ),
+                                blurRadius: 30 + 8 * shadowT,
+                                spreadRadius: 1.5,
+                                offset: Offset(0, 12 + 3 * shadowT),
+                              ),
+                            ],
+                            border: Border.all(
+                              color: scheme.outlineVariant.withValues(
+                                alpha: 0.36,
+                              ),
+                            ),
+                          ),
+                          child: child,
                         ),
                       ),
-                      child: child,
-                    ),
-                  ),
-                );
-              },
-              child: Stack(
-                key: _stackKey,
-                // 透镜鼓起时比 dock 还高，不能被裁掉。
-                clipBehavior: Clip.none,
-                // 必须显式居中：Stack 默认 topStart，按钮会被顶到胶囊上沿。
-                alignment: Alignment.center,
-                children: <Widget>[
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: AnimatedBuilder(
+                    );
+                  },
+                  child: Stack(
+                    key: _stackKey,
+                    // 透镜鼓起时比 dock 还高，不能被裁掉。
+                    clipBehavior: Clip.none,
+                    // 必须显式居中：Stack 默认 topStart，按钮会被顶到胶囊上沿。
+                    alignment: Alignment.center,
+                    children: <Widget>[
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: AnimatedBuilder(
+                            animation: Listenable.merge(<Listenable>[
+                              _slide,
+                              _lift,
+                              _physicsFrame,
+                            ]),
+                            builder: (context, _) {
+                              final base = _livePillRect;
+                              if (base.isEmpty || base.width <= 0) {
+                                return const SizedBox.shrink();
+                              }
+                              return CustomPaint(
+                                painter: _LensPainter(
+                                  rect: _lensRect(base, _lift.value, _stretch),
+                                  lift: _lift.value.clamp(0.0, 1.0),
+                                  restColor: scheme.primary.withValues(
+                                    alpha: 0.11,
+                                  ),
+                                  lensColor: Color.alphaBlend(
+                                    scheme.primary.withValues(alpha: 0.05),
+                                    scheme.surfaceContainerLowest.withValues(
+                                      alpha: 0.90,
+                                    ),
+                                  ),
+                                  rimColor: scheme.primary.withValues(
+                                    alpha: 0.22,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                      AnimatedBuilder(
                         animation: Listenable.merge(<Listenable>[
                           _slide,
                           _lift,
                           _physicsFrame,
                         ]),
                         builder: (context, _) {
-                          final base = _livePillRect;
-                          if (base.isEmpty || base.width <= 0) {
-                            return const SizedBox.shrink();
-                          }
-                          return CustomPaint(
-                            painter: _LensPainter(
-                              rect: _lensRect(base, _lift.value, _stretch),
-                              lift: _lift.value.clamp(0.0, 1.0),
-                              restColor: scheme.primary.withValues(alpha: 0.11),
-                              lensColor: Color.alphaBlend(
-                                scheme.primary.withValues(alpha: 0.07),
-                                scheme.surfaceContainerLowest.withValues(
-                                  alpha: 0.82,
+                          final double livePos = _liveItemPosition;
+                          final double lift = _lift.value.clamp(0.0, 1.2);
+                          return Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              for (
+                                var position = 0;
+                                position < widget.items.length;
+                                position++
+                              ) ...<Widget>[
+                                if (position > 0) SizedBox(width: itemGap),
+                                _DockButton(
+                                  key: _itemKeys[position],
+                                  item: widget.items[position],
+                                  minWidth: itemMinWidth,
+                                  selected: position == visualIndex,
+                                  focus: (1.0 - (livePos - position).abs())
+                                      .clamp(0.0, 1.0),
+                                  lift: lift,
                                 ),
-                              ),
-                              rimColor: scheme.primary.withValues(alpha: 0.22),
-                            ),
+                              ],
+                            ],
                           );
                         },
                       ),
-                    ),
+                    ],
                   ),
-                  AnimatedBuilder(
-                    animation: Listenable.merge(<Listenable>[
-                      _slide,
-                      _lift,
-                      _physicsFrame,
-                    ]),
-                    builder: (context, _) {
-                      final double livePos = _liveItemPosition;
-                      final double lift = _lift.value.clamp(0.0, 1.2);
-                      return Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          for (
-                            var position = 0;
-                            position < widget.items.length;
-                            position++
-                          )
-                            _DockButton(
-                              key: _itemKeys[position],
-                              item: widget.items[position],
-                              selected: position == visualIndex,
-                              focus: (1.0 - (livePos - position).abs()).clamp(
-                                0.0,
-                                1.0,
-                              ),
-                              lift: lift,
-                            ),
-                        ],
-                      );
-                    },
-                  ),
-                ],
+                ),
               ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
@@ -809,6 +847,7 @@ class FloatingDockState extends State<FloatingDock>
 
 /// 液态透镜：静止时是 dock 里一块淡主色胶囊；鼓起时过渡成半透明白色透镜
 /// （白色高光描边 + 主色细边 + 投影），并超出 dock 的上下沿。
+/// 所有透明度与阴影均随 [lift] 连续平滑插值，避免松手归零时阈值跳变闪烁。
 class _LensPainter extends CustomPainter {
   _LensPainter({
     required this.rect,
@@ -828,43 +867,52 @@ class _LensPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final double radius = rect.shortestSide / 2;
     final rrect = RRect.fromRectAndRadius(rect, Radius.circular(radius));
+    final double elev = Curves.easeOut.transform(lift.clamp(0.0, 1.0));
+    final double restMix = (1.0 - elev).clamp(0.0, 1.0);
 
-    // 1. 鼓起时的投影：让透镜看起来悬浮在 dock 之上。
-    if (lift > 0.01) {
+    // 1. 鼓起时的投影：随 elev 连续淡入淡出，仅绘制在胶囊外圈以免半透明填充透出底黑影（变深→变浅）。
+    if (elev > 0.002) {
+      final outsidePill = Path()
+        ..fillType = PathFillType.evenOdd
+        ..addRect(rrect.outerRect.inflate(28))
+        ..addRRect(rrect);
+      canvas.save();
+      canvas.clipPath(outsidePill);
       canvas.drawRRect(
-        rrect.shift(Offset(0, 3 * lift)),
+        rrect.shift(Offset(0, 3 * elev)),
         Paint()
-          ..color = Colors.black.withValues(alpha: 0.14 * lift)
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 4 + 6 * lift),
+          ..color = Colors.black.withValues(alpha: 0.14 * elev)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 4.0 + 6.0 * elev),
       );
+      canvas.restore();
     }
 
     // 2. 填充：淡主色 → 半透明白色透镜。
     canvas.drawRRect(
       rrect,
-      Paint()..color = Color.lerp(restColor, lensColor, lift) ?? restColor,
+      Paint()..color = Color.lerp(restColor, lensColor, elev) ?? restColor,
     );
 
-    // 静止时保留一道极轻的细边与柔和高光，避免平板贴纸感；鼓起时过渡成强折射透镜边。
-    if (lift <= 0.01) {
+    // 3. 静止柔和高光细边：按 (1 - elev) 连续淡出，绝不硬切换。
+    if (restMix > 0.002) {
       canvas.drawRRect(
         rrect.deflate(0.6),
         Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1.0
-          ..color = Colors.white.withValues(alpha: 0.45),
+          ..color = Colors.white.withValues(alpha: 0.45 * restMix),
       );
       canvas.drawRRect(
         rrect,
         Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = 0.8
-          ..color = rimColor.withValues(alpha: 0.14),
+          ..color = rimColor.withValues(alpha: 0.14 * restMix),
       );
     }
 
-    if (lift > 0.01) {
-      // 3. 顶部镜面高光（只在上半部分），模拟玻璃的反光。
+    // 4. 鼓起顶部镜面高光与边缘折射：随 elev 连续淡入。
+    if (elev > 0.002) {
       final Rect upper = Rect.fromLTRB(
         rect.left + radius * 0.35,
         rect.top + 1.5,
@@ -878,26 +926,25 @@ class _LensPainter extends CustomPainter {
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: <Color>[
-              Colors.white.withValues(alpha: 0.55 * lift),
+              Colors.white.withValues(alpha: 0.55 * elev),
               Colors.white.withValues(alpha: 0.0),
             ],
           ).createShader(upper),
       );
 
-      // 4. 白色内描边 + 主色外描边：透镜的"边缘折射"。
       canvas.drawRRect(
         rrect.deflate(1.0),
         Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1.2
-          ..color = Colors.white.withValues(alpha: 0.85 * lift),
+          ..color = Colors.white.withValues(alpha: 0.85 * elev),
       );
       canvas.drawRRect(
         rrect,
         Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1.0
-          ..color = rimColor.withValues(alpha: rimColor.a * lift),
+          ..color = rimColor.withValues(alpha: rimColor.a * elev),
       );
     }
   }
@@ -911,7 +958,7 @@ class _LensPainter extends CustomPainter {
       oldDelegate.rimColor != rimColor;
 }
 
-/// 单个按钮。
+/// 单个按钮（图标在上、文字在下）。
 ///
 /// **刻意不带自己的 `onTap`**：内层识别器会赢下手势仲裁，外层 `onTapUp` 就不再
 /// 触发 —— "点哪"和"指示块归位"会变成两条路径，落点不一致。
@@ -919,12 +966,14 @@ class _DockButton extends StatelessWidget {
   const _DockButton({
     super.key,
     required this.item,
+    required this.minWidth,
     required this.selected,
     required this.focus,
     required this.lift,
   });
 
   final FloatingDockItem item;
+  final double minWidth;
   final bool selected;
 
   /// 透镜离这一项有多近（1 = 正下方，0 = 远离）。
@@ -940,38 +989,35 @@ class _DockButton extends StatelessWidget {
         Color.lerp(scheme.onSurfaceVariant, scheme.primary, focus) ??
         (selected ? scheme.primary : scheme.onSurfaceVariant);
     // 静止时选中项轻微放大；透镜鼓起时透镜下的内容再放大一截（放大镜效果）。
-    final double magnify = 1.0 + 0.08 * focus + 0.16 * lift * focus;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 1),
-      // 固定 40 高：指示块的高度就取这个矩形，滑动时才不会"胖瘦不匀"。
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 40),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-          child: Transform.scale(
-            scale: magnify,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: <Widget>[
-                Icon(
-                  focus >= 0.5 ? item.activeIcon : item.icon,
-                  size: 19,
+    final double magnify = 1.0 + 0.06 * focus + 0.14 * lift * focus;
+    return ConstrainedBox(
+      constraints: BoxConstraints(minWidth: minWidth, minHeight: 46),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        child: Transform.scale(
+          scale: magnify,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              Icon(
+                focus >= 0.5 ? item.activeIcon : item.icon,
+                size: 20,
+                color: color,
+              ),
+              const SizedBox(height: 2),
+              Text(
+                item.label,
+                maxLines: 1,
+                softWrap: false,
+                style: TextStyle(
+                  fontSize: 11,
+                  height: 1.15,
                   color: color,
+                  fontWeight: focus >= 0.5 ? FontWeight.w600 : FontWeight.w500,
                 ),
-                const SizedBox(width: 5),
-                Text(
-                  item.label,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: color,
-                    fontWeight: focus >= 0.5
-                        ? FontWeight.w600
-                        : FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),

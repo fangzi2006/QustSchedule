@@ -19,6 +19,7 @@ import '../theme/app_theme.dart';
 import '../widgets/course_detail_sheet.dart'
     show compressWeeks, showEntryDetails;
 import '../widgets/app_snack_bar.dart';
+import '../widgets/tactile_button.dart';
 
 class DebugPage extends StatelessWidget {
   const DebugPage({super.key, required this.model});
@@ -43,6 +44,7 @@ class DebugPage extends StatelessWidget {
       length: tabs.length,
       child: Scaffold(
         appBar: AppBar(
+          leading: const TactileBackButton(),
           title: const Text('调试信息'),
           bottom: TabBar(isScrollable: true, tabs: tabs),
         ),
@@ -117,8 +119,10 @@ class _OverviewTab extends StatelessWidget {
                         style: TextStyle(fontWeight: FontWeight.bold),
                       ),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.copy_all, size: 20),
+                    TactileIconButton(
+                      icon: const Icon(Icons.copy_all),
+                      size: 32,
+                      iconSize: 18,
                       tooltip: '复制全部',
                       onPressed: () => _copyText(
                         context,

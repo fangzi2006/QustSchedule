@@ -10,6 +10,7 @@ import '../src/updater/update_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_snack_bar.dart';
 import '../widgets/section_title.dart';
+import '../widgets/tactile_button.dart';
 
 class UpdateProxyPage extends StatefulWidget {
   const UpdateProxyPage({super.key, required this.model});
@@ -128,17 +129,24 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
 
         return Scaffold(
           appBar: AppBar(
+            leading: const TactileBackButton(),
             title: const Text('更新代理设置'),
             actions: [
-              IconButton(
-                icon: const Icon(Icons.speed_rounded),
-                tooltip: '测速全部节点',
-                onPressed: _testAll,
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: TactileIconButton(
+                  icon: const Icon(Icons.speed_rounded),
+                  tooltip: '测速全部节点',
+                  onPressed: _testAll,
+                ),
               ),
-              IconButton(
-                icon: const Icon(Icons.add_rounded),
-                tooltip: '添加代理',
-                onPressed: () => _addProxy(context),
+              Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: TactileIconButton(
+                  icon: const Icon(Icons.add_rounded),
+                  tooltip: '添加代理',
+                  onPressed: () => _addProxy(context),
+                ),
               ),
             ],
           ),
@@ -292,19 +300,23 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
                       ),
                     )
                   else
-                    IconButton(
-                      icon: const Icon(Icons.speed_rounded, size: 20),
+                    TactileIconButton(
+                      icon: const Icon(Icons.speed_rounded),
+                      size: 32,
+                      iconSize: 18,
                       tooltip: '测速',
-                      visualDensity: VisualDensity.compact,
                       onPressed: () => _testProxy(proxy),
                     ),
-                  if (isCustom)
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline_rounded, size: 20),
+                  if (isCustom) ...<Widget>[
+                    const SizedBox(width: 6),
+                    TactileIconButton(
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      size: 32,
+                      iconSize: 18,
                       tooltip: '删除',
-                      visualDensity: VisualDensity.compact,
                       onPressed: () => _removeProxy(context, proxy),
                     ),
+                  ],
                 ],
               ),
               // 测速状态展示 (延时与 API 支持标签)

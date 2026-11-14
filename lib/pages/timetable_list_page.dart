@@ -29,14 +29,18 @@ class TimetableListPage extends StatelessWidget {
         final theme = Theme.of(context);
         return Scaffold(
           appBar: AppBar(
+            leading: const TactileBackButton(),
             title: const Text('作息时间表'),
             actions: <Widget>[
-              IconButton(
-                icon: const Icon(Icons.add_rounded),
-                tooltip: '新建作息表',
-                onPressed: tables.length >= maxTimetables
-                    ? null
-                    : () => _create(context, model, tables),
+              Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: TactileIconButton(
+                  icon: const Icon(Icons.add_rounded),
+                  tooltip: '新建作息表',
+                  onPressed: tables.length >= maxTimetables
+                      ? null
+                      : () => _create(context, model, tables),
+                ),
               ),
             ],
           ),

@@ -124,25 +124,12 @@ class _SchedulePageState extends State<SchedulePage> {
             builder: (BuildContext context, _) {
               final canRefresh =
                   model.status == AppStatus.ready && !model.refreshing;
-              final scheme = Theme.of(context).colorScheme;
               return Padding(
                 padding: const EdgeInsets.only(right: 6),
-                child: TactileSurfaceButton(
-                  minSize: const Size(36, 36),
-                  borderRadius: BorderRadius.circular(18),
-                  enabled: canRefresh,
-                  child: SizedBox(
-                    width: 36,
-                    height: 36,
-                    child: IconButton(
-                      icon: const Icon(Icons.refresh_rounded, size: 20),
-                      tooltip: '刷新课表',
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      style: TactileSurfaceButton.cleanIconButtonStyle(scheme),
-                      onPressed: canRefresh ? model.refresh : null,
-                    ),
-                  ),
+                child: TactileIconButton(
+                  icon: const Icon(Icons.refresh_rounded),
+                  tooltip: '刷新课表',
+                  onPressed: canRefresh ? model.refresh : null,
                 ),
               );
             },
@@ -248,29 +235,34 @@ class _TodayFab extends StatelessWidget {
             key: const ValueKey<String>('today-fab'),
             opacity: show ? 1 : 0,
             duration: const Duration(milliseconds: 150),
-            child: Tooltip(
-              message: '回到本周',
-              child: Material(
-                color: scheme.primary,
-                shape: const CircleBorder(),
-                elevation: 3,
-                shadowColor: Colors.black.withValues(alpha: 0.28),
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: model.goToThisWeek,
-                  child: SizedBox(
-                    width: 46,
-                    height: 46,
-                    child: Center(
-                      child: Text(
-                        '今',
-                        style: TextStyle(
-                          color: scheme.onPrimary,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
+            child: TactileSurfaceButton(
+              minSize: const Size(46, 46),
+              borderRadius: BorderRadius.circular(23),
+              filled: false,
+              tooltip: '回到本周',
+              enabled: show,
+              onTap: model.goToThisWeek,
+              child: Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: scheme.primary,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: scheme.primary.withValues(alpha: 0.26),
+                      blurRadius: 14,
+                      offset: const Offset(0, 5),
                     ),
+                  ],
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  '今',
+                  style: TextStyle(
+                    color: scheme.onPrimary,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
@@ -349,22 +341,11 @@ class _UpdateStatusButton extends StatelessWidget {
 
         return Padding(
           padding: const EdgeInsets.only(right: 6),
-          child: TactileSurfaceButton(
-            minSize: const Size(36, 36),
-            borderRadius: BorderRadius.circular(18),
-            child: SizedBox(
-              width: 36,
-              height: 36,
-              child: IconButton(
-                key: const ValueKey<String>('schedule-update-button'),
-                icon: icon,
-                tooltip: tooltip,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-                style: TactileSurfaceButton.cleanIconButtonStyle(scheme),
-                onPressed: () => showUpdateDialog(context, controller: flow),
-              ),
-            ),
+          child: TactileIconButton(
+            buttonKey: const ValueKey<String>('schedule-update-button'),
+            icon: icon,
+            tooltip: tooltip,
+            onPressed: () => showUpdateDialog(context, controller: flow),
           ),
         );
       },
@@ -622,32 +603,16 @@ class _SmallIconButton extends StatelessWidget {
     this.onPressed,
   });
 
-  static const double size = 36;
-
   final IconData icon;
   final String tooltip;
   final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return TactileSurfaceButton(
-      minSize: const Size(size, size),
-      borderRadius: BorderRadius.circular(18),
-      enabled: onPressed != null,
-      child: SizedBox(
-        width: size,
-        height: size,
-        child: IconButton(
-          icon: Icon(icon, size: 20),
-          tooltip: tooltip,
-          onPressed: onPressed,
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(),
-          visualDensity: VisualDensity.compact,
-          style: TactileSurfaceButton.cleanIconButtonStyle(scheme),
-        ),
-      ),
+    return TactileIconButton(
+      icon: Icon(icon),
+      tooltip: tooltip,
+      onPressed: onPressed,
     );
   }
 }

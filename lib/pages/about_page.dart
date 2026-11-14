@@ -16,6 +16,7 @@ import 'debug_page.dart';
 import 'update_dialog.dart';
 import 'update_proxy_page.dart';
 import '../widgets/app_snack_bar.dart';
+import '../widgets/tactile_button.dart';
 
 /// 项目主页（源码与发行版）：写入「项目主页与源码」，满足 GPL 的源码获取告知要求。
 const String kProjectHomeUrl = 'https://github.com/fangzi2006/QustSchedule';
@@ -167,7 +168,10 @@ class _AboutPageState extends State<AboutPage> {
       listenable: widget.model.prefsNotifier,
       builder: (context, _) {
         return Scaffold(
-          appBar: AppBar(title: const Text('关于青科课表通')),
+          appBar: AppBar(
+            leading: const TactileBackButton(),
+            title: const Text('关于青科课表通'),
+          ),
           body: ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
             children: [
@@ -370,7 +374,10 @@ class _LicenseTextPageState extends State<LicenseTextPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('开源协议')),
+      appBar: AppBar(
+        leading: const TactileBackButton(),
+        title: const Text('开源协议'),
+      ),
       body: SafeArea(child: _buildBody(theme)),
     );
   }

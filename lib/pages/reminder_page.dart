@@ -17,6 +17,7 @@ import '../src/reminder_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_snack_bar.dart';
 import '../widgets/section_title.dart';
+import '../widgets/tactile_button.dart';
 
 class ReminderPage extends StatefulWidget {
   const ReminderPage({super.key, required this.model, required this.service});
@@ -196,7 +197,10 @@ class _ReminderPageState extends State<ReminderPage>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('课程提醒')),
+      appBar: AppBar(
+        leading: const TactileBackButton(),
+        title: const Text('课程提醒'),
+      ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
         children: <Widget>[

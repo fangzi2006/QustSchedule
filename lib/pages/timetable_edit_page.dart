@@ -14,6 +14,7 @@ import '../src/app_model.dart';
 import '../src/timetable.dart';
 import '../widgets/time_wheel_picker.dart';
 import '../widgets/app_snack_bar.dart';
+import '../widgets/tactile_button.dart';
 
 class TimetableEditPage extends StatefulWidget {
   const TimetableEditPage({
@@ -141,7 +142,10 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
     final draft = _draft;
     if (draft == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('作息时间表')),
+        appBar: AppBar(
+          leading: const TactileBackButton(),
+          title: const Text('作息时间表'),
+        ),
         body: const Center(child: Text('这张作息表已被删除')),
       );
     }
@@ -157,24 +161,29 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
       },
       child: Scaffold(
         appBar: AppBar(
+          leading: const TactileBackButton(),
           title: Text(
             _isNew ? '新建作息表' : draft.name,
             overflow: TextOverflow.ellipsis,
           ),
           actions: <Widget>[
-            IconButton(
-              icon: const Icon(Icons.check_rounded),
-              tooltip: _dirty ? '保存' : '没有改动',
-              color: _dirty
-                  ? scheme.primary
-                  : scheme.onSurfaceVariant.withValues(alpha: 0.4),
-              onPressed: _dirty ? _save : null,
+            Padding(
+              padding: EdgeInsets.only(right: _isNew ? 10 : 6),
+              child: TactileIconButton(
+                icon: const Icon(Icons.check_rounded),
+                tooltip: _dirty ? '保存' : '没有改动',
+                color: _dirty ? scheme.primary : null,
+                onPressed: _dirty ? _save : null,
+              ),
             ),
             if (!_isNew)
-              IconButton(
-                icon: const Icon(Icons.delete_outline_rounded),
-                tooltip: model.timetables.length > 1 ? '删除作息表' : '至少保留一张',
-                onPressed: model.timetables.length > 1 ? _delete : null,
+              Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: TactileIconButton(
+                  icon: const Icon(Icons.delete_outline_rounded),
+                  tooltip: model.timetables.length > 1 ? '删除作息表' : '至少保留一张',
+                  onPressed: model.timetables.length > 1 ? _delete : null,
+                ),
               ),
           ],
         ),

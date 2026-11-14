@@ -233,7 +233,9 @@ ThemeData buildLightTheme() {
     colorScheme: scheme,
     scaffoldBackgroundColor: _canvas,
     extensions: const <ThemeExtension<dynamic>>[AppColors.light],
-    splashFactory: InkSparkle.splashFactory,
+    splashFactory: NoSplash.splashFactory,
+    highlightColor: scheme.primary.withValues(alpha: 0.07),
+    hoverColor: scheme.primary.withValues(alpha: 0.04),
     appBarTheme: AppBarTheme(
       backgroundColor: _canvas,
       surfaceTintColor: Colors.transparent,

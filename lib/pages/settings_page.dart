@@ -23,6 +23,7 @@ import '../theme/app_theme.dart';
 import '../widgets/app_snack_bar.dart';
 import '../widgets/floating_dock.dart';
 import '../widgets/section_title.dart';
+import '../widgets/tactile_button.dart';
 import 'about_page.dart';
 import 'reminder_page.dart';
 import 'schedule_page.dart' show showCalibrateSheet;
@@ -437,17 +438,22 @@ class _IntervalStepper extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        IconButton(
-          icon: const Icon(Icons.remove_circle_outline_rounded, size: 22),
-          visualDensity: VisualDensity.compact,
+        TactileIconButton(
+          icon: const Icon(Icons.remove_circle_outline_rounded),
+          size: 32,
+          iconSize: 20,
           onPressed: value > minAutoRefreshIntervalMinutes
               ? () => onChanged(((value - 1) ~/ 60) * 60)
               : null,
         ),
-        Text('$hours', style: const TextStyle(fontSize: 14)),
-        IconButton(
-          icon: const Icon(Icons.add_circle_outline_rounded, size: 22),
-          visualDensity: VisualDensity.compact,
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          child: Text('$hours', style: const TextStyle(fontSize: 14)),
+        ),
+        TactileIconButton(
+          icon: const Icon(Icons.add_circle_outline_rounded),
+          size: 32,
+          iconSize: 20,
           onPressed: value < maxAutoRefreshIntervalMinutes
               ? () => onChanged(((value ~/ 60) + 1) * 60)
               : null,

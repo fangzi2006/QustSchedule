@@ -216,17 +216,17 @@ class _Bubble extends StatelessWidget {
       constraints: const BoxConstraints(minWidth: 0, maxWidth: 200),
       decoration: BoxDecoration(
         color: scheme.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(
           color: error
               ? scheme.error.withValues(alpha: 0.40)
-              : scheme.outlineVariant,
+              : scheme.outlineVariant.withValues(alpha: 0.80),
         ),
         boxShadow: <BoxShadow>[
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.10),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
+            color: Colors.black.withValues(alpha: 0.11),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
@@ -235,7 +235,7 @@ class _Bubble extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           InkWell(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(18),
             onTap: data.showActions ? null : onDismiss,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
