@@ -272,6 +272,22 @@ class _BlockPlan {
     final teacherText = teacher?.trim() ?? '';
     final locationText = location.trim();
 
+    if (!width.isFinite || !height.isFinite) {
+      debugSolveCount++;
+      return _BlockPlan._compute(
+        titleText: titleText,
+        teacherText: teacherText,
+        locationText: locationText,
+        width: width,
+        height: height,
+        scaler: scaler,
+        textDirection: textDirection,
+        locale: locale,
+        titleStyle: titleStyle,
+        detailStyle: detailStyle,
+      );
+    }
+
     final key = _BlockPlanCacheKey(
       title: titleText,
       teacher: teacherText,

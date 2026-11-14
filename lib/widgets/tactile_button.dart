@@ -425,7 +425,24 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
       surface = Tooltip(message: widget.tooltip!, child: surface);
     }
 
-    return Semantics(button: true, enabled: _interactive, child: surface);
+    // 当组件自带直接触控回调时对外暴露语义点击，内嵌原生按钮的场景由内部 Button 自行提供，避免双重 Semantics 节点。
+    if (widget.onTap != null || widget.onMenuOpen != null) {
+      return Semantics(
+        button: true,
+        enabled: _interactive,
+        onTap: _interactive
+            ? () {
+                if (widget.onMenuOpen != null) {
+                  widget.onMenuOpen!(context, null);
+                } else {
+                  widget.onTap?.call();
+                }
+              }
+            : null,
+        child: surface,
+      );
+    }
+    return surface;
   }
 }
 
@@ -557,29 +574,46 @@ class TactileActionButton extends StatelessWidget {
   final Size? minimumSize;
   final TextStyle? textStyle;
 
+  ButtonStyle _sharedActionStyle({
+    required RoundedRectangleBorder shape,
+    BorderSide? side,
+  }) {
+    const noOverlay = WidgetStatePropertyAll<Color>(Colors.transparent);
+    return ButtonStyle(
+      splashFactory: NoSplash.splashFactory,
+      shape: WidgetStatePropertyAll<OutlinedBorder>(shape),
+      padding: padding != null
+          ? WidgetStatePropertyAll<EdgeInsetsGeometry>(padding!)
+          : null,
+      visualDensity: visualDensity,
+      tapTargetSize: tapTargetSize,
+      minimumSize: minimumSize != null
+          ? WidgetStatePropertyAll<Size>(minimumSize!)
+          : null,
+      textStyle: textStyle != null
+          ? WidgetStatePropertyAll<TextStyle>(textStyle!)
+          : null,
+      side: side != null ? WidgetStatePropertyAll<BorderSide>(side) : null,
+      shadowColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
+      overlayColor: noOverlay,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final radius = BorderRadius.circular(borderRadius);
     final shape = RoundedRectangleBorder(borderRadius: radius);
-    const noOverlay = WidgetStatePropertyAll<Color>(Colors.transparent);
+    final shared = _sharedActionStyle(shape: shape);
 
     final Widget inner;
     switch (variant) {
       case TactileActionVariant.filled:
         final style = FilledButton.styleFrom(
-          splashFactory: NoSplash.splashFactory,
-          shape: shape,
-          padding: padding,
           foregroundColor: foregroundColor,
           backgroundColor: backgroundColor,
-          visualDensity: visualDensity,
-          tapTargetSize: tapTargetSize,
-          minimumSize: minimumSize,
-          textStyle: textStyle,
           elevation: 0,
-          shadowColor: Colors.transparent,
-        ).copyWith(overlayColor: noOverlay);
+        ).merge(shared);
         inner = icon != null
             ? FilledButton.icon(
                 onPressed: onPressed,
@@ -590,18 +624,10 @@ class TactileActionButton extends StatelessWidget {
             : FilledButton(onPressed: onPressed, style: style, child: label);
       case TactileActionVariant.tonal:
         final style = FilledButton.styleFrom(
-          splashFactory: NoSplash.splashFactory,
-          shape: shape,
-          padding: padding,
           foregroundColor: foregroundColor,
           backgroundColor: backgroundColor,
-          visualDensity: visualDensity,
-          tapTargetSize: tapTargetSize,
-          minimumSize: minimumSize,
-          textStyle: textStyle,
           elevation: 0,
-          shadowColor: Colors.transparent,
-        ).copyWith(overlayColor: noOverlay);
+        ).merge(shared);
         inner = icon != null
             ? FilledButton.tonalIcon(
                 onPressed: onPressed,
@@ -615,21 +641,18 @@ class TactileActionButton extends StatelessWidget {
                 child: label,
               );
       case TactileActionVariant.outlined:
-        final style = OutlinedButton.styleFrom(
-          splashFactory: NoSplash.splashFactory,
-          shape: shape,
-          padding: padding,
-          foregroundColor: foregroundColor,
-          backgroundColor: backgroundColor,
-          visualDensity: visualDensity,
-          tapTargetSize: tapTargetSize,
-          minimumSize: minimumSize,
-          textStyle: textStyle,
-          side: BorderSide(
-            color: scheme.outlineVariant.withValues(alpha: 0.78),
-          ),
-          shadowColor: Colors.transparent,
-        ).copyWith(overlayColor: noOverlay);
+        final style =
+            OutlinedButton.styleFrom(
+              foregroundColor: foregroundColor,
+              backgroundColor: backgroundColor,
+            ).merge(
+              _sharedActionStyle(
+                shape: shape,
+                side: BorderSide(
+                  color: scheme.outlineVariant.withValues(alpha: 0.78),
+                ),
+              ),
+            );
         inner = icon != null
             ? OutlinedButton.icon(
                 onPressed: onPressed,
@@ -640,17 +663,9 @@ class TactileActionButton extends StatelessWidget {
             : OutlinedButton(onPressed: onPressed, style: style, child: label);
       case TactileActionVariant.text:
         final style = TextButton.styleFrom(
-          splashFactory: NoSplash.splashFactory,
-          shape: shape,
-          padding: padding,
           foregroundColor: foregroundColor,
           backgroundColor: backgroundColor,
-          visualDensity: visualDensity,
-          tapTargetSize: tapTargetSize,
-          minimumSize: minimumSize,
-          textStyle: textStyle,
-          shadowColor: Colors.transparent,
-        ).copyWith(overlayColor: noOverlay);
+        ).merge(shared);
         inner = icon != null
             ? TextButton.icon(
                 onPressed: onPressed,

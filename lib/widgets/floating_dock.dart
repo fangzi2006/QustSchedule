@@ -98,6 +98,7 @@ class FloatingDockState extends State<FloatingDock>
   final List<GlobalKey> _itemKeys = <GlobalKey>[];
   List<Rect> _rects = const <Rect>[];
   List<_LensGlyphEntry> _cachedGlyphs = const <_LensGlyphEntry>[];
+  final List<_LensGlyphEntry> _pendingDisposeGlyphs = <_LensGlyphEntry>[];
   Color? _cachedGlyphPrimaryColor;
   List<FloatingDockItem>? _cachedGlyphItems;
   List<Rect>? _cachedGlyphRects;
@@ -243,7 +244,11 @@ class FloatingDockState extends State<FloatingDock>
     for (final entry in _cachedGlyphs) {
       entry.dispose();
     }
+    for (final entry in _pendingDisposeGlyphs) {
+      entry.dispose();
+    }
     _cachedGlyphs = const <_LensGlyphEntry>[];
+    _pendingDisposeGlyphs.clear();
     _cachedGlyphPrimaryColor = null;
     _cachedGlyphItems = null;
     _cachedGlyphRects = null;
@@ -257,7 +262,17 @@ class FloatingDockState extends State<FloatingDock>
         _cachedGlyphs.length == count) {
       return _cachedGlyphs;
     }
-    _disposeGlyphCache();
+    if (_cachedGlyphs.isNotEmpty) {
+      // 延后到本帧绘制结束后再释放旧 TextPainter，避免极少数中断帧读到已释放对象。
+      final stale = _cachedGlyphs;
+      _pendingDisposeGlyphs.addAll(stale);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        for (final entry in stale) {
+          entry.dispose();
+          _pendingDisposeGlyphs.remove(entry);
+        }
+      });
+    }
     final entries = <_LensGlyphEntry>[
       for (var i = 0; i < count; i++)
         _LensGlyphEntry.layout(
@@ -856,20 +871,21 @@ class FloatingDockState extends State<FloatingDock>
                             // 必须显式居中：Stack 默认 topStart，按钮会被顶到胶囊上沿。
                             alignment: Alignment.center,
                             children: <Widget>[
-                              if (valid)
-                                Positioned.fill(
-                                  child: IgnorePointer(
-                                    child: CustomPaint(
-                                      painter: _LensBackdropPainter(
-                                        rect: lensRect,
-                                        path: lensPath,
-                                        lift: liftClamped,
-                                        restColor: restColor,
-                                        lensColor: lensColor,
-                                      ),
-                                    ),
-                                  ),
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: valid
+                                      ? CustomPaint(
+                                          painter: _LensBackdropPainter(
+                                            rect: lensRect,
+                                            path: lensPath,
+                                            lift: liftClamped,
+                                            restColor: restColor,
+                                            lensColor: lensColor,
+                                          ),
+                                        )
+                                      : const SizedBox.shrink(),
                                 ),
+                              ),
                               ClipPath(
                                 clipper: _OutsideLensClipper(
                                   rect: lensRect,
@@ -877,20 +893,21 @@ class FloatingDockState extends State<FloatingDock>
                                 ),
                                 child: child,
                               ),
-                              if (valid)
-                                Positioned.fill(
-                                  child: IgnorePointer(
-                                    child: CustomPaint(
-                                      painter: _LensForegroundPainter(
-                                        rect: lensRect,
-                                        path: lensPath,
-                                        lift: liftClamped,
-                                        glyphs: glyphs,
-                                        rimColor: rimColor,
-                                      ),
-                                    ),
-                                  ),
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: valid
+                                      ? CustomPaint(
+                                          painter: _LensForegroundPainter(
+                                            rect: lensRect,
+                                            path: lensPath,
+                                            lift: liftClamped,
+                                            glyphs: glyphs,
+                                            rimColor: rimColor,
+                                          ),
+                                        )
+                                      : const SizedBox.shrink(),
                                 ),
+                              ),
                             ],
                           );
                         },
@@ -1048,8 +1065,11 @@ class _LensGlyphEntry {
   final TextPainter labelPainter;
   final Offset iconOffset;
   final Offset labelOffset;
+  bool _disposed = false;
 
   void dispose() {
+    if (_disposed) return;
+    _disposed = true;
     iconPainter.dispose();
     labelPainter.dispose();
   }
@@ -1086,7 +1106,10 @@ class _LensForegroundPainter extends CustomPainter {
 
     for (final entry in glyphs) {
       final itemRect = entry.itemRect;
-      if (!_isValidLensRect(itemRect) || !itemRect.overlaps(rect)) continue;
+      if (!_isValidLensRect(itemRect) ||
+          !itemRect.inflate(8.0).overlaps(rect)) {
+        continue;
+      }
 
       canvas.save();
       final Offset pivot = itemRect.center;

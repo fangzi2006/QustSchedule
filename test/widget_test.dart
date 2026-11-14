@@ -4597,10 +4597,14 @@ void main() {
     });
 
     testWidgets('触感按钮在跨帧按压与微抖动后松手仍可靠触发单次点击', (tester) async {
+      var filledCount = 0;
       var tonalCount = 0;
+      var outlinedCount = 0;
       var textCount = 0;
       var iconCount = 0;
       var backCount = 0;
+      var directTapCount = 0;
+      var menuShortTapCount = 0;
 
       await tester.pumpWidget(
         MaterialApp(
@@ -4611,8 +4615,18 @@ void main() {
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
                   TactileActionButton(
+                    variant: TactileActionVariant.filled,
+                    onPressed: () => filledCount++,
+                    label: const Text('主按钮'),
+                  ),
+                  TactileActionButton(
                     onPressed: () => tonalCount++,
                     label: const Text('确认操作'),
+                  ),
+                  TactileActionButton(
+                    variant: TactileActionVariant.outlined,
+                    onPressed: () => outlinedCount++,
+                    label: const Text('次按钮'),
                   ),
                   TactileActionButton(
                     variant: TactileActionVariant.text,
@@ -4624,6 +4638,26 @@ void main() {
                     onPressed: () => iconCount++,
                   ),
                   TactileBackButton(onPressed: () => backCount++),
+                  TactileSurfaceButton(
+                    onTap: () => directTapCount++,
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
+                      child: Text('直接触控'),
+                    ),
+                  ),
+                  TactileSurfaceButton(
+                    onMenuOpen: (_, _) => menuShortTapCount++,
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
+                      child: Text('菜单短按'),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -4643,8 +4677,14 @@ void main() {
         await tester.pumpAndSettle();
       }
 
+      await humanTap(find.text('主按钮'));
+      expect(filledCount, 1);
+
       await humanTap(find.text('确认操作'));
       expect(tonalCount, 1);
+
+      await humanTap(find.text('次按钮'));
+      expect(outlinedCount, 1);
 
       await humanTap(find.text('取消操作'));
       expect(textCount, 1);
@@ -4654,6 +4694,53 @@ void main() {
 
       await humanTap(find.byType(BackButton));
       expect(backCount, 1);
+
+      await humanTap(find.text('直接触控'));
+      expect(directTapCount, 1);
+
+      await humanTap(find.text('菜单短按'));
+      expect(menuShortTapCount, 1);
+    });
+
+    testWidgets('FloatingDock 主题色切换时字形缓存重建与滞后释放不触发异常', (tester) async {
+      const items = <FloatingDockItem>[
+        FloatingDockItem(
+          icon: Icons.calendar_today_outlined,
+          activeIcon: Icons.calendar_today_rounded,
+          label: '课表',
+        ),
+        FloatingDockItem(
+          icon: Icons.school_outlined,
+          activeIcon: Icons.school_rounded,
+          label: '学业',
+        ),
+        FloatingDockItem(
+          icon: Icons.settings_outlined,
+          activeIcon: Icons.settings_rounded,
+          label: '设置',
+        ),
+      ];
+
+      Widget buildDock(Color seed) => MaterialApp(
+        theme: ThemeData(
+          useMaterial3: true,
+          colorScheme: ColorScheme.fromSeed(seedColor: seed),
+        ),
+        home: Scaffold(
+          bottomNavigationBar: FloatingDock(
+            index: 0,
+            items: items,
+            onTap: (_) {},
+          ),
+        ),
+      );
+
+      await tester.pumpWidget(buildDock(Colors.blue));
+      await tester.pumpAndSettle();
+
+      await tester.pumpWidget(buildDock(Colors.teal));
+      await tester.pumpAndSettle();
+      expect(find.byType(FloatingDock), findsOneWidget);
     });
   });
 }
