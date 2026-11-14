@@ -363,6 +363,7 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
   int? _hoveredIndex;
   int? _pressedScrollableIndex;
   bool _committed = false;
+  double _pressLiftTarget = 0.0;
 
   Rect _pillFrom = Rect.zero;
   Rect _pillTo = Rect.zero;
@@ -713,7 +714,17 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
   }
 
   void _setPressLift(double target) {
-    if ((target - _pressLift.value).abs() < 0.005) return;
+    final alreadyAtTarget =
+        !_pressLift.isAnimating && (target - _pressLift.value).abs() < 0.005;
+    final alreadyHeadingToTarget =
+        _pressLift.isAnimating && (_pressLiftTarget - target).abs() < 0.001;
+    if (alreadyAtTarget || alreadyHeadingToTarget) return;
+    _pressLiftTarget = target;
+    if ((target - _pressLift.value).abs() < 0.005) {
+      _pressLift.stop();
+      _pressLift.value = target;
+      return;
+    }
     _pressLift.animateWith(
       SpringSimulation(_presenceSpring, _pressLift.value, target, 0.0),
     );
@@ -862,19 +873,19 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
   }
 
   void _onPointerDown(PointerDownEvent event) {
-    if (_isScrollable || _committed) return;
+    if (_committed) return;
     if (event.kind == PointerDeviceKind.mouse &&
         (event.buttons & kPrimaryButton == 0)) {
       return;
     }
     _measure();
-    if (_isScrollable || _itemRects.length != widget.items.length) return;
     final local = _toMenuLocal(event.position);
     if (local == null) return;
 
     _activePointer = event.pointer;
-    final hit = _hitSelectableIndex(local);
     _setPressLift(1.0);
+    if (_isScrollable || _itemRects.length != widget.items.length) return;
+    final hit = _hitSelectableIndex(local);
     _setRubberDirect(Offset.zero);
     _updateHoverState(hit, hapticOnSwitch: hit != null);
   }
@@ -922,7 +933,8 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
         ? local.dy
         : (local.dy > _menuSize.height ? local.dy - _menuSize.height : 0.0);
     _setRubberDirect(Offset(_rubberDelta(ox, 8.0), _rubberDelta(oy, 10.0)));
-    _setPressLift(-0.65);
+    // 移出菜单范围后仍保持按住放大态，松手时再统一回弹。
+    _setPressLift(1.0);
   }
 
   void _onPointerUp(PointerUpEvent event) {
@@ -931,6 +943,7 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     final picked = _hoveredIndex;
     _springRubberHome();
     _setPressLift(0.0);
+    if (_isScrollable) return;
     if (picked != null) {
       _commitSelection(picked);
       return;
@@ -1094,7 +1107,12 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
                           math.max(1.0, targetRect.shortestSide))
                       .clamp(0.22, 0.45);
               final openScale = lerpDouble(startScale, 1.0, morphValue) ?? 1.0;
-              final interactiveScale = 1.0 + 0.016 * _pressLift.value;
+              final liftSpan =
+                  (0.05 + 6.0 / math.max(120.0, targetRect.longestSide)).clamp(
+                    0.065,
+                    0.095,
+                  );
+              final interactiveScale = 1.0 + liftSpan * _pressLift.value;
               final totalScale = math.max(0.01, openScale * interactiveScale);
               final rubber = _rubberOffset.value;
 

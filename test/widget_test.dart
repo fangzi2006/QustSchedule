@@ -5105,5 +5105,198 @@ void main() {
         debugDefaultTargetPlatformOverride = null;
       }
     });
+
+    testWidgets('作息表菜单按钮按住拖走时保持放大并正常展开，不触发整卡跳转', (tester) async {
+      final model = buildModel();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: TimetableListPage(model: model),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      double buttonMaxScale(Finder target) {
+        final transforms = tester.widgetList<Transform>(
+          find.ancestor(of: target, matching: find.byType(Transform)),
+        );
+        var maxScale = 1.0;
+        for (final t in transforms) {
+          final s = t.transform.getMaxScaleOnAxis();
+          if (s > maxScale) maxScale = s;
+        }
+        return maxScale;
+      }
+
+      final moreBtn = find.byIcon(Icons.more_vert_rounded).first;
+      final downPos = tester.getCenter(moreBtn);
+      final gesture = await tester.startGesture(downPos);
+
+      // 首帧确立 Ticker 起点后再推进 80ms，确保按住初期按钮放大；
+      // 随后向左侧拖走超过 kTouchSlop(18px) 但未竖向滚动作息列表。
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 80));
+      expect(buttonMaxScale(moreBtn), greaterThan(1.05));
+
+      await gesture.moveTo(downPos + const Offset(-28, 10));
+      await tester.pump(const Duration(milliseconds: 32));
+      expect(
+        buttonMaxScale(moreBtn),
+        greaterThan(1.05),
+        reason: '侧向拖走不应被 18px slop 提前拒收并取消按压状态',
+      );
+      // 尚未误触作息卡片整卡跳转。
+      expect(find.byType(TimetableListPage), findsOneWidget);
+
+      // 继续按住达到长按阈值后直接展开菜单，且不跳转到作息编辑页。
+      await tester.pump(const Duration(milliseconds: 140));
+      await tester.pump(const Duration(milliseconds: 60));
+      expect(find.text('至少保留一张'), findsOneWidget);
+      expect(find.byType(TimetableListPage), findsOneWidget);
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(find.byType(TimetableListPage), findsOneWidget);
+    });
+
+    testWidgets('课程提醒快捷提前时间采用无边框触感胶囊并保留选中与切换行为', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final model = buildModel();
+      model.hydrateForTest(
+        schedule: sampleSchedule(),
+        termStart: DateTime(2026, 9, 7),
+        week: 1,
+      );
+      final gateway = FakeReminderGateway(
+        statusValue: const ReminderRuntimeStatus(
+          notificationPermission: true,
+          notificationsEnabled: true,
+          exactAlarmAllowed: true,
+          scheduled: 0,
+          style: 'banner',
+          nextTriggerMs: 0,
+        ),
+      );
+      final service = ReminderService(
+        model: model,
+        gateway: gateway,
+        now: () => DateTime(2026, 9, 7, 6),
+      );
+
+      try {
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: buildLightTheme(),
+            home: ReminderPage(model: model, service: service),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byType(ChoiceChip), findsNothing);
+        for (final minutes in reminderLeadOptions) {
+          expect(
+            find.widgetWithText(TactileSurfaceButton, '$minutes 分钟'),
+            findsOneWidget,
+          );
+        }
+
+        await tester.ensureVisible(find.text('20 分钟'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('20 分钟'));
+        await tester.pumpAndSettle();
+        expect(model.reminderLeadMinutes, 20);
+      } finally {
+        service.dispose();
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    testWidgets('展开菜单在按住及滑出菜单边界外时均保持放大效果，松手后恢复', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: Scaffold(
+            appBar: AppBar(
+              actions: <Widget>[
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: TactileSurfaceButton(
+                    minSize: const Size(36, 36),
+                    onMenuOpen: (anchorCtx, dragPointer) {
+                      showAppMenu<String>(
+                        context: anchorCtx,
+                        dragPointer: dragPointer,
+                        items: const <AppMenuItem<String>>[
+                          AppMenuItem<String>(value: 'a', label: '选项甲'),
+                          AppMenuItem<String>(value: 'b', label: '选项乙'),
+                          AppMenuItem<String>(value: 'c', label: '选项丙'),
+                        ],
+                        onSelected: (_) {},
+                      );
+                    },
+                    child: const SizedBox(
+                      width: 36,
+                      height: 36,
+                      child: Icon(Icons.more_horiz_rounded),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            body: const SizedBox.expand(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('选项甲'), findsOneWidget);
+
+      (double scale, Offset translation) menuTransformState() {
+        final transforms = tester.widgetList<Transform>(
+          find.ancestor(of: find.text('选项甲'), matching: find.byType(Transform)),
+        );
+        var maxScale = 1.0;
+        var maxOffset = Offset.zero;
+        for (final t in transforms) {
+          final s = t.transform.getMaxScaleOnAxis();
+          if (s > maxScale) maxScale = s;
+          final tr = t.transform.getTranslation();
+          final offset = Offset(tr.x, tr.y);
+          if (offset.distance > maxOffset.distance) {
+            maxOffset = offset;
+          }
+        }
+        return (maxScale, maxOffset);
+      }
+
+      expect(menuTransformState().$1, closeTo(1.0, 0.005));
+
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.text('选项甲')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 180));
+      expect(
+        menuTransformState().$1,
+        greaterThan(1.05),
+        reason: '按住菜单内部时应明显放大',
+      );
+
+      // 拖出菜单边界外很远的位置仍需维持放大效果，并带有轻微弹性跟随偏移。
+      await gesture.moveTo(const Offset(24, 420));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 180));
+      final outsideState = menuTransformState();
+      expect(outsideState.$1, greaterThan(1.05), reason: '手指移出菜单区域外时也应保持放大效果');
+      expect(outsideState.$2.distance, greaterThan(0.5));
+
+      // 在菜单外松手：菜单保持打开并回弹至正常尺寸。
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(find.text('选项甲'), findsOneWidget);
+      expect(menuTransformState().$1, closeTo(1.0, 0.005));
+    });
   });
 }

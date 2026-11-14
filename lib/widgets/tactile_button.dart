@@ -269,7 +269,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     if (widget.onMenuOpen != null &&
         !_dragOpenedMenu &&
         delta.dy > 14.0 &&
-        delta.dy > delta.dx.abs() * 0.9) {
+        delta.dy > delta.dx.abs() * 0.6) {
       _openMenuWithDrag(event.pointer);
     }
   }
@@ -506,7 +506,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
 /// 同时在未激活菜单前保留超出 slop 后交给外层滚动容器的能力。
 class _TactileArenaRecognizer extends PrimaryPointerGestureRecognizer {
   _TactileArenaRecognizer({super.debugOwner, this.onArenaRejected})
-    : super(postAcceptSlopTolerance: null);
+    : super(preAcceptSlopTolerance: null, postAcceptSlopTolerance: null);
 
   ValueChanged<int>? onArenaRejected;
 

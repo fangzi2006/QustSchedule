@@ -357,10 +357,10 @@ class _ReminderSettingsCardState extends State<_ReminderSettingsCard> {
                       runSpacing: 8,
                       children: <Widget>[
                         for (final minutes in reminderLeadOptions)
-                          ChoiceChip(
-                            label: Text('$minutes 分钟'),
+                          _LeadOptionPill(
+                            minutes: minutes,
                             selected: lead == minutes,
-                            onSelected: (_) {
+                            onTap: () {
                               setState(() => _leadDraft = null);
                               widget.onCommitLead(minutes);
                             },
@@ -649,6 +649,55 @@ class _PermissionTile extends StatelessWidget {
         variant: TactileActionVariant.text,
         onPressed: onAction,
         label: Text(actionLabel),
+      ),
+    );
+  }
+}
+
+class _LeadOptionPill extends StatelessWidget {
+  const _LeadOptionPill({
+    required this.minutes,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final int minutes;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final bgColor = selected
+        ? scheme.primary.withValues(alpha: 0.14)
+        : scheme.surfaceContainerHigh.withValues(alpha: 0.56);
+    final fgColor = selected ? scheme.primary : scheme.onSurfaceVariant;
+    return Semantics(
+      button: true,
+      selected: selected,
+      child: TactileSurfaceButton(
+        minSize: const Size(0, 34),
+        borderRadius: BorderRadius.circular(17),
+        filled: false,
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+          decoration: BoxDecoration(
+            color: bgColor,
+            borderRadius: BorderRadius.circular(17),
+          ),
+          child: Text(
+            '$minutes 分钟',
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.2,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              color: fgColor,
+            ),
+          ),
+        ),
       ),
     );
   }
