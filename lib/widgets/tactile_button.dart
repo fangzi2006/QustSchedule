@@ -14,7 +14,8 @@ import 'package:flutter/gestures.dart'
         GestureRecognizerState,
         PointerDeviceKind,
         PrimaryPointerGestureRecognizer,
-        kPrimaryButton;
+        kPrimaryButton,
+        kTouchSlop;
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart' show SpringDescription, SpringSimulation;
 
@@ -137,6 +138,8 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
   Timer? _holdTimer;
   _TactileArenaRecognizer? _arenaRecognizer;
   late Listenable _motionListenable;
+  bool _inScrollable = false;
+  double _touchSlop = kTouchSlop;
 
   bool get _interactive => widget.enabled;
 
@@ -145,6 +148,14 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     super.initState();
     _dragAnim.addListener(_syncDragOffset);
     _motionListenable = _buildMotionListenable();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _inScrollable = Scrollable.maybeOf(context) != null;
+    _touchSlop =
+        MediaQuery.maybeGestureSettingsOf(context)?.touchSlop ?? kTouchSlop;
   }
 
   Listenable _buildMotionListenable() {
@@ -263,13 +274,23 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     if (_pointer != event.pointer) return;
     _lastPos = event.position;
     final delta = event.position - _downPos;
+    // 处于可滚动/可移动容器内的内嵌按钮（如设置页加减号、卡片操作按钮），
+    // 开始滑动且超过触控容差即取消按压效果，与竞技场接管型按钮（如提醒时间胶囊）保持一致；
+    // 固定位置按钮（顶栏、弹窗等）则保留原有的拖拽跟随效果直至松手。
+    if (_inScrollable &&
+        widget.onTap == null &&
+        widget.onMenuOpen == null &&
+        delta.distance > _touchSlop) {
+      _cancelPointer();
+      return;
+    }
     _setDragDirect(
       Offset(_rubberDelta(delta.dx, 6.0), _rubberDelta(delta.dy, 7.0)),
     );
     if (widget.onMenuOpen != null &&
         !_dragOpenedMenu &&
         delta.dy > 14.0 &&
-        delta.dy > delta.dx.abs() * 0.6) {
+        delta.dy > delta.dx.abs() * 0.9) {
       _openMenuWithDrag(event.pointer);
     }
   }
@@ -506,7 +527,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
 /// 同时在未激活菜单前保留超出 slop 后交给外层滚动容器的能力。
 class _TactileArenaRecognizer extends PrimaryPointerGestureRecognizer {
   _TactileArenaRecognizer({super.debugOwner, this.onArenaRejected})
-    : super(preAcceptSlopTolerance: null, postAcceptSlopTolerance: null);
+    : super(postAcceptSlopTolerance: null);
 
   ValueChanged<int>? onArenaRejected;
 

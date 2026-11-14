@@ -5106,16 +5106,7 @@ void main() {
       }
     });
 
-    testWidgets('作息表菜单按钮按住拖走时保持放大并正常展开，不触发整卡跳转', (tester) async {
-      final model = buildModel();
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildLightTheme(),
-          home: TimetableListPage(model: model),
-        ),
-      );
-      await tester.pumpAndSettle();
-
+    testWidgets('可滚动元素内按钮滑出容差即取消按压态，固定按钮保持拖跟效果', (tester) async {
       double buttonMaxScale(Finder target) {
         final transforms = tester.widgetList<Transform>(
           find.ancestor(of: target, matching: find.byType(Transform)),
@@ -5128,35 +5119,105 @@ void main() {
         return maxScale;
       }
 
-      final moreBtn = find.byIcon(Icons.more_vert_rounded).first;
-      final downPos = tester.getCenter(moreBtn);
-      final gesture = await tester.startGesture(downPos);
+      // 1. 作息表列表卡片右侧「更多」菜单按钮（位于 ListView 内）：按住后拖走超过容差，应取消按压并不展开、不跳转编辑页。
+      final timetableModel = buildModel();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: TimetableListPage(model: timetableModel),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-      // 首帧确立 Ticker 起点后再推进 80ms，确保按住初期按钮放大；
-      // 随后向左侧拖走超过 kTouchSlop(18px) 但未竖向滚动作息列表。
+      final moreBtn = find.byIcon(Icons.more_vert_rounded).first;
+      final moreDownPos = tester.getCenter(moreBtn);
+      final moreGesture = await tester.startGesture(moreDownPos);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 80));
       expect(buttonMaxScale(moreBtn), greaterThan(1.05));
 
-      await gesture.moveTo(downPos + const Offset(-28, 10));
-      await tester.pump(const Duration(milliseconds: 32));
+      await moreGesture.moveTo(moreDownPos + const Offset(-28, 10));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 220));
       expect(
         buttonMaxScale(moreBtn),
-        greaterThan(1.05),
-        reason: '侧向拖走不应被 18px slop 提前拒收并取消按压状态',
+        lessThan(1.03),
+        reason: '作息表列表菜单按钮滑出容差后应取消按压状态并回退原尺寸',
       );
-      // 尚未误触作息卡片整卡跳转。
+      expect(find.text('至少保留一张'), findsNothing);
       expect(find.byType(TimetableListPage), findsOneWidget);
-
-      // 继续按住达到长按阈值后直接展开菜单，且不跳转到作息编辑页。
-      await tester.pump(const Duration(milliseconds: 140));
-      await tester.pump(const Duration(milliseconds: 60));
-      expect(find.text('至少保留一张'), findsOneWidget);
-      expect(find.byType(TimetableListPage), findsOneWidget);
-
-      await gesture.up();
+      await moreGesture.up();
       await tester.pumpAndSettle();
-      expect(find.byType(TimetableListPage), findsOneWidget);
+      expect(find.byType(TimetableEditPage), findsNothing);
+
+      // 2. 设置页最小更新间隔加减号（位于 ListView 卡片内）：按住后开始滑动即取消按压态且不触发步进。
+      final settingsModel = buildModel();
+      await settingsModel.setAutoRefresh(true);
+      final beforeInterval = settingsModel.autoRefreshIntervalMinutes;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: SettingsPage(model: settingsModel, reminders: null),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final addBtn = find.byIcon(Icons.add_rounded);
+      final addDownPos = tester.getCenter(addBtn);
+      final addGesture = await tester.startGesture(addDownPos);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 80));
+      expect(buttonMaxScale(addBtn), greaterThan(1.05));
+
+      await addGesture.moveTo(addDownPos + const Offset(-28, 0));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 220));
+      expect(
+        buttonMaxScale(addBtn),
+        lessThan(1.03),
+        reason: '位于可移动容器内的加减号在按住滑动后应取消按压放大效果',
+      );
+      await addGesture.up();
+      await tester.pumpAndSettle();
+      expect(settingsModel.autoRefreshIntervalMinutes, beforeInterval);
+
+      // 3. 固定位置按钮（不在 Scrollable 内）：按住拖出容差仍保留按压放大效果直至松手。
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: Scaffold(
+            appBar: AppBar(
+              actions: <Widget>[
+                TactileIconButton(
+                  icon: const Icon(Icons.refresh_rounded),
+                  onPressed: () {},
+                ),
+              ],
+            ),
+            body: const SizedBox.expand(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final fixedBtn = find.byIcon(Icons.refresh_rounded);
+      final fixedDownPos = tester.getCenter(fixedBtn);
+      final fixedGesture = await tester.startGesture(fixedDownPos);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 80));
+      expect(buttonMaxScale(fixedBtn), greaterThan(1.05));
+
+      await fixedGesture.moveTo(fixedDownPos + const Offset(-28, 0));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+        buttonMaxScale(fixedBtn),
+        greaterThan(1.05),
+        reason: '处于固定位置的按钮滑走时仍保持原有按住放大效果',
+      );
+      await fixedGesture.up();
+      await tester.pumpAndSettle();
+      expect(buttonMaxScale(fixedBtn), closeTo(1.0, 0.005));
     });
 
     testWidgets('课程提醒快捷提前时间采用无边框触感胶囊并保留选中与切换行为', (tester) async {
@@ -5202,7 +5263,46 @@ void main() {
 
         await tester.ensureVisible(find.text('20 分钟'));
         await tester.pumpAndSettle();
+
+        final textCenterY = tester.getCenter(find.text('15 分钟')).dy;
+        final pillCenterY = tester
+            .getCenter(find.widgetWithText(TactileSurfaceButton, '15 分钟'))
+            .dy;
+        expect(
+          textCenterY,
+          closeTo(pillCenterY, 0.5),
+          reason: '提前时间按钮文案需垂直居中于胶囊内部',
+        );
+
         await tester.tap(find.text('20 分钟'));
+        await tester.pumpAndSettle();
+        expect(model.reminderLeadMinutes, 20);
+
+        // 按住时间胶囊后开始滑动：应立即取消按压放大效果且不误切时间。
+        double pillMaxScale(Finder target) {
+          final transforms = tester.widgetList<Transform>(
+            find.ancestor(of: target, matching: find.byType(Transform)),
+          );
+          var maxScale = 1.0;
+          for (final t in transforms) {
+            final s = t.transform.getMaxScaleOnAxis();
+            if (s > maxScale) maxScale = s;
+          }
+          return maxScale;
+        }
+
+        final pill15 = find.text('15 分钟');
+        final downPos = tester.getCenter(pill15);
+        final drag = await tester.startGesture(downPos);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 80));
+        expect(pillMaxScale(pill15), greaterThan(1.05));
+
+        await drag.moveTo(downPos + const Offset(-28, 0));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 220));
+        expect(pillMaxScale(pill15), lessThan(1.03));
+        await drag.up();
         await tester.pumpAndSettle();
         expect(model.reminderLeadMinutes, 20);
       } finally {
@@ -5280,8 +5380,8 @@ void main() {
       await tester.pump(const Duration(milliseconds: 180));
       expect(
         menuTransformState().$1,
-        greaterThan(1.05),
-        reason: '按住菜单内部时应明显放大',
+        inInclusiveRange(1.03, 1.06),
+        reason: '按住菜单内部时应保持克制但可见的放大反馈',
       );
 
       // 拖出菜单边界外很远的位置仍需维持放大效果，并带有轻微弹性跟随偏移。
@@ -5289,7 +5389,11 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 180));
       final outsideState = menuTransformState();
-      expect(outsideState.$1, greaterThan(1.05), reason: '手指移出菜单区域外时也应保持放大效果');
+      expect(
+        outsideState.$1,
+        inInclusiveRange(1.03, 1.06),
+        reason: '手指移出菜单区域外时也应保持放大效果',
+      );
       expect(outsideState.$2.distance, greaterThan(0.5));
 
       // 在菜单外松手：菜单保持打开并回弹至正常尺寸。
@@ -5297,6 +5401,55 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('选项甲'), findsOneWidget);
       expect(menuTransformState().$1, closeTo(1.0, 0.005));
+    });
+
+    testWidgets('课表页选择星期长菜单沿按钮中轴线向下展开', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(
+        schedule: Schedule(
+          termId: '2026-2027-1',
+          maxWeeks: 20,
+          entries: sparseSchedule().entries,
+        ),
+        week: 1,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: SchedulePage(model: model),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final weekTrigger = find.ancestor(
+        of: find.text('第 1 周'),
+        matching: find.byType(TactileSurfaceButton),
+      );
+      final triggerRect = tester.getRect(weekTrigger);
+
+      await tester.tap(find.text('第 1 周'));
+      await tester.pumpAndSettle();
+
+      final menuCard = find
+          .ancestor(of: find.text('第 2 周'), matching: find.byType(Material))
+          .first;
+      final menuRect = tester.getRect(menuCard);
+      expect(
+        menuRect.center.dx,
+        closeTo(triggerRect.center.dx, 1.0),
+        reason: '星期长菜单水平中轴线应与触发按钮一致',
+      );
+      expect(menuRect.top, closeTo(triggerRect.top, 1.0));
+
+      final menuTransforms = tester
+          .widgetList<Transform>(
+            find.ancestor(
+              of: find.text('第 2 周'),
+              matching: find.byType(Transform),
+            ),
+          )
+          .where((t) => t.alignment == Alignment.topCenter);
+      expect(menuTransforms, isNotEmpty);
     });
   });
 }

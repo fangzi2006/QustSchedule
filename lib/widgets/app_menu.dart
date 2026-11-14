@@ -71,7 +71,8 @@ int? _suppressedPointer;
 /// 贴着 [context] 对应的控件展开菜单；选中后回调 [onSelected]。
 ///
 /// [anchorRadius] 用于按钮 → 菜单容器形变衔接的起始圆角半径；
-/// [dragPointer] 不为 null 时，菜单会直接接管该手指实现“按住按钮不放下滑直选”。
+/// [dragPointer] 不为 null 时，菜单会直接接管该手指实现“按住按钮不放下滑直选”；
+/// [centerHorizontally] 为 true 时，菜单水平方向以触发按钮中轴线对齐并向下展开。
 Future<void> showAppMenu<T>({
   required BuildContext context,
   required List<AppMenuItem<T>> items,
@@ -79,6 +80,7 @@ Future<void> showAppMenu<T>({
   double maxHeight = 380,
   double anchorRadius = 18,
   int? dragPointer,
+  bool centerHorizontally = false,
 }) async {
   final box = context.findRenderObject();
   final overlayState = Overlay.of(context, rootOverlay: true);
@@ -125,6 +127,7 @@ Future<void> showAppMenu<T>({
       anchorRadius: anchorRadius,
       overlaySize: overlaySize,
       dragPointer: dragPointer,
+      centerHorizontally: centerHorizontally,
       overlayVsync: overlayState,
       onDismissed: (T? picked) {
         if (!completer.isCompleted) {
@@ -240,6 +243,7 @@ class _AppMenu<T> extends StatefulWidget {
     required this.anchorRadius,
     required this.overlaySize,
     required this.dragPointer,
+    required this.centerHorizontally,
     required this.overlayVsync,
     required this.onDismissed,
     required this.onEntryDisposeReady,
@@ -252,6 +256,7 @@ class _AppMenu<T> extends StatefulWidget {
   final double anchorRadius;
   final Size overlaySize;
   final int? dragPointer;
+  final bool centerHorizontally;
   final TickerProvider overlayVsync;
   final ValueChanged<T?> onDismissed;
   final VoidCallback onEntryDisposeReady;
@@ -345,7 +350,7 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
   Size _menuSize = Size.zero;
   Rect? _targetRect;
   bool _openUp = false;
-  bool _alignRight = false;
+  double _alignX = -1.0;
   bool _isScrollable = false;
 
   void _syncAnchorMorph() {
@@ -569,11 +574,24 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     const margin = 8.0;
     final screen = widget.overlaySize;
     final maxX = math.max(margin, screen.width - menuSize.width - margin);
-    final alignRight = widget.anchor.center.dx > screen.width * 0.5;
-    _alignRight = alignRight;
-    final x =
-        (alignRight ? widget.anchor.right - menuSize.width : widget.anchor.left)
-            .clamp(margin, maxX);
+    final double x;
+    if (widget.centerHorizontally) {
+      x = (widget.anchor.center.dx - menuSize.width * 0.5).clamp(margin, maxX);
+      final focalRatio =
+          ((widget.anchor.center.dx - x) / math.max(1.0, menuSize.width)).clamp(
+            0.0,
+            1.0,
+          );
+      _alignX = focalRatio * 2.0 - 1.0;
+    } else {
+      final alignRight = widget.anchor.center.dx > screen.width * 0.5;
+      _alignX = alignRight ? 1.0 : -1.0;
+      x =
+          (alignRight
+                  ? widget.anchor.right - menuSize.width
+                  : widget.anchor.left)
+              .clamp(margin, maxX);
+    }
 
     // 原位覆合生长：卡片与触发按钮角点对齐并原地长出，而非孤立悬在下方。
     var y = widget.anchor.top;
@@ -1079,8 +1097,7 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     }
 
     final alignY = _openUp ? 1.0 : -1.0;
-    final alignX = _alignRight ? 1.0 : -1.0;
-    final align = Alignment(alignX, alignY);
+    final align = Alignment(_alignX, alignY);
 
     final shellFade = CurvedAnimation(
       parent: _openAnim,
@@ -1107,10 +1124,11 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
                           math.max(1.0, targetRect.shortestSide))
                       .clamp(0.22, 0.45);
               final openScale = lerpDouble(startScale, 1.0, morphValue) ?? 1.0;
+              // 菜单卡片面积较大，采用克制的按压抬升倍率，既明显可见又不显突兀。
               final liftSpan =
-                  (0.05 + 6.0 / math.max(120.0, targetRect.longestSide)).clamp(
-                    0.065,
-                    0.095,
+                  (0.025 + 4.0 / math.max(140.0, targetRect.longestSide)).clamp(
+                    0.032,
+                    0.048,
                   );
               final interactiveScale = 1.0 + liftSpan * _pressLift.value;
               final totalScale = math.max(0.01, openScale * interactiveScale);

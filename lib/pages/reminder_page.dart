@@ -683,18 +683,28 @@ class _LeadOptionPill extends StatelessWidget {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
           curve: Curves.easeOutCubic,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
           decoration: BoxDecoration(
             color: bgColor,
             borderRadius: BorderRadius.circular(17),
           ),
-          child: Text(
-            '$minutes 分钟',
-            style: TextStyle(
-              fontSize: 13,
-              height: 1.2,
-              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-              color: fgColor,
+          child: Center(
+            widthFactor: 1.0,
+            heightFactor: 1.0,
+            child: Text(
+              '$minutes 分钟',
+              textAlign: TextAlign.center,
+              textHeightBehavior: const TextHeightBehavior(
+                applyHeightToFirstAscent: false,
+                applyHeightToLastDescent: false,
+              ),
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.15,
+                leadingDistribution: TextLeadingDistribution.even,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                color: fgColor,
+              ),
             ),
           ),
         ),
