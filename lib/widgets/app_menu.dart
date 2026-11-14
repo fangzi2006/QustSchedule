@@ -61,6 +61,9 @@ _ActiveMenuSession? _activeSession;
 final ValueNotifier<(RenderObject?, double)> activeAppMenuMorph =
     ValueNotifier<(RenderObject?, double)>((null, 0.0));
 
+/// 长按/下拉交接打开菜单那一刻的全局指针坐标，供 [showAppMenu] 测量后直接定位初始胶囊。
+(int, Offset)? activeTactileDragStart;
+
 /// 记录被同一触发按钮按下关闭时的 RenderObject，避免随后的 `onTap` 立即二次打开。
 RenderObject? _suppressedTriggerObject;
 int? _suppressedPointer;
@@ -355,6 +358,8 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
 
   int? _activePointer;
   int? _handoffPointer;
+  Offset? _handoffPosition;
+  bool _suppressInitialHoverHaptic = false;
   int? _hoveredIndex;
   int? _pressedScrollableIndex;
   bool _committed = false;
@@ -381,6 +386,15 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     if (widget.dragPointer != null) {
       _handoffPointer = widget.dragPointer;
       _activePointer = widget.dragPointer;
+      if (activeTactileDragStart?.$1 == widget.dragPointer) {
+        _handoffPosition = activeTactileDragStart!.$2;
+        activeTactileDragStart = null;
+      } else {
+        _handoffPosition = widget.anchor.center;
+      }
+      _suppressInitialHoverHaptic = true;
+      // 长按触发瞬间统一下发唯一一次轻触震动，避免后续初次落入菜单项再重复震动。
+      _hapticTick();
       _setPressLift(1.0);
     }
 
@@ -441,14 +455,17 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     // 处理从触发按钮"按住不放下滑进入菜单"的接管手指。
     if (_handoffPointer != null && event.pointer == _handoffPointer) {
       if (event is PointerMoveEvent) {
+        _handoffPosition = event.position;
         _measure();
         _onPointerMove(event);
       } else if (event is PointerUpEvent) {
         _handoffPointer = null;
+        _handoffPosition = null;
         _measure();
         _onPointerUp(event);
       } else if (event is PointerCancelEvent) {
         _handoffPointer = null;
+        _handoffPosition = null;
         _onPointerCancel(event);
       }
       return;
@@ -626,7 +643,21 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
         }
       }
     }
-    if (needRebuildForLayout && mounted) {
+    var hoverInitialized = false;
+    if (_handoffPointer != null &&
+        _hoveredIndex == null &&
+        !_isScrollable &&
+        _handoffPosition != null) {
+      final local = _toMenuLocal(_handoffPosition!);
+      final initialHit = local != null ? _hitSelectableIndex(local) : null;
+      if (initialHit != null) {
+        _suppressInitialHoverHaptic = false;
+        _hoveredIndex = initialHit;
+        _showPillAt(_itemRects[initialHit], immediate: true);
+        hoverInitialized = true;
+      }
+    }
+    if ((needRebuildForLayout || hoverInitialized) && mounted) {
       setState(() {});
     }
   }
@@ -713,16 +744,23 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
 
   Offset? _toMenuLocal(Offset globalPosition) {
     final target = _targetRect;
-    if (target != null) {
-      final stackBox = _menuStackKey.currentContext?.findRenderObject();
-      if (stackBox is RenderBox && stackBox.hasSize) {
-        return stackBox.globalToLocal(globalPosition - _rubberOffset.value);
-      }
-      return globalPosition - target.topLeft;
-    }
-    final box = _restBoxKey.currentContext?.findRenderObject();
-    if (box is! RenderBox || !box.hasSize) return null;
-    return box.globalToLocal(globalPosition);
+    if (target == null) return null;
+    // 直接按未缩放的目标菜单坐标映射，避免展开形变动画期间 Transform.scale 把坐标放大，
+    // 导致静止/初移手指误命中下方菜单项后再一路滑回上方。
+    final overlayBox = Overlay.of(
+      context,
+      rootOverlay: true,
+    ).context.findRenderObject();
+    final inOverlay = overlayBox is RenderBox && overlayBox.hasSize
+        ? overlayBox.globalToLocal(globalPosition)
+        : globalPosition;
+    final scrollY = _scrollController.hasClients
+        ? _scrollController.offset
+        : 0.0;
+    return inOverlay -
+        target.topLeft -
+        _rubberOffset.value +
+        Offset(0, scrollY);
   }
 
   int? _nearestSelectable(int around, {required bool preferAbove}) {
@@ -778,7 +816,9 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     final wasNull = _hoveredIndex == null;
     setState(() => _hoveredIndex = nextIndex);
     if (nextIndex != null) {
-      if (hapticOnSwitch) _hapticTick();
+      final shouldHaptic = hapticOnSwitch && !_suppressInitialHoverHaptic;
+      _suppressInitialHoverHaptic = false;
+      if (shouldHaptic) _hapticTick();
       _showPillAt(_itemRects[nextIndex], immediate: wasNull);
     } else {
       _hidePill();
@@ -861,10 +901,13 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
       return;
     }
 
-    // 从触发按钮按住下拉进入菜单途中，手指仍在按钮与菜单之间的缝隙时先不施加上拉橡皮筋，保持展开稳定。
+    // 从触发按钮按住下拉/上拉进入菜单途中，手指仍在按钮与菜单之间的缝隙时先不施加上拉橡皮筋，保持展开稳定。
+    final inAnchorGap = _openUp
+        ? local.dy > _menuSize.height && local.dy <= _menuSize.height + 24
+        : local.dy < 0 && local.dy >= -24;
     if (_handoffPointer == event.pointer &&
         _hoveredIndex == null &&
-        local.dy < 0 &&
+        inAnchorGap &&
         local.dx >= -14 &&
         local.dx <= _menuSize.width + 14) {
       return;
@@ -1077,16 +1120,14 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
                 ),
               );
 
-              if ((totalScale - 1.0).abs() > 0.0005) {
-                card = Transform.scale(
+              card = Transform.translate(
+                offset: rubber,
+                child: Transform.scale(
                   alignment: align,
                   scale: totalScale,
                   child: card,
-                );
-              }
-              if (rubber.distanceSquared > 0.001) {
-                card = Transform.translate(offset: rubber, child: card);
-              }
+                ),
+              );
 
               return Positioned(
                 left: targetRect.left,

@@ -12,7 +12,7 @@ import 'package:flutter/gestures.dart' show PointerDeviceKind, kPrimaryButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart' show SpringDescription, SpringSimulation;
 
-import 'app_menu.dart' show activeAppMenuMorph;
+import 'app_menu.dart' show activeAppMenuMorph, activeTactileDragStart;
 
 /// 当菜单触发按钮被点击或按住下拉展开时的回调。
 ///
@@ -123,6 +123,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
 
   int? _pointer;
   Offset _downPos = Offset.zero;
+  Offset _lastPos = Offset.zero;
   Offset _dragFrom = Offset.zero;
   Offset _dragTarget = Offset.zero;
   bool _hovering = false;
@@ -212,6 +213,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     _holdTimer = null;
     _drivePress(_hovering ? 0.35 : 0.0);
     _springDragHome();
+    activeTactileDragStart = (pointer, _lastPos);
     widget.onMenuOpen!(context, pointer);
   }
 
@@ -223,6 +225,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     }
     _pointer = event.pointer;
     _downPos = event.position;
+    _lastPos = event.position;
     _dragOpenedMenu = false;
     _dragAnim.stop();
     _drivePress(1.0);
@@ -240,6 +243,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
 
   void _onPointerMove(PointerMoveEvent event) {
     if (_pointer != event.pointer) return;
+    _lastPos = event.position;
     final delta = event.position - _downPos;
     _setDragDirect(
       Offset(_rubberDelta(delta.dx, 6.0), _rubberDelta(delta.dy, 7.0)),
@@ -314,7 +318,6 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
       animation: _motionListenable,
       builder: (_, child) {
         final p = _press.value;
-        final pressT = p.clamp(0.0, 1.2);
         final drag = _dragOffset.value;
 
         var morphOpacity = 1.0;
@@ -328,9 +331,8 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
             morphScale = 1.0 - 0.12 * fadePhase;
           }
         }
-        final scale = (1.0 - 0.055 * p) * morphScale;
-
-        final pressClamped = pressT.clamp(0.0, 1.0);
+        // 按下改为轻盈放大反馈，取消旧版下沉缩小与变暗阴影效果。
+        final scale = (1.0 + 0.06 * p) * morphScale;
 
         Widget body = child!;
         if (widget.clipContent) {
@@ -342,31 +344,20 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
           final List<BoxShadow>? boxShadow;
           switch (style) {
             case TactileSurfaceStyle.elevated:
-              final restFill = scheme.surfaceContainerLowest;
-              final activeFill = Color.alphaBlend(
-                scheme.primary.withValues(alpha: 0.08),
-                scheme.surfaceContainerLowest,
-              );
-              bgColor = Color.lerp(restFill, activeFill, pressClamped)!;
-              final shadowAlpha = _interactive
-                  ? (0.045 - 0.018 * pressClamped)
-                  : 0.02;
+              bgColor = scheme.surfaceContainerLowest;
               boxShadow = <BoxShadow>[
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: shadowAlpha),
+                  color: Colors.black.withValues(
+                    alpha: _interactive ? 0.045 : 0.02,
+                  ),
                   blurRadius: 8,
                   offset: const Offset(0, 2),
                 ),
               ];
             case TactileSurfaceStyle.tinted:
-              final restFill = scheme.surfaceContainerHigh.withValues(
+              bgColor = scheme.surfaceContainerHigh.withValues(
                 alpha: _interactive ? 0.56 : 0.28,
               );
-              final activeFill = Color.alphaBlend(
-                scheme.primary.withValues(alpha: 0.12),
-                scheme.surfaceContainerHigh,
-              );
-              bgColor = Color.lerp(restFill, activeFill, pressClamped)!;
               boxShadow = null;
             case TactileSurfaceStyle.transparent:
               bgColor = Colors.transparent;
@@ -594,6 +585,7 @@ class TactileActionButton extends StatelessWidget {
           ? WidgetStatePropertyAll<TextStyle>(textStyle!)
           : null,
       side: side != null ? WidgetStatePropertyAll<BorderSide>(side) : null,
+      elevation: const WidgetStatePropertyAll<double>(0),
       shadowColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
       overlayColor: noOverlay,
     );
@@ -612,7 +604,6 @@ class TactileActionButton extends StatelessWidget {
         final style = FilledButton.styleFrom(
           foregroundColor: foregroundColor,
           backgroundColor: backgroundColor,
-          elevation: 0,
         ).merge(shared);
         inner = icon != null
             ? FilledButton.icon(
@@ -626,7 +617,6 @@ class TactileActionButton extends StatelessWidget {
         final style = FilledButton.styleFrom(
           foregroundColor: foregroundColor,
           backgroundColor: backgroundColor,
-          elevation: 0,
         ).merge(shared);
         inner = icon != null
             ? FilledButton.tonalIcon(

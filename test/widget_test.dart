@@ -40,6 +40,7 @@ import 'package:flutter/foundation.dart'
     show TargetPlatform, debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
+import 'package:flutter/services.dart' show SystemChannels;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zf_academic/zf_academic_io.dart';
 
@@ -4741,6 +4742,161 @@ void main() {
       await tester.pumpWidget(buildDock(Colors.teal));
       await tester.pumpAndSettle();
       expect(find.byType(FloatingDock), findsOneWidget);
+    });
+
+    testWidgets('TactileSurfaceButton 按下改为放大反馈且保持原有底色与阴影无下沉', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: Scaffold(
+            body: Center(
+              child: TactileIconButton(
+                icon: const Icon(Icons.refresh_rounded),
+                onPressed: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final bgSurface = find.ancestor(
+        of: find.byIcon(Icons.refresh_rounded),
+        matching: find.byType(TactileSurfaceButton),
+      );
+      final restDecor = tester.widget<DecoratedBox>(
+        find
+            .descendant(of: bgSurface, matching: find.byType(DecoratedBox))
+            .first,
+      );
+      final restBox = restDecor.decoration as BoxDecoration;
+      final restScale = tester
+          .widgetList<Transform>(
+            find.descendant(of: bgSurface, matching: find.byType(Transform)),
+          )
+          .last
+          .transform
+          .storage[0];
+      expect(restScale, closeTo(1.0, 0.001));
+
+      final gesture = await tester.startGesture(tester.getCenter(bgSurface));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 80));
+
+      final pressedDecor = tester.widget<DecoratedBox>(
+        find
+            .descendant(of: bgSurface, matching: find.byType(DecoratedBox))
+            .first,
+      );
+      final pressedBox = pressedDecor.decoration as BoxDecoration;
+      final pressedScale = tester
+          .widgetList<Transform>(
+            find.descendant(of: bgSurface, matching: find.byType(Transform)),
+          )
+          .elementAt(1)
+          .transform
+          .storage[0];
+
+      // 按下应放大而不是缩小，且底色与阴影不随按压变暗下沉。
+      expect(pressedScale, greaterThan(1.03));
+      expect(pressedBox.color, restBox.color);
+      expect(pressedBox.boxShadow?.first.color, restBox.boxShadow?.first.color);
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('长按打开菜单时选择胶囊直接从初始命中项出现且仅触发一次震动', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      var hapticCount = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'HapticFeedback.vibrate') {
+              hapticCount++;
+            }
+            return null;
+          });
+
+      try {
+        String? picked;
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: buildLightTheme(),
+            home: Scaffold(
+              appBar: AppBar(
+                actions: <Widget>[
+                  Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: TactileSurfaceButton(
+                      minSize: const Size(36, 36),
+                      onMenuOpen: (anchorCtx, dragPointer) {
+                        showAppMenu<String>(
+                          context: anchorCtx,
+                          dragPointer: dragPointer,
+                          items: const <AppMenuItem<String>>[
+                            AppMenuItem<String>(value: 'a', label: '选项甲'),
+                            AppMenuItem<String>(value: 'b', label: '选项乙'),
+                            AppMenuItem<String>(value: 'c', label: '选项丙'),
+                          ],
+                          onSelected: (v) => picked = v,
+                        );
+                      },
+                      child: const SizedBox(
+                        width: 36,
+                        height: 36,
+                        child: Icon(Icons.more_horiz_rounded),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              body: const SizedBox.expand(),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final trigger = find.byIcon(Icons.more_horiz_rounded);
+        final downPos = tester.getCenter(trigger);
+        final gesture = await tester.startGesture(downPos);
+
+        // 等待长按触发：此时应立刻且仅有 1 次震动。
+        await tester.pump(const Duration(milliseconds: 220));
+        expect(hapticCount, 1);
+
+        // 展开前几帧内（Transform.scale 仍在放大期间）原地微抖动，不应误判到底部选项「选项丙」或二次震动。
+        await gesture.moveTo(downPos + const Offset(0, 2));
+        await tester.pump(const Duration(milliseconds: 16));
+        await gesture.moveTo(downPos + const Offset(0, 4));
+        await tester.pump(const Duration(milliseconds: 16));
+
+        expect(hapticCount, 1);
+        final textA = tester.widget<Text>(find.text('选项甲'));
+        final textC = tester.widget<Text>(find.text('选项丙'));
+        expect(textA.style?.fontWeight, FontWeight.w600);
+        expect(textC.style?.fontWeight, isNot(FontWeight.w600));
+
+        // 展开动画完全稳定后仍应保持在「选项甲」，且全程只有打开时的 1 次震动。
+        await tester.pumpAndSettle();
+        expect(hapticCount, 1);
+        expect(
+          tester.widget<Text>(find.text('选项甲')).style?.fontWeight,
+          FontWeight.w600,
+        );
+
+        // 滑选到「选项乙」应精确增加 1 次切换震动，并在松手后提交「b」。
+        await gesture.moveTo(tester.getCenter(find.text('选项乙')));
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(hapticCount, 2);
+
+        await gesture.up();
+        await tester.pumpAndSettle();
+        expect(picked, 'b');
+      } finally {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+        debugDefaultTargetPlatformOverride = null;
+      }
     });
   });
 }
