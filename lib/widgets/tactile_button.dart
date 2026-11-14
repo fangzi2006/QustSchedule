@@ -8,7 +8,13 @@ library;
 import 'dart:async' show Timer;
 import 'dart:math' as math;
 
-import 'package:flutter/gestures.dart' show PointerDeviceKind, kPrimaryButton;
+import 'package:flutter/gestures.dart'
+    show
+        GestureDisposition,
+        GestureRecognizerState,
+        PointerDeviceKind,
+        PrimaryPointerGestureRecognizer,
+        kPrimaryButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart' show SpringDescription, SpringSimulation;
 
@@ -97,8 +103,8 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     with TickerProviderStateMixin {
   static const SpringDescription _pressSpring = SpringDescription(
     mass: 1.0,
-    stiffness: 860.0,
-    damping: 50.0,
+    stiffness: 1100.0,
+    damping: 40.0,
   );
   static const SpringDescription _releaseSpring = SpringDescription(
     mass: 1.0,
@@ -129,6 +135,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
   bool _hovering = false;
   bool _dragOpenedMenu = false;
   Timer? _holdTimer;
+  _TactileArenaRecognizer? _arenaRecognizer;
   late Listenable _motionListenable;
 
   bool get _interactive => widget.enabled;
@@ -161,6 +168,10 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     super.didUpdateWidget(oldWidget);
     if ((oldWidget.onMenuOpen != null) != (widget.onMenuOpen != null)) {
       _motionListenable = _buildMotionListenable();
+    }
+    if (!widget.enabled ||
+        (widget.onTap == null && widget.onMenuOpen == null)) {
+      _arenaRecognizer = null;
     }
     if (!widget.enabled && oldWidget.enabled) {
       _cancelPointer();
@@ -206,12 +217,19 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     _dragAnim.animateWith(SpringSimulation(_rubberSpring, 0.0, 1.0, 0.0));
   }
 
+  void _onArenaRejected(int pointer) {
+    if (_pointer == pointer && !_dragOpenedMenu) {
+      _cancelPointer();
+    }
+  }
+
   void _openMenuWithDrag(int pointer) {
     if (_dragOpenedMenu || !_interactive || widget.onMenuOpen == null) return;
     _dragOpenedMenu = true;
     _holdTimer?.cancel();
     _holdTimer = null;
-    _drivePress(_hovering ? 0.35 : 0.0);
+    _arenaRecognizer?.claimPointer(pointer);
+    _drivePress(_hovering ? 0.22 : 0.0);
     _springDragHome();
     activeTactileDragStart = (pointer, _lastPos);
     widget.onMenuOpen!(context, pointer);
@@ -262,7 +280,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     _pointer = null;
     _holdTimer?.cancel();
     _holdTimer = null;
-    _drivePress(_hovering ? 0.35 : 0.0);
+    _drivePress(_hovering ? 0.22 : 0.0);
     _springDragHome();
 
     if (wasOpened) return;
@@ -272,6 +290,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
       final local = renderBox.globalToLocal(event.position);
       final hitBounds = renderBox.paintBounds.inflate(6.0);
       if (hitBounds.contains(local)) {
+        _arenaRecognizer?.claimPointer(event.pointer);
         if (widget.onMenuOpen != null) {
           widget.onMenuOpen!(context, null);
         } else {
@@ -291,7 +310,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     _dragOpenedMenu = false;
     _holdTimer?.cancel();
     _holdTimer = null;
-    _drivePress(_hovering ? 0.35 : 0.0);
+    _drivePress(_hovering ? 0.22 : 0.0);
     _springDragHome();
   }
 
@@ -331,8 +350,16 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
             morphScale = 1.0 - 0.12 * fadePhase;
           }
         }
-        // 按下改为轻盈放大反馈，取消旧版下沉缩小与变暗阴影效果。
-        final scale = (1.0 + 0.06 * p) * morphScale;
+        // 按下改为按控件尺寸自适应的明显放大反馈，取消旧版下沉缩小与变暗阴影效果。
+        final buttonBox = context.findRenderObject();
+        final extent = buttonBox is RenderBox && buttonBox.hasSize
+            ? buttonBox.size.longestSide
+            : (widget.minSize?.longestSide ?? 36.0);
+        final pressAmplitude = (0.07 + 8.4 / math.max(24.0, extent)).clamp(
+          0.095,
+          0.26,
+        );
+        final scale = (1.0 + pressAmplitude * p) * morphScale;
 
         Widget body = child!;
         if (widget.clipContent) {
@@ -390,20 +417,24 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
       child: content,
     );
 
+    final hasSelfHandler = widget.onTap != null || hasMenuTrigger;
+
     surface = MouseRegion(
       cursor: _interactive
           ? SystemMouseCursors.click
           : SystemMouseCursors.basic,
       onEnter: (_) {
         _hovering = true;
-        if (_pointer == null && _interactive) _drivePress(0.35);
+        if (_pointer == null && _interactive) _drivePress(0.22);
       },
       onExit: (_) {
         _hovering = false;
         if (_pointer == null) _drivePress(0.0);
       },
       child: Listener(
-        behavior: HitTestBehavior.translucent,
+        behavior: hasSelfHandler
+            ? HitTestBehavior.opaque
+            : HitTestBehavior.translucent,
         onPointerDown: _onPointerDown,
         onPointerMove: _onPointerMove,
         onPointerUp: _onPointerUp,
@@ -412,8 +443,41 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
       ),
     );
 
+    if (hasSelfHandler) {
+      // 直接接管点击/菜单的按钮需参与手势竞技场，避免嵌套在 InkWell / ListTile
+      // 卡片内时被外层父容器同步触发点击跳转。
+      surface = RawGestureDetector(
+        behavior: HitTestBehavior.opaque,
+        gestures: _interactive
+            ? <Type, GestureRecognizerFactory>{
+                _TactileArenaRecognizer:
+                    GestureRecognizerFactoryWithHandlers<
+                      _TactileArenaRecognizer
+                    >(
+                      () => _TactileArenaRecognizer(
+                        debugOwner: this,
+                        onArenaRejected: _onArenaRejected,
+                      ),
+                      (_TactileArenaRecognizer instance) {
+                        instance.onArenaRejected = _onArenaRejected;
+                        _arenaRecognizer = instance;
+                      },
+                    ),
+              }
+            : const <Type, GestureRecognizerFactory>{},
+        child: surface,
+      );
+    }
+
     if (widget.tooltip != null && widget.tooltip!.isNotEmpty) {
-      surface = Tooltip(message: widget.tooltip!, child: surface);
+      // 可长按展开菜单的按钮屏蔽触控长按 Tooltip，保留桌面端悬停与无障碍提示，
+      // 避免长按时弹出按钮名称并叠加一次长按震动。
+      surface = Tooltip(
+        message: widget.tooltip!,
+        triggerMode: hasMenuTrigger ? TooltipTriggerMode.manual : null,
+        enableFeedback: !hasMenuTrigger,
+        child: surface,
+      );
     }
 
     // 当组件自带直接触控回调时对外暴露语义点击，内嵌原生按钮的场景由内部 Button 自行提供，避免双重 Semantics 节点。
@@ -435,6 +499,42 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     }
     return surface;
   }
+}
+
+/// 仅用于参与 Flutter 手势竞技场仲裁，使自接管点击/菜单的 [TactileSurfaceButton]
+/// 在嵌套于 [InkWell] / [ListTile] 卡片内时可靠独占点击与长按，不让外层容器同步触发，
+/// 同时在未激活菜单前保留超出 slop 后交给外层滚动容器的能力。
+class _TactileArenaRecognizer extends PrimaryPointerGestureRecognizer {
+  _TactileArenaRecognizer({super.debugOwner, this.onArenaRejected})
+    : super(postAcceptSlopTolerance: null);
+
+  ValueChanged<int>? onArenaRejected;
+
+  void claimPointer(int pointer) {
+    if (primaryPointer == pointer && state == GestureRecognizerState.possible) {
+      resolve(GestureDisposition.accepted);
+    }
+  }
+
+  @override
+  void handlePrimaryPointer(PointerEvent event) {
+    if (event is PointerUpEvent) {
+      resolve(GestureDisposition.accepted);
+      stopTrackingPointer(event.pointer);
+    } else if (event is PointerCancelEvent) {
+      resolve(GestureDisposition.rejected);
+      stopTrackingPointer(event.pointer);
+    }
+  }
+
+  @override
+  void rejectGesture(int pointer) {
+    super.rejectGesture(pointer);
+    onArenaRejected?.call(pointer);
+  }
+
+  @override
+  String get debugDescription => 'tactile button arena';
 }
 
 /// 统一触控圆形图标按钮：内嵌无波纹 [IconButton] 保证测试与无障碍兼容，

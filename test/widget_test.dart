@@ -13,6 +13,7 @@ import 'package:qustschedule/pages/debug_page.dart';
 import 'package:qustschedule/pages/home_shell.dart';
 import 'package:qustschedule/pages/login_page.dart';
 import 'package:qustschedule/pages/reminder_page.dart';
+import 'package:qustschedule/pages/reschedule_page.dart';
 import 'package:qustschedule/pages/schedule_page.dart';
 import 'package:qustschedule/pages/school_address_page.dart';
 import 'package:qustschedule/pages/settings_page.dart';
@@ -4797,13 +4798,219 @@ void main() {
           .transform
           .storage[0];
 
-      // 按下应放大而不是缩小，且底色与阴影不随按压变暗下沉。
-      expect(pressedScale, greaterThan(1.03));
+      // 按下应有明显放大反馈而不是缩小，且底色与阴影不随按压变暗下沉。
+      expect(pressedScale, greaterThan(1.20));
       expect(pressedBox.color, restBox.color);
       expect(pressedBox.boxShadow?.first.color, restBox.boxShadow?.first.color);
 
       await gesture.up();
       await tester.pumpAndSettle();
+    });
+
+    testWidgets('可展开菜单按钮长按时不显示 Tooltip 文案也不叠加长按震动', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      var hapticCount = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'HapticFeedback.vibrate') {
+              hapticCount++;
+            }
+            return null;
+          });
+
+      try {
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: buildLightTheme(),
+            home: Scaffold(
+              appBar: AppBar(
+                actions: <Widget>[
+                  Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: TactileSurfaceButton(
+                      minSize: const Size(36, 36),
+                      tooltip: '更多',
+                      onMenuOpen: (anchorCtx, dragPointer) {
+                        showAppMenu<String>(
+                          context: anchorCtx,
+                          dragPointer: dragPointer,
+                          items: const <AppMenuItem<String>>[
+                            AppMenuItem<String>(value: 'a', label: '选项甲'),
+                          ],
+                          onSelected: (_) {},
+                        );
+                      },
+                      child: const SizedBox(
+                        width: 36,
+                        height: 36,
+                        child: Icon(Icons.more_horiz_rounded),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              body: const SizedBox.expand(),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final gesture = await tester.startGesture(
+          tester.getCenter(find.byIcon(Icons.more_horiz_rounded)),
+        );
+        // 超过 Tooltip 默认长按阈值（> 500ms）后仍不弹出「更多」提示，且始终仅触发打开菜单那 1 次震动。
+        await tester.pump(const Duration(milliseconds: 220));
+        await tester.pump(const Duration(milliseconds: 520));
+
+        expect(find.text('选项甲'), findsOneWidget);
+        expect(find.text('更多'), findsNothing);
+        expect(hapticCount, 1);
+
+        await gesture.up();
+        await tester.pumpAndSettle();
+      } finally {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    testWidgets('作息时间表列表卡片右侧更多按钮点击与长按均只展开菜单而不跳转编辑页', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      var hapticCount = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'HapticFeedback.vibrate') {
+              hapticCount++;
+            }
+            return null;
+          });
+
+      try {
+        final model = buildModel();
+        model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+        await model.upsertTimetable(
+          Timetable(
+            id: 'extra-winter',
+            name: '冬季作息',
+            effectiveFrom: DateTime(2026, 10, 1),
+            sections: model.activeTimetable!.sections,
+          ),
+        );
+
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: buildLightTheme(),
+            home: TimetableListPage(model: model),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final moreButtons = find.byIcon(Icons.more_vert_rounded);
+        expect(moreButtons, findsNWidgets(2));
+
+        // 1. 短按右侧「更多」按钮：只展开菜单，不跳转 TimetableEditPage；再点菜单项弹删除确认。
+        await tester.tap(moreButtons.last);
+        await tester.pumpAndSettle();
+        expect(find.byType(TimetableEditPage), findsNothing);
+        expect(find.text('删除'), findsOneWidget);
+        await tester.tap(find.text('删除'));
+        await tester.pumpAndSettle();
+        expect(find.text('删除作息表'), findsOneWidget);
+        expect(find.byType(TimetableEditPage), findsNothing);
+        await tester.tap(find.widgetWithText(TextButton, '取消'));
+        await tester.pumpAndSettle();
+
+        // 2. 长按右侧「更多」按钮：不显示「更多」Tooltip、仅震动 1 次、不跳转编辑页；
+        // 初始胶囊直接落在「删除」上，松手直接弹出删除确认。
+        hapticCount = 0;
+        final hold = await tester.startGesture(
+          tester.getCenter(moreButtons.last),
+        );
+        await tester.pump(const Duration(milliseconds: 220));
+        await tester.pump(const Duration(milliseconds: 520));
+        expect(find.byType(TimetableEditPage), findsNothing);
+        expect(find.text('更多'), findsNothing);
+        expect(hapticCount, 1);
+        await hold.up();
+        await tester.pumpAndSettle();
+
+        expect(find.text('删除作息表'), findsOneWidget);
+        expect(find.byType(TimetableEditPage), findsNothing);
+        await tester.tap(find.widgetWithText(TextButton, '取消'));
+        await tester.pumpAndSettle();
+
+        // 3. 点击卡片左侧标题区仍能正常跳转编辑页。
+        await tester.tap(find.text('冬季作息'));
+        await tester.pumpAndSettle();
+        expect(find.byType(TimetableEditPage), findsOneWidget);
+      } finally {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    testWidgets('同类卡片列表右侧操作按钮点击不穿透触发外层卡片操作', (tester) async {
+      // 1. 调课页：点击右侧删除按钮直接删除，不弹出外层 ListTile 的修改底部弹窗。
+      final rescheduleModel = buildModel();
+      rescheduleModel.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await rescheduleModel.addReschedule(
+        fromMonth: 10,
+        fromDay: 1,
+        toMonth: 10,
+        toDay: 8,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: ReschedulePage(model: rescheduleModel),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.delete_outline_rounded).first);
+      await tester.pumpAndSettle();
+      expect(rescheduleModel.reschedules, isEmpty);
+      expect(find.byType(BottomSheet), findsNothing);
+
+      // 2. 教务地址页：点击右侧删除按钮只弹「删除教务地址」，不触发「切换教务地址」。
+      final schoolModel = buildModel();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: SchoolAddressPage(model: schoolModel),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.delete_outline_rounded).first);
+      await tester.pumpAndSettle();
+      expect(find.text('删除教务地址'), findsOneWidget);
+      expect(find.text('切换教务地址'), findsNothing);
+      await tester.tap(find.widgetWithText(TextButton, '取消'));
+      await tester.pumpAndSettle();
+
+      // 3. 更新代理页：点击自定义节点右侧删除按钮只弹「删除代理」，不切换所选代理。
+      final proxyModel = buildModel();
+      const customProxy = 'https://custom-proxy.example.com/';
+      await proxyModel.addCustomUpdateProxy(customProxy);
+      final beforeProxy = proxyModel.selectedUpdateProxy;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: UpdateProxyPage(model: proxyModel),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final deleteProxyBtn = find.byIcon(Icons.delete_outline_rounded).first;
+      await tester.ensureVisible(deleteProxyBtn);
+      await tester.pumpAndSettle();
+      await tester.tap(deleteProxyBtn);
+      await tester.pumpAndSettle();
+      expect(find.text('删除代理'), findsOneWidget);
+      expect(proxyModel.selectedUpdateProxy, beforeProxy);
     });
 
     testWidgets('长按打开菜单时选择胶囊直接从初始命中项出现且仅触发一次震动', (tester) async {
