@@ -72,15 +72,18 @@ int? _suppressedPointer;
 ///
 /// [anchorRadius] 用于按钮 → 菜单容器形变衔接的起始圆角半径；
 /// [dragPointer] 不为 null 时，菜单会直接接管该手指实现“按住按钮不放下滑直选”；
-/// [centerHorizontally] 为 true 时，菜单水平方向以触发按钮中轴线对齐并向下展开。
+/// [centerHorizontally] 为 true 时，菜单水平方向以触发按钮中轴线对齐并向下展开；
+/// [minWidth] 指定菜单最小宽度；[centerItems] 为 true 时菜单文字水平居中对齐。
 Future<void> showAppMenu<T>({
   required BuildContext context,
   required List<AppMenuItem<T>> items,
   required ValueChanged<T> onSelected,
   double maxHeight = 380,
   double anchorRadius = 18,
+  double minWidth = 168.0,
   int? dragPointer,
   bool centerHorizontally = false,
+  bool centerItems = false,
 }) async {
   final box = context.findRenderObject();
   final overlayState = Overlay.of(context, rootOverlay: true);
@@ -125,9 +128,11 @@ Future<void> showAppMenu<T>({
       maxHeight: maxHeight,
       anchor: anchor,
       anchorRadius: anchorRadius,
+      minWidth: minWidth,
       overlaySize: overlaySize,
       dragPointer: dragPointer,
       centerHorizontally: centerHorizontally,
+      centerItems: centerItems,
       overlayVsync: overlayState,
       onDismissed: (T? picked) {
         if (!completer.isCompleted) {
@@ -241,9 +246,11 @@ class _AppMenu<T> extends StatefulWidget {
     required this.maxHeight,
     required this.anchor,
     required this.anchorRadius,
+    required this.minWidth,
     required this.overlaySize,
     required this.dragPointer,
     required this.centerHorizontally,
+    required this.centerItems,
     required this.overlayVsync,
     required this.onDismissed,
     required this.onEntryDisposeReady,
@@ -254,9 +261,11 @@ class _AppMenu<T> extends StatefulWidget {
   final double maxHeight;
   final Rect anchor;
   final double anchorRadius;
+  final double minWidth;
   final Size overlaySize;
   final int? dragPointer;
   final bool centerHorizontally;
+  final bool centerItems;
   final TickerProvider overlayVsync;
   final ValueChanged<T?> onDismissed;
   final VoidCallback onEntryDisposeReady;
@@ -1049,7 +1058,7 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
           builder: (context, _) {
             final t = _openAnim.value.clamp(0.0, 1.0);
             return ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 168.0),
+              constraints: BoxConstraints(minWidth: widget.minWidth),
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
                 child: Column(
@@ -1069,7 +1078,7 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
 
     final innerContent = ConstrainedBox(
       constraints: BoxConstraints(
-        maxWidth: math.max(168.0, widget.overlaySize.width - 16.0),
+        maxWidth: math.max(widget.minWidth, widget.overlaySize.width - 16.0),
         maxHeight: widget.maxHeight,
       ),
       child: SingleChildScrollView(
@@ -1087,7 +1096,10 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
           child: Opacity(
             opacity: 0.0,
             child: CustomSingleChildLayout(
-              delegate: _FallbackMeasureLayout(anchor: widget.anchor),
+              delegate: _FallbackMeasureLayout(
+                anchor: widget.anchor,
+                minWidth: widget.minWidth,
+              ),
               child: KeyedSubtree(
                 key: _restBoxKey,
                 child: Material(
@@ -1232,7 +1244,7 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
         item: item,
         hovered: _hoveredIndex == index || _pressedScrollableIndex == index,
         showCapsule: _isScrollable,
-        anyPressed: _pressedScrollableIndex != null,
+        centerItems: widget.centerItems,
         opacity: itemT,
         onTap: () => _commitSelection(index),
         onPressChanged: (pressed) {
@@ -1249,13 +1261,14 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
 }
 
 class _FallbackMeasureLayout extends SingleChildLayoutDelegate {
-  _FallbackMeasureLayout({required this.anchor});
+  _FallbackMeasureLayout({required this.anchor, required this.minWidth});
   final Rect anchor;
+  final double minWidth;
 
   @override
   BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
       BoxConstraints(
-        maxWidth: math.max(168.0, constraints.maxWidth - 16),
+        maxWidth: math.max(minWidth, constraints.maxWidth - 16),
         maxHeight: math.max(120.0, constraints.maxHeight - 16),
       );
 
@@ -1264,7 +1277,7 @@ class _FallbackMeasureLayout extends SingleChildLayoutDelegate {
 
   @override
   bool shouldRelayout(covariant _FallbackMeasureLayout oldDelegate) =>
-      oldDelegate.anchor != anchor;
+      oldDelegate.anchor != anchor || oldDelegate.minWidth != minWidth;
 }
 
 const double _kMenuPillHorizontalInset = 6.0;
@@ -1317,7 +1330,7 @@ class _MenuTile<T> extends StatelessWidget {
     required this.item,
     required this.hovered,
     required this.showCapsule,
-    required this.anyPressed,
+    required this.centerItems,
     required this.opacity,
     required this.onTap,
     required this.onPressChanged,
@@ -1326,9 +1339,10 @@ class _MenuTile<T> extends StatelessWidget {
   final AppMenuItem<T> item;
   final bool hovered;
 
-  /// 长菜单不可滑动切换，改为在条目内直接绘制与短菜单同源的选择胶囊。
+  /// 长菜单不可滑动切换，按住/选中条目时直接在条目内绘制与短菜单同源的选择胶囊；
+  /// 已选中的常态条目保持自身高亮与对勾指示，无需常驻胶囊。
   final bool showCapsule;
-  final bool anyPressed;
+  final bool centerItems;
   final double opacity;
   final VoidCallback onTap;
   final ValueChanged<bool> onPressChanged;
@@ -1338,16 +1352,7 @@ class _MenuTile<T> extends StatelessWidget {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final highlighted = item.selected || hovered;
-    final double capsuleStrength;
-    if (!showCapsule) {
-      capsuleStrength = 0.0;
-    } else if (hovered) {
-      capsuleStrength = 1.0;
-    } else if (item.selected) {
-      capsuleStrength = anyPressed ? 0.45 : 1.0;
-    } else {
-      capsuleStrength = 0.0;
-    }
+    final double capsuleStrength = (showCapsule && hovered) ? 1.0 : 0.0;
     final effectiveCapsule = (capsuleStrength * opacity).clamp(0.0, 1.0);
     final baseColor = !item.enabled
         ? theme.hintColor
@@ -1364,6 +1369,92 @@ class _MenuTile<T> extends StatelessWidget {
         ? baseIconColor
         : baseIconColor.withValues(alpha: baseIconColor.a * opacity);
     final fontWeight = highlighted ? FontWeight.w600 : FontWeight.normal;
+    final Widget tileBody;
+    if (centerItems) {
+      tileBody = Stack(
+        alignment: Alignment.center,
+        children: <Widget>[
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 27,
+              vertical: 12 - _kMenuPillVerticalInset,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: <Widget>[
+                if (item.icon != null) ...<Widget>[
+                  Transform.scale(
+                    scale: hovered ? 1.08 : 1.0,
+                    child: Icon(item.icon, size: 18, color: iconColor),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                Flexible(
+                  child: Text(
+                    item.label,
+                    textAlign: TextAlign.center,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: color,
+                      fontWeight: fontWeight,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (item.trailing != null)
+            Positioned(
+              right: 6,
+              top: 0,
+              bottom: 0,
+              child: Center(
+                child: Opacity(opacity: opacity, child: item.trailing!),
+              ),
+            ),
+        ],
+      );
+    } else {
+      tileBody = Align(
+        alignment: Alignment.centerLeft,
+        widthFactor: 1.0,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: 18 - _kMenuPillHorizontalInset,
+            vertical: 12 - _kMenuPillVerticalInset,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              if (item.icon != null) ...<Widget>[
+                Transform.scale(
+                  scale: hovered ? 1.08 : 1.0,
+                  child: Icon(item.icon, size: 18, color: iconColor),
+                ),
+                const SizedBox(width: 12),
+              ],
+              Flexible(
+                child: Text(
+                  item.label,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: color,
+                    fontWeight: fontWeight,
+                  ),
+                ),
+              ),
+              if (item.trailing != null) ...<Widget>[
+                const SizedBox(width: 16),
+                Opacity(opacity: opacity, child: item.trailing!),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
     return InkWell(
       // 彻底屏蔽旧版 Material 水波纹与灰底阴影，仅留无障碍与可测试句柄，高亮全权交给滑动/选择胶囊。
       splashFactory: NoSplash.splashFactory,
@@ -1399,43 +1490,7 @@ class _MenuTile<T> extends StatelessWidget {
                 width: _kMenuPillRimWidth,
               ),
             ),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              widthFactor: 1.0,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18 - _kMenuPillHorizontalInset,
-                  vertical: 12 - _kMenuPillVerticalInset,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    if (item.icon != null) ...<Widget>[
-                      Transform.scale(
-                        scale: hovered ? 1.08 : 1.0,
-                        child: Icon(item.icon, size: 18, color: iconColor),
-                      ),
-                      const SizedBox(width: 12),
-                    ],
-                    Flexible(
-                      child: Text(
-                        item.label,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: color,
-                          fontWeight: fontWeight,
-                        ),
-                      ),
-                    ),
-                    if (item.trailing != null) ...<Widget>[
-                      const SizedBox(width: 16),
-                      Opacity(opacity: opacity, child: item.trailing!),
-                    ],
-                  ],
-                ),
-              ),
-            ),
+            child: tileBody,
           ),
         ),
       ),

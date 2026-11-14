@@ -5452,7 +5452,7 @@ void main() {
       expect(menuTransforms, isNotEmpty);
     });
 
-    testWidgets('长菜单（20 周）已选中项与按住条目呈现短菜单同款选择胶囊，不恢复水波纹与灰底', (tester) async {
+    testWidgets('星期长菜单紧凑窄宽、文字居中且仅在按住条目时展示选择胶囊，当前周次保留对勾常态', (tester) async {
       final model = buildModel();
       model.hydrateForTest(
         schedule: Schedule(
@@ -5472,14 +5472,15 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      BoxDecoration? findMenuTileDecoration(String label) {
+      Finder findMenuItemText(String label) {
         final menuMaterial = find
             .ancestor(of: find.text('第 2 周'), matching: find.byType(Material))
             .first;
-        final textFinder = find.descendant(
-          of: menuMaterial,
-          matching: find.text(label),
-        );
+        return find.descendant(of: menuMaterial, matching: find.text(label));
+      }
+
+      BoxDecoration? findMenuTileDecoration(String label) {
+        final textFinder = findMenuItemText(label);
         if (textFinder.evaluate().isEmpty) return null;
         final boxes = tester.widgetList<DecoratedBox>(
           find.ancestor(
@@ -5501,22 +5502,38 @@ void main() {
       await tester.tap(find.text('第 3 周'));
       await tester.pumpAndSettle();
 
-      // 1. 当前周次（第 3 周）静止即展示短菜单同款主色选择胶囊（0.11 填充 + 0.18 描边 + 14dp 圆角）
+      final menuMaterial = find
+          .ancestor(of: find.text('第 2 周'), matching: find.byType(Material))
+          .first;
+      final menuRect = tester.getRect(menuMaterial);
+      // 1. 紧凑窄菜单：不受 168dp 动作菜单最小宽度撑宽
+      expect(menuRect.width, lessThan(168.0));
+
+      // 2. 文字严格水平居中（即使当前周次右侧带有对勾也不左偏）
+      final week3Text = findMenuItemText('第 3 周').first;
+      final week5Text = findMenuItemText('第 5 周').first;
+      expect(tester.getCenter(week3Text).dx, closeTo(menuRect.center.dx, 0.5));
+      expect(tester.getCenter(week5Text).dx, closeTo(menuRect.center.dx, 0.5));
+
+      // 3. 当前周次（第 3 周）仅以对勾+主色文案作常态标识，不常驻选择胶囊
+      expect(
+        find.descendant(
+          of: menuMaterial,
+          matching: find.byIcon(Icons.check_rounded),
+        ),
+        findsOneWidget,
+      );
       final selectedDec = findMenuTileDecoration('第 3 周');
       expect(selectedDec, isNotNull);
-      expect(selectedDec!.color, scheme.primary.withValues(alpha: 0.11));
-      final selectedBorder = selectedDec.border as Border;
-      expect(selectedBorder.top.color, scheme.primary.withValues(alpha: 0.18));
-      expect(selectedBorder.top.width, 1.0);
+      expect(selectedDec!.color, Colors.transparent);
 
-      // 未选中、未按住项胶囊保持透明
       final idleDec = findMenuTileDecoration('第 5 周');
       expect(idleDec, isNotNull);
       expect(idleDec!.color, Colors.transparent);
 
-      // 2. 按住「第 5 周」超过 TapGestureRecognizer 防抖窗口，立即出现同款选择胶囊
+      // 4. 按住「第 5 周」超过 TapGestureRecognizer 防抖窗口，立即出现短菜单同款选择胶囊
       final holdGesture = await tester.startGesture(
-        tester.getCenter(find.text('第 5 周')),
+        tester.getCenter(week5Text),
       );
       await tester.pump(const Duration(milliseconds: 150));
 
@@ -5528,15 +5545,13 @@ void main() {
 
       // 仍彻底关闭旧版水波纹与高亮灰底
       final week5InkWell = tester.widget<InkWell>(
-        find
-            .ancestor(of: find.text('第 5 周'), matching: find.byType(InkWell))
-            .first,
+        find.ancestor(of: week5Text, matching: find.byType(InkWell)).first,
       );
       expect(week5InkWell.splashFactory, NoSplash.splashFactory);
       expect(week5InkWell.splashColor, Colors.transparent);
       expect(week5InkWell.highlightColor, Colors.transparent);
 
-      // 3. 竖向滑动滚走后取消按住状态：菜单保持打开且可滚动，未误切周次，胶囊恢复透明
+      // 5. 竖向滑动滚走后取消按住状态：菜单保持打开且可滚动，未误切周次，胶囊恢复透明
       await holdGesture.moveBy(const Offset(0, -140));
       await tester.pump();
       await holdGesture.up();
