@@ -291,11 +291,61 @@ void main() {
       );
 
       await tester.tap(find.text('打开更新日志'));
+      // 立即开始路由入场，推进 50ms 即已在过渡帧中挂载新页面，无需阻塞至资源解析结束才 push
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(find.text('更新日志'), findsOneWidget);
+
       await tester.pumpAndSettle();
 
       expect(find.text('更新日志'), findsOneWidget);
       // 验证真实 CHANGELOG.md 内容已渲染
       expect(find.textContaining('1.5.0'), findsAtLeastNWidgets(1));
+    });
+
+    testWidgets('分段加载首帧仅构建首批版本卡片并在后续帧渐进补齐', (tester) async {
+      final manyReleases = <ReleaseLog>[
+        for (var v = 8; v >= 1; v--)
+          ReleaseLog(
+            version: '$v.0.0',
+            date: '2026-11-0$v',
+            description: '版本 **$v** 核心更新摘要',
+            sections: const <LogSection>[
+              LogSection(title: '优化', items: <String>['性能优化条目']),
+            ],
+          ),
+      ];
+
+      await tester.pumpWidget(
+        MaterialApp(home: ChangelogPage(initialReleases: manyReleases)),
+      );
+
+      // 第 0 帧仅渲染首屏批次（initialBatchSize = 2），避免一口气构建全部卡片引发卡顿
+      expect(find.text('v8.0.0'), findsOneWidget);
+      expect(find.text('v7.0.0'), findsOneWidget);
+      expect(find.text('v6.0.0'), findsNothing);
+      expect(find.text('v5.0.0'), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+      // 下一帧渐进追加第二批，第 3 张卡片随即进入可视/预加载区
+      await tester.pump();
+      expect(find.text('v6.0.0'), findsOneWidget);
+
+      // 全部批次完成后底部加载指示器自动消失，向下滚动可看到后续全部版本
+      await tester.pumpAndSettle();
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      await tester.scrollUntilVisible(
+        find.text('v5.0.0'),
+        200,
+        scrollable: find.byType(Scrollable),
+      );
+      expect(find.text('v5.0.0'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('v1.0.0'),
+        300,
+        scrollable: find.byType(Scrollable),
+      );
+      expect(find.text('v1.0.0'), findsOneWidget);
     });
   });
 }

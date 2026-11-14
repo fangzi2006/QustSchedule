@@ -1387,6 +1387,7 @@ Future<void> showWeekPicker(
         AppMenuItem<int>(
           value: week,
           label: '第 $week 周',
+          selected: week == selected,
           trailing: week == selected
               ? Icon(
                   Icons.check_rounded,

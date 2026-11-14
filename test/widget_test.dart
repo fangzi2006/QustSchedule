@@ -5451,5 +5451,102 @@ void main() {
           .where((t) => t.alignment == Alignment.topCenter);
       expect(menuTransforms, isNotEmpty);
     });
+
+    testWidgets('长菜单（20 周）已选中项与按住条目呈现短菜单同款选择胶囊，不恢复水波纹与灰底', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(
+        schedule: Schedule(
+          termId: '2026-2027-1',
+          maxWeeks: 20,
+          entries: sparseSchedule().entries,
+        ),
+        week: 3,
+      );
+      final lightTheme = buildLightTheme();
+      final scheme = lightTheme.colorScheme;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: lightTheme,
+          home: SchedulePage(model: model),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      BoxDecoration? findMenuTileDecoration(String label) {
+        final menuMaterial = find
+            .ancestor(of: find.text('第 2 周'), matching: find.byType(Material))
+            .first;
+        final textFinder = find.descendant(
+          of: menuMaterial,
+          matching: find.text(label),
+        );
+        if (textFinder.evaluate().isEmpty) return null;
+        final boxes = tester.widgetList<DecoratedBox>(
+          find.ancestor(
+            of: textFinder.first,
+            matching: find.byType(DecoratedBox),
+          ),
+        );
+        for (final box in boxes) {
+          final dec = box.decoration;
+          if (dec is BoxDecoration &&
+              dec.borderRadius == BorderRadius.circular(14)) {
+            return dec;
+          }
+        }
+        return null;
+      }
+
+      // 打开 20 周长菜单
+      await tester.tap(find.text('第 3 周'));
+      await tester.pumpAndSettle();
+
+      // 1. 当前周次（第 3 周）静止即展示短菜单同款主色选择胶囊（0.11 填充 + 0.18 描边 + 14dp 圆角）
+      final selectedDec = findMenuTileDecoration('第 3 周');
+      expect(selectedDec, isNotNull);
+      expect(selectedDec!.color, scheme.primary.withValues(alpha: 0.11));
+      final selectedBorder = selectedDec.border as Border;
+      expect(selectedBorder.top.color, scheme.primary.withValues(alpha: 0.18));
+      expect(selectedBorder.top.width, 1.0);
+
+      // 未选中、未按住项胶囊保持透明
+      final idleDec = findMenuTileDecoration('第 5 周');
+      expect(idleDec, isNotNull);
+      expect(idleDec!.color, Colors.transparent);
+
+      // 2. 按住「第 5 周」超过 TapGestureRecognizer 防抖窗口，立即出现同款选择胶囊
+      final holdGesture = await tester.startGesture(
+        tester.getCenter(find.text('第 5 周')),
+      );
+      await tester.pump(const Duration(milliseconds: 150));
+
+      final pressedDec = findMenuTileDecoration('第 5 周');
+      expect(pressedDec, isNotNull);
+      expect(pressedDec!.color, scheme.primary.withValues(alpha: 0.11));
+      final pressedBorder = pressedDec.border as Border;
+      expect(pressedBorder.top.color, scheme.primary.withValues(alpha: 0.18));
+
+      // 仍彻底关闭旧版水波纹与高亮灰底
+      final week5InkWell = tester.widget<InkWell>(
+        find
+            .ancestor(of: find.text('第 5 周'), matching: find.byType(InkWell))
+            .first,
+      );
+      expect(week5InkWell.splashFactory, NoSplash.splashFactory);
+      expect(week5InkWell.splashColor, Colors.transparent);
+      expect(week5InkWell.highlightColor, Colors.transparent);
+
+      // 3. 竖向滑动滚走后取消按住状态：菜单保持打开且可滚动，未误切周次，胶囊恢复透明
+      await holdGesture.moveBy(const Offset(0, -140));
+      await tester.pump();
+      await holdGesture.up();
+      await tester.pumpAndSettle();
+
+      expect(model.week, 3);
+      final afterScrollDec = findMenuTileDecoration('第 5 周');
+      if (afterScrollDec != null) {
+        expect(afterScrollDec.color, Colors.transparent);
+      }
+    });
   });
 }

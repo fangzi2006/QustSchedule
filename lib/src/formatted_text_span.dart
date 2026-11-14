@@ -3,6 +3,8 @@ library;
 
 import 'package:flutter/material.dart';
 
+final RegExp _inlineFormatPattern = RegExp(r'(\*\*.*?\*\*|`.*?`)');
+
 /// 将包含 `**加粗**` 或 `` `代码` `` 的轻量 Markdown 行内文本解析为 [TextSpan]。
 ///
 /// 采用零外部依赖正则扫描，内存开销极小且无渲染卡顿风险。
@@ -30,10 +32,9 @@ TextSpan buildFormattedTextSpan(
       const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w600);
 
   final spans = <InlineSpan>[];
-  final pattern = RegExp(r'(\*\*.*?\*\*|`.*?`)');
   int lastIndex = 0;
 
-  for (final match in pattern.allMatches(text)) {
+  for (final match in _inlineFormatPattern.allMatches(text)) {
     if (match.start > lastIndex) {
       spans.add(TextSpan(text: text.substring(lastIndex, match.start)));
     }

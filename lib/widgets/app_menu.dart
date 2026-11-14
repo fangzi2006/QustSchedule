@@ -858,6 +858,9 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     if (_committed || !mounted) return;
     final item = widget.items[index];
     if (item.isDivider || !item.enabled) return;
+    if (_isScrollable && _pressedScrollableIndex != index) {
+      setState(() => _pressedScrollableIndex = index);
+    }
     _committed = true;
     widget.session.dismiss(item.value);
   }
@@ -1016,10 +1019,10 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
                 final stretch = _pillStretch.value.clamp(0.0, 1.0);
                 final scale = 0.90 + 0.10 * presence;
                 final insetRect = Rect.fromLTRB(
-                  rect.left + 6,
-                  rect.top + 2,
-                  rect.right - 6,
-                  rect.bottom - 2,
+                  rect.left + _kMenuPillHorizontalInset,
+                  rect.top + _kMenuPillVerticalInset,
+                  rect.right - _kMenuPillHorizontalInset,
+                  rect.bottom - _kMenuPillVerticalInset,
                 );
                 final stretched = Rect.fromCenter(
                   center: insetRect.center,
@@ -1029,8 +1032,12 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
                 return CustomPaint(
                   painter: _MenuPillPainter(
                     rect: stretched,
-                    color: scheme.primary.withValues(alpha: 0.11 * presence),
-                    rimColor: scheme.primary.withValues(alpha: 0.18 * presence),
+                    color: scheme.primary.withValues(
+                      alpha: _kMenuPillFillAlpha * presence,
+                    ),
+                    rimColor: scheme.primary.withValues(
+                      alpha: _kMenuPillRimAlpha * presence,
+                    ),
                   ),
                 );
               },
@@ -1224,10 +1231,12 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
       child = _MenuTile<T>(
         item: item,
         hovered: _hoveredIndex == index || _pressedScrollableIndex == index,
+        showCapsule: _isScrollable,
+        anyPressed: _pressedScrollableIndex != null,
         opacity: itemT,
         onTap: () => _commitSelection(index),
         onPressChanged: (pressed) {
-          if (!_isScrollable || !mounted) return;
+          if (!_isScrollable || _committed || !mounted) return;
           setState(() {
             _pressedScrollableIndex = pressed ? index : null;
           });
@@ -1258,6 +1267,13 @@ class _FallbackMeasureLayout extends SingleChildLayoutDelegate {
       oldDelegate.anchor != anchor;
 }
 
+const double _kMenuPillHorizontalInset = 6.0;
+const double _kMenuPillVerticalInset = 2.0;
+const double _kMenuPillRadius = 14.0;
+const double _kMenuPillFillAlpha = 0.11;
+const double _kMenuPillRimAlpha = 0.18;
+const double _kMenuPillRimWidth = 1.0;
+
 class _MenuPillPainter extends CustomPainter {
   _MenuPillPainter({
     required this.rect,
@@ -1272,7 +1288,10 @@ class _MenuPillPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     // 外层菜单圆角 20dp，胶囊四边统一距外框 6dp，同心圆角取 20 - 6 = 14dp。
-    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(14));
+    final rrect = RRect.fromRectAndRadius(
+      rect,
+      const Radius.circular(_kMenuPillRadius),
+    );
     canvas.drawRRect(rrect, Paint()..color = color);
     if (rimColor.a > 0) {
       canvas.drawRRect(
@@ -1280,7 +1299,7 @@ class _MenuPillPainter extends CustomPainter {
         Paint()
           ..color = rimColor
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.0,
+          ..strokeWidth = _kMenuPillRimWidth,
       );
     }
   }
@@ -1297,6 +1316,8 @@ class _MenuTile<T> extends StatelessWidget {
     super.key,
     required this.item,
     required this.hovered,
+    required this.showCapsule,
+    required this.anyPressed,
     required this.opacity,
     required this.onTap,
     required this.onPressChanged,
@@ -1304,6 +1325,10 @@ class _MenuTile<T> extends StatelessWidget {
 
   final AppMenuItem<T> item;
   final bool hovered;
+
+  /// 长菜单不可滑动切换，改为在条目内直接绘制与短菜单同源的选择胶囊。
+  final bool showCapsule;
+  final bool anyPressed;
   final double opacity;
   final VoidCallback onTap;
   final ValueChanged<bool> onPressChanged;
@@ -1313,6 +1338,17 @@ class _MenuTile<T> extends StatelessWidget {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final highlighted = item.selected || hovered;
+    final double capsuleStrength;
+    if (!showCapsule) {
+      capsuleStrength = 0.0;
+    } else if (hovered) {
+      capsuleStrength = 1.0;
+    } else if (item.selected) {
+      capsuleStrength = anyPressed ? 0.45 : 1.0;
+    } else {
+      capsuleStrength = 0.0;
+    }
+    final effectiveCapsule = (capsuleStrength * opacity).clamp(0.0, 1.0);
     final baseColor = !item.enabled
         ? theme.hintColor
         : highlighted
@@ -1329,7 +1365,7 @@ class _MenuTile<T> extends StatelessWidget {
         : baseIconColor.withValues(alpha: baseIconColor.a * opacity);
     final fontWeight = highlighted ? FontWeight.w600 : FontWeight.normal;
     return InkWell(
-      // 彻底屏蔽旧版 Material 水波纹与灰底阴影，仅留无障碍与可测试句柄，高亮全权交给滑动胶囊。
+      // 彻底屏蔽旧版 Material 水波纹与灰底阴影，仅留无障碍与可测试句柄，高亮全权交给滑动/选择胶囊。
       splashFactory: NoSplash.splashFactory,
       splashColor: Colors.transparent,
       hoverColor: Colors.transparent,
@@ -1338,45 +1374,67 @@ class _MenuTile<T> extends StatelessWidget {
       overlayColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
       onTapDown: item.enabled ? (_) => onPressChanged(true) : null,
       onTapCancel: item.enabled ? () => onPressChanged(false) : null,
-      onTap: item.enabled
-          ? () {
-              onPressChanged(false);
-              onTap();
-            }
-          : null,
+      onTap: item.enabled ? onTap : null,
       child: ConstrainedBox(
         constraints: const BoxConstraints(minHeight: 46),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          widthFactor: 1.0,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                if (item.icon != null) ...<Widget>[
-                  Transform.scale(
-                    scale: hovered ? 1.08 : 1.0,
-                    child: Icon(item.icon, size: 18, color: iconColor),
-                  ),
-                  const SizedBox(width: 12),
-                ],
-                Flexible(
-                  child: Text(
-                    item.label,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: color,
-                      fontWeight: fontWeight,
-                    ),
-                  ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: _kMenuPillHorizontalInset,
+            vertical: _kMenuPillVerticalInset,
+          ),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: effectiveCapsule > 0.001
+                  ? scheme.primary.withValues(
+                      alpha: _kMenuPillFillAlpha * effectiveCapsule,
+                    )
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(_kMenuPillRadius),
+              border: Border.all(
+                color: effectiveCapsule > 0.001
+                    ? scheme.primary.withValues(
+                        alpha: _kMenuPillRimAlpha * effectiveCapsule,
+                      )
+                    : Colors.transparent,
+                width: _kMenuPillRimWidth,
+              ),
+            ),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              widthFactor: 1.0,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18 - _kMenuPillHorizontalInset,
+                  vertical: 12 - _kMenuPillVerticalInset,
                 ),
-                if (item.trailing != null) ...<Widget>[
-                  const SizedBox(width: 16),
-                  Opacity(opacity: opacity, child: item.trailing!),
-                ],
-              ],
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    if (item.icon != null) ...<Widget>[
+                      Transform.scale(
+                        scale: hovered ? 1.08 : 1.0,
+                        child: Icon(item.icon, size: 18, color: iconColor),
+                      ),
+                      const SizedBox(width: 12),
+                    ],
+                    Flexible(
+                      child: Text(
+                        item.label,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: color,
+                          fontWeight: fontWeight,
+                        ),
+                      ),
+                    ),
+                    if (item.trailing != null) ...<Widget>[
+                      const SizedBox(width: 16),
+                      Opacity(opacity: opacity, child: item.trailing!),
+                    ],
+                  ],
+                ),
+              ),
             ),
           ),
         ),
