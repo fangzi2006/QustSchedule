@@ -231,7 +231,8 @@ class _AboutPageState extends State<AboutPage> {
                       ),
                       const SizedBox(height: 16),
                       // 内联「检查更新」按钮
-                      FilledButton.tonalIcon(
+                      TactileActionButton(
+                        variant: TactileActionVariant.tonal,
                         onPressed: _checkingUpdate ? null : _checkUpdate,
                         icon: _checkingUpdate
                             ? const SizedBox(

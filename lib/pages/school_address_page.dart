@@ -83,6 +83,7 @@ class SchoolAddressPage extends StatelessWidget {
                             icon: const Icon(Icons.delete_outline_rounded),
                             size: 32,
                             iconSize: 18,
+                            surfaceStyle: TactileSurfaceStyle.tinted,
                             tooltip: '删除',
                             onPressed: () => _remove(context, address),
                           ),
@@ -92,7 +93,8 @@ class SchoolAddressPage extends StatelessWidget {
                 const SizedBox(height: 8),
               ],
               const SizedBox(height: 4),
-              OutlinedButton.icon(
+              TactileActionButton(
+                variant: TactileActionVariant.outlined,
                 onPressed: () => _add(context),
                 icon: const Icon(Icons.add_rounded, size: 18),
                 label: const Text('新增教务地址'),

@@ -259,32 +259,32 @@ class _AppMenu<T> extends StatefulWidget {
 
 class _AppMenuState<T> extends State<_AppMenu<T>>
     with TickerProviderStateMixin {
-  /// 高亮胶囊在菜单项间切换的果冻弹簧：快速追随并带轻巧回弹。
+  /// 高亮胶囊在菜单项间切换的果冻弹簧：高刚度快响应并保留利落回弹（ζ≈0.68）。
   static const SpringDescription _pillSpring = SpringDescription(
     mass: 1.0,
-    stiffness: 560.0,
-    damping: 30.0,
+    stiffness: 1150.0,
+    damping: 46.0,
   );
 
-  /// 胶囊出现/隐去及纵向拉伸形变弹簧。
+  /// 胶囊出现/隐去及纵向拉伸形变弹簧（ζ≈0.68）。
   static const SpringDescription _presenceSpring = SpringDescription(
     mass: 1.0,
-    stiffness: 480.0,
-    damping: 26.0,
+    stiffness: 960.0,
+    damping: 42.0,
   );
 
-  /// 容器宽度弹簧：敏捷舒展并带轻微 Q 弹过冲，视觉上率先打开横向空间。
+  /// 容器宽度弹簧：敏捷舒展并带利落微弹（ζ≈0.65）。
   static const SpringDescription _widthSpring = SpringDescription(
     mass: 1.0,
-    stiffness: 320.0,
-    damping: 24.5,
+    stiffness: 860.0,
+    damping: 38.0,
   );
 
-  /// 容器高度弹簧：略缓于宽度约 30ms，形成从触发按钮顺滑“涌出”的层次感。
+  /// 容器高度弹簧：略缓于宽度并保留利落微弹（ζ≈0.65）。
   static const SpringDescription _heightSpring = SpringDescription(
     mass: 1.0,
-    stiffness: 250.0,
-    damping: 21.0,
+    stiffness: 760.0,
+    damping: 36.0,
   );
 
   static const Tolerance _morphTolerance = Tolerance(
@@ -295,8 +295,8 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
   /// 滑出菜单外松手后的整卡橡皮筋回弹弹簧。
   static const SpringDescription _rubberSpring = SpringDescription(
     mass: 1.0,
-    stiffness: 440.0,
-    damping: 20.0,
+    stiffness: 880.0,
+    damping: 50.0,
   );
 
   final GlobalKey _restBoxKey = GlobalKey();
@@ -306,8 +306,8 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
 
   late final AnimationController _openAnim = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 350),
-    reverseDuration: const Duration(milliseconds: 230),
+    duration: const Duration(milliseconds: 200),
+    reverseDuration: const Duration(milliseconds: 145),
   );
   late final AnimationController _widthMorph = AnimationController.unbounded(
     vsync: this,
@@ -616,6 +616,16 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     _targetRect = computedTarget;
     _itemRects = rects;
     _isScrollable = scrollable;
+    final hovered = _hoveredIndex;
+    if (hovered != null && hovered >= 0 && hovered < _itemRects.length) {
+      final updatedTarget = _itemRects[hovered];
+      if (_pillTo != updatedTarget) {
+        _pillTo = updatedTarget;
+        if (!_pillSlide.isAnimating) {
+          _pillFrom = updatedTarget;
+        }
+      }
+    }
     if (needRebuildForLayout && mounted) {
       setState(() {});
     }
@@ -704,6 +714,10 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
   Offset? _toMenuLocal(Offset globalPosition) {
     final target = _targetRect;
     if (target != null) {
+      final stackBox = _menuStackKey.currentContext?.findRenderObject();
+      if (stackBox is RenderBox && stackBox.hasSize) {
+        return stackBox.globalToLocal(globalPosition - _rubberOffset.value);
+      }
       return globalPosition - target.topLeft;
     }
     final box = _restBoxKey.currentContext?.findRenderObject();
@@ -791,14 +805,14 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     unawaited(
       _widthMorph.animateTo(
         0.0,
-        duration: const Duration(milliseconds: 220),
+        duration: const Duration(milliseconds: 140),
         curve: Curves.easeInCubic,
       ),
     );
     unawaited(
       _heightMorph.animateTo(
         0.0,
-        duration: const Duration(milliseconds: 220),
+        duration: const Duration(milliseconds: 140),
         curve: Curves.easeInCubic,
       ),
     );
@@ -929,9 +943,9 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
                 final scale = 0.90 + 0.10 * presence;
                 final insetRect = Rect.fromLTRB(
                   rect.left + 6,
-                  rect.top + 3,
+                  rect.top + 2,
                   rect.right - 6,
-                  rect.bottom - 3,
+                  rect.bottom - 2,
                 );
                 final stretched = Rect.fromCenter(
                   center: insetRect.center,
@@ -955,13 +969,16 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
             final t = _openAnim.value.clamp(0.0, 1.0);
             return ConstrainedBox(
               constraints: const BoxConstraints(minWidth: 168.0),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: <Widget>[
-                  for (var i = 0; i < widget.items.length; i++)
-                    _buildStaggeredItem(divider, i, t),
-                ],
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    for (var i = 0; i < widget.items.length; i++)
+                      _buildStaggeredItem(divider, i, t),
+                  ],
+                ),
               ),
             );
           },
@@ -1027,65 +1044,43 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
               _rubberOffset,
             ]),
             builder: (context, child) {
-              final settledOpen =
-                  _openAnim.value >= 1.0 &&
-                  !_widthMorph.isAnimating &&
-                  !_heightMorph.isAnimating &&
-                  (_widthMorph.value - 1.0).abs() < 0.001 &&
-                  (_heightMorph.value - 1.0).abs() < 0.001;
-              final currentRect = _morphedCardRect(targetRect);
-              final avgMorph = ((_widthMorph.value + _heightMorph.value) * 0.5)
-                  .clamp(0.0, 1.0);
-              final heightClamped = _heightMorph.value.clamp(0.0, 1.0);
-              final currentRadius =
-                  lerpDouble(widget.anchorRadius, 20.0, avgMorph) ?? 20.0;
-              final contentScale =
-                  lerpDouble(0.86, 1.0, _heightMorph.value.clamp(0.0, 1.05)) ??
-                  1.0;
+              final morphValue = (_widthMorph.value + _heightMorph.value) * 0.5;
+              final morphClamped = morphValue.clamp(0.0, 1.0);
+              final startScale =
+                  (widget.anchor.shortestSide /
+                          math.max(1.0, targetRect.shortestSide))
+                      .clamp(0.22, 0.45);
+              final openScale = lerpDouble(startScale, 1.0, morphValue) ?? 1.0;
               final interactiveScale = 1.0 + 0.016 * _pressLift.value;
+              final totalScale = math.max(0.01, openScale * interactiveScale);
               final rubber = _rubberOffset.value;
-
-              final innerScaled = settledOpen
-                  ? child
-                  : Transform.scale(
-                      alignment: align,
-                      scale: contentScale,
-                      child: OverflowBox(
-                        alignment: align,
-                        minWidth: targetRect.width,
-                        maxWidth: targetRect.width,
-                        minHeight: targetRect.height,
-                        maxHeight: targetRect.height,
-                        child: child,
-                      ),
-                    );
 
               Widget card = Material(
                 color: scheme.surfaceContainerLowest,
                 surfaceTintColor: Colors.transparent,
-                elevation: 8 * heightClamped,
+                elevation: 8 * morphClamped,
                 shadowColor: Colors.black.withValues(alpha: 0.16),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(currentRadius),
+                  borderRadius: BorderRadius.circular(20),
                   side: BorderSide(
                     color: scheme.outlineVariant.withValues(
-                      alpha: 0.36 - 0.14 * avgMorph,
+                      alpha: 0.36 - 0.14 * morphClamped,
                     ),
                     width: 1.0,
                   ),
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: SizedBox(
-                  width: math.max(0.0, currentRect.width),
-                  height: math.max(0.0, currentRect.height),
-                  child: innerScaled,
+                  width: targetRect.width,
+                  height: targetRect.height,
+                  child: child,
                 ),
               );
 
-              if ((interactiveScale - 1.0).abs() > 0.0005) {
+              if ((totalScale - 1.0).abs() > 0.0005) {
                 card = Transform.scale(
                   alignment: align,
-                  scale: interactiveScale,
+                  scale: totalScale,
                   child: card,
                 );
               }
@@ -1094,10 +1089,10 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
               }
 
               return Positioned(
-                left: currentRect.left,
-                top: currentRect.top,
-                width: math.max(0.0, currentRect.width),
-                height: math.max(0.0, currentRect.height),
+                left: targetRect.left,
+                top: targetRect.top,
+                width: targetRect.width,
+                height: targetRect.height,
                 child: FadeTransition(
                   opacity: shellFade,
                   child: KeyedSubtree(
@@ -1129,29 +1124,24 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     );
   }
 
-  /// 单项错峰浮现：在容器展开约 20% 后依序滑入，任意时刻反转均可无跳变回退。
+  /// 单项错峰浮现：在容器展开后依序利落滑入，任意时刻反转均可无跳变回退。
   Widget _buildStaggeredItem(DividerThemeData divider, int index, double t) {
     final item = widget.items[index];
     final step = index < 6 ? index : 6;
-    final start = 0.14 + step * 0.06;
-    final end = math.min(1.0, start + 0.56);
+    final start = 0.05 + step * 0.035;
+    final end = math.min(1.0, start + 0.42);
     final raw = ((t - start) / math.max(0.01, end - start)).clamp(0.0, 1.0);
     final itemT = Curves.easeOutCubic.transform(raw);
-    final dy = (1.0 - itemT) * (_openUp ? 10.0 : -10.0);
 
     final Widget child;
     if (item.isDivider) {
-      child = SizedBox(
-        key: _itemKeys[index],
-        child: Divider(
-          height: 1,
-          thickness: divider.thickness,
-          color: divider.color,
-        ),
+      child = Divider(
+        height: 1,
+        thickness: divider.thickness,
+        color: divider.color,
       );
     } else {
       child = _MenuTile<T>(
-        key: _itemKeys[index],
         item: item,
         hovered: _hoveredIndex == index || _pressedScrollableIndex == index,
         onTap: () => _commitSelection(index),
@@ -1164,10 +1154,9 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
       );
     }
 
-    if (t >= 1.0) return child;
-    return Opacity(
-      opacity: itemT,
-      child: Transform.translate(offset: Offset(0, dy), child: child),
+    return KeyedSubtree(
+      key: _itemKeys[index],
+      child: t >= 1.0 ? child : Opacity(opacity: itemT, child: child),
     );
   }
 }
@@ -1204,7 +1193,8 @@ class _MenuPillPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(12));
+    // 外层菜单圆角 20dp，胶囊四边统一距外框 6dp，同心圆角取 20 - 6 = 14dp。
+    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(14));
     canvas.drawRRect(rrect, Paint()..color = color);
     if (rimColor.a > 0) {
       canvas.drawRRect(
@@ -1290,12 +1280,15 @@ class _MenuTile<T> extends StatelessWidget {
                   ),
                   const SizedBox(width: 12),
                 ],
-                Text(
-                  item.label,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: color,
-                    fontWeight: fontWeight,
+                Flexible(
+                  child: Text(
+                    item.label,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: color,
+                      fontWeight: fontWeight,
+                    ),
                   ),
                 ),
                 if (item.trailing != null) ...<Widget>[

@@ -5,7 +5,8 @@
 ///
 /// 动效（"液态透镜"，参考 FlClash / iOS 26 标签栏）：
 ///  - **按下**：指示块从 dock 里"鼓"出来，变成比 dock 还高的半透明透镜
-///    （白色高光描边 + 投影），透镜下的图标同步放大；松手缩回 dock 并回弹；
+///    （主色细描边，无模糊高光带与独立投影），透镜下的图标与文字同步裁剪着色并原地放大；
+///    松手缩回 dock 并回弹；
 ///  - **拖动**：透镜带一点点滞后地跟随手指（不是生硬贴着手指）；
 ///  - **流动形变**：透镜按**实际移动速度**沿运动方向拉长、前缘领先后缘跟随，
 ///    停下时用欠阻尼弹簧反向挤压一下再回圆，产生"果冻 / 水滴"的余震；
@@ -24,7 +25,7 @@ import 'dart:async' show unawaited;
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform;
+    show TargetPlatform, defaultTargetPlatform, listEquals, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart'
     show SpringDescription, SpringSimulation, Tolerance;
@@ -75,6 +76,13 @@ class FloatingDock extends StatefulWidget {
 
   static double contentInset(BuildContext context) =>
       height + bottomMargin * 2 + MediaQuery.of(context).padding.bottom;
+
+  @visibleForTesting
+  static Path buildLensPathForTest(Rect rect) => _buildLensPath(rect);
+
+  @visibleForTesting
+  static Path buildOutsideLensClipForTest(Rect rect, Size size) =>
+      _OutsideLensClipper(rect: rect).getClip(size);
 
   @override
   State<FloatingDock> createState() => FloatingDockState();
@@ -387,6 +395,10 @@ class FloatingDockState extends State<FloatingDock>
     if (!_rectsChanged(measured)) return;
     setState(() {
       _rects = measured;
+      if (measured.isEmpty) {
+        _placePill(Rect.zero);
+        return;
+      }
       final target = measured[_preview.clamp(0, measured.length - 1)];
       if (_to.isEmpty) {
         _placePill(target);
@@ -621,24 +633,6 @@ class FloatingDockState extends State<FloatingDock>
 
   // ───────────────────────── 绘制 ─────────────────────────
 
-  /// 该高亮哪一项：手指按着 → 跟手指；松手后保持落点，直到 `widget.index` 追上来
-  /// （否则高亮会先弹回旧项再弹回来，看起来"闪两下"）。
-  int get _visualIndex {
-    if (_dragging || _pressed) return _preview;
-    return _preview == widget.index ? widget.index : _preview;
-  }
-
-  /// 透镜中心对应的连续下标（0..n-1），驱动各按钮连续高亮与放大。
-  double get _liveItemPosition {
-    if (_rects.length < 2) return _visualIndex.toDouble();
-    final first = _rects.first.center.dx;
-    final last = _rects.last.center.dx;
-    final span = last - first;
-    if (span.abs() < 0.001) return _visualIndex.toDouble();
-    final ratio = ((_livePillRect.center.dx - first) / span).clamp(0.0, 1.0);
-    return ratio * (_rects.length - 1);
-  }
-
   /// 透镜的最终绘制矩形：在中心位置的基础上叠加鼓起与速度形变。
   Rect _lensRect(Rect base, double lift, double stretch) {
     final double l = lift.clamp(-0.15, 1.3);
@@ -665,8 +659,6 @@ class FloatingDockState extends State<FloatingDock>
     final scheme = Theme.of(context).colorScheme;
     // 布局完成才知道按钮在哪：每帧补一次测量，量到就不再来。
     WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
-
-    final int visualIndex = _visualIndex;
 
     return Padding(
       padding: EdgeInsets.only(
@@ -720,9 +712,6 @@ class FloatingDockState extends State<FloatingDock>
                   animation: Listenable.merge(<Listenable>[_lift, _edge]),
                   builder: (context, child) {
                     final double t = _lift.value.clamp(0.0, 1.2);
-                    final double shadowT = Curves.easeOut.transform(
-                      t.clamp(0.0, 1.0),
-                    );
                     return Transform.translate(
                       offset: Offset(_edge.value, 0),
                       child: Transform.scale(
@@ -740,12 +729,10 @@ class FloatingDockState extends State<FloatingDock>
                             ),
                             boxShadow: <BoxShadow>[
                               BoxShadow(
-                                color: Colors.black.withValues(
-                                  alpha: 0.17 + 0.04 * shadowT,
-                                ),
-                                blurRadius: 30 + 8 * shadowT,
+                                color: Colors.black.withValues(alpha: 0.17),
+                                blurRadius: 30,
                                 spreadRadius: 1.5,
-                                offset: Offset(0, 12 + 3 * shadowT),
+                                offset: const Offset(0, 12),
                               ),
                             ],
                             border: Border.all(
@@ -776,25 +763,22 @@ class FloatingDockState extends State<FloatingDock>
                             ]),
                             builder: (context, _) {
                               final base = _livePillRect;
-                              if (base.isEmpty || base.width <= 0) {
+                              if (!_isValidLensRect(base)) {
                                 return const SizedBox.shrink();
                               }
                               return CustomPaint(
-                                painter: _LensPainter(
+                                painter: _LensBackdropPainter(
                                   rect: _lensRect(base, _lift.value, _stretch),
                                   lift: _lift.value.clamp(0.0, 1.0),
-                                  restColor: scheme.primary.withValues(
-                                    alpha: 0.11,
+                                  // 必须先与纯白底色预混合，避免 Color.lerp 在半透插值中段产生暗灰蓝色阶下陷（变深→变浅）。
+                                  restColor: Color.alphaBlend(
+                                    scheme.primary.withValues(alpha: 0.11),
+                                    scheme.surfaceContainerLowest,
                                   ),
                                   lensColor: Color.alphaBlend(
-                                    scheme.primary.withValues(alpha: 0.05),
-                                    scheme.surfaceContainerLowest.withValues(
-                                      alpha: 0.90,
-                                    ),
-                                  ),
-                                  rimColor: scheme.primary.withValues(
-                                    alpha: 0.22,
-                                  ),
+                                    scheme.primary.withValues(alpha: 0.04),
+                                    scheme.surfaceContainerLowest,
+                                  ).withValues(alpha: 0.92),
                                 ),
                               );
                             },
@@ -807,31 +791,65 @@ class FloatingDockState extends State<FloatingDock>
                           _lift,
                           _physicsFrame,
                         ]),
-                        builder: (context, _) {
-                          final double livePos = _liveItemPosition;
-                          final double lift = _lift.value.clamp(0.0, 1.2);
-                          return Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: <Widget>[
-                              for (
-                                var position = 0;
-                                position < widget.items.length;
-                                position++
-                              ) ...<Widget>[
-                                if (position > 0) SizedBox(width: itemGap),
-                                _DockButton(
-                                  key: _itemKeys[position],
-                                  item: widget.items[position],
-                                  minWidth: itemMinWidth,
-                                  selected: position == visualIndex,
-                                  focus: (1.0 - (livePos - position).abs())
-                                      .clamp(0.0, 1.0),
-                                  lift: lift,
-                                ),
-                              ],
-                            ],
+                        builder: (context, child) {
+                          final base = _livePillRect;
+                          final lensRect = _isValidLensRect(base)
+                              ? _lensRect(base, _lift.value, _stretch)
+                              : Rect.zero;
+                          return ClipPath(
+                            clipper: _OutsideLensClipper(rect: lensRect),
+                            child: child,
                           );
                         },
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            for (
+                              var position = 0;
+                              position < widget.items.length;
+                              position++
+                            ) ...<Widget>[
+                              if (position > 0) SizedBox(width: itemGap),
+                              _DockButton(
+                                key: _itemKeys[position],
+                                item: widget.items[position],
+                                minWidth: itemMinWidth,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: AnimatedBuilder(
+                            animation: Listenable.merge(<Listenable>[
+                              _slide,
+                              _lift,
+                              _physicsFrame,
+                            ]),
+                            builder: (context, _) {
+                              final base = _livePillRect;
+                              if (!_isValidLensRect(base)) {
+                                return const SizedBox.shrink();
+                              }
+                              return CustomPaint(
+                                painter: _LensForegroundPainter(
+                                  rect: _lensRect(base, _lift.value, _stretch),
+                                  lift: _lift.value.clamp(0.0, 1.0),
+                                  items: widget.items,
+                                  itemRects: List<Rect>.of(
+                                    _rects,
+                                    growable: false,
+                                  ),
+                                  primaryColor: scheme.primary,
+                                  rimColor: scheme.primary.withValues(
+                                    alpha: 0.22,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
                       ),
                     ],
                   ),
@@ -845,180 +863,228 @@ class FloatingDockState extends State<FloatingDock>
   }
 }
 
-/// 液态透镜：静止时是 dock 里一块淡主色胶囊；鼓起时过渡成半透明白色透镜
-/// （白色高光描边 + 主色细边 + 投影），并超出 dock 的上下沿。
-/// 所有透明度与阴影均随 [lift] 连续平滑插值，避免松手归零时阈值跳变闪烁。
-class _LensPainter extends CustomPainter {
-  _LensPainter({
+bool _isValidLensRect(Rect rect) =>
+    !rect.isEmpty && rect.isFinite && rect.width > 0 && rect.height > 0;
+
+/// 构建 FlClash 原生风格的连续圆角透镜轮廓路径（[RSuperellipse]）：
+/// 保留上下平直中段，并与两端圆弧保持连续曲率顺滑衔接。
+Path _buildLensPath(Rect rect) {
+  if (!_isValidLensRect(rect)) {
+    return Path();
+  }
+  final double radius = math.min(rect.width, rect.height) / 2;
+  return Path()..addRSuperellipse(
+    RSuperellipse.fromRectAndRadius(rect, Radius.circular(radius)),
+  );
+}
+
+/// 反向裁剪底层普通图标/文字：透镜区域内部完全掏空，避免与透镜层主色放大内容重影。
+class _OutsideLensClipper extends CustomClipper<Path> {
+  _OutsideLensClipper({required this.rect});
+
+  final Rect rect;
+
+  @override
+  Path getClip(Size size) {
+    final bounds = Offset.zero & size;
+    if (!_isValidLensRect(rect)) {
+      return Path()..addRect(bounds.inflate(40));
+    }
+    // 必须先包住 rect 再外扩，防止高速水平拉伸超出 size 左右 40dp 时 evenOdd 奇偶反转。
+    final outer = bounds.expandToInclude(rect).inflate(40);
+    return Path()
+      ..fillType = PathFillType.evenOdd
+      ..addRect(outer)
+      ..addPath(_buildLensPath(rect), Offset.zero);
+  }
+
+  @override
+  bool shouldReclip(covariant _OutsideLensClipper oldClipper) =>
+      oldClipper.rect != rect;
+}
+
+/// 液态透镜底色层：负责渲染静止淡主色胶囊向半透明白色透镜的平滑过渡。
+class _LensBackdropPainter extends CustomPainter {
+  _LensBackdropPainter({
     required this.rect,
     required this.lift,
     required this.restColor,
     required this.lensColor,
-    required this.rimColor,
   });
 
   final Rect rect;
   final double lift;
   final Color restColor;
   final Color lensColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (!_isValidLensRect(rect)) {
+      return;
+    }
+    final path = _buildLensPath(rect);
+    final double elev = Curves.easeOut.transform(lift.clamp(0.0, 1.0));
+    canvas.drawPath(
+      path,
+      Paint()..color = Color.lerp(restColor, lensColor, elev) ?? restColor,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _LensBackdropPainter oldDelegate) =>
+      oldDelegate.rect != rect ||
+      oldDelegate.lift != lift ||
+      oldDelegate.restColor != restColor ||
+      oldDelegate.lensColor != lensColor;
+}
+
+/// 液态透镜前景层：在连续圆角胶囊边界内裁剪绘制主色图标与文字（以各自中心原地放大，不随透镜横向漂移），
+/// 并在外缘叠加干净的细描边（无模糊高光带）。
+class _LensForegroundPainter extends CustomPainter {
+  _LensForegroundPainter({
+    required this.rect,
+    required this.lift,
+    required this.items,
+    required this.itemRects,
+    required this.primaryColor,
+    required this.rimColor,
+  });
+
+  final Rect rect;
+  final double lift;
+  final List<FloatingDockItem> items;
+  final List<Rect> itemRects;
+  final Color primaryColor;
   final Color rimColor;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final double radius = rect.shortestSide / 2;
-    final rrect = RRect.fromRectAndRadius(rect, Radius.circular(radius));
+    if (!_isValidLensRect(rect)) {
+      return;
+    }
+    final path = _buildLensPath(rect);
     final double elev = Curves.easeOut.transform(lift.clamp(0.0, 1.0));
-    final double restMix = (1.0 - elev).clamp(0.0, 1.0);
+    final double zoom = 1.0 + 0.28 * elev;
 
-    // 1. 鼓起时的投影：随 elev 连续淡入淡出，仅绘制在胶囊外圈以免半透明填充透出底黑影（变深→变浅）。
-    if (elev > 0.002) {
-      final outsidePill = Path()
-        ..fillType = PathFillType.evenOdd
-        ..addRect(rrect.outerRect.inflate(28))
-        ..addRRect(rrect);
+    // 1. 透镜裁剪区内：每项以自身 itemRect.center 为原点原地放大，绝不跟随透镜中心横向移动。
+    canvas.save();
+    canvas.clipPath(path);
+
+    final int count = math.min(items.length, itemRects.length);
+    for (var i = 0; i < count; i++) {
+      final itemRect = itemRects[i];
+      if (!_isValidLensRect(itemRect)) continue;
+      final item = items[i];
+      final iconPainter = TextPainter(
+        text: TextSpan(
+          text: String.fromCharCode(item.activeIcon.codePoint),
+          style: TextStyle(
+            fontFamily: item.activeIcon.fontFamily,
+            package: item.activeIcon.fontPackage,
+            fontSize: 20,
+            height: 1.0,
+            color: primaryColor,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final labelPainter = TextPainter(
+        text: TextSpan(
+          text: item.label,
+          style: TextStyle(
+            fontSize: 11,
+            height: 1.15,
+            color: primaryColor,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+
+      final double contentHeight = 20.0 + 2.0 + labelPainter.height;
+      final double topY = itemRect.center.dy - contentHeight / 2;
+
       canvas.save();
-      canvas.clipPath(outsidePill);
-      canvas.drawRRect(
-        rrect.shift(Offset(0, 3 * elev)),
-        Paint()
-          ..color = Colors.black.withValues(alpha: 0.14 * elev)
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 4.0 + 6.0 * elev),
+      final Offset pivot = itemRect.center;
+      canvas.translate(pivot.dx, pivot.dy);
+      canvas.scale(zoom, zoom);
+      canvas.translate(-pivot.dx, -pivot.dy);
+      iconPainter.paint(
+        canvas,
+        Offset(
+          itemRect.center.dx - iconPainter.width / 2,
+          topY + (20.0 - iconPainter.height) / 2,
+        ),
+      );
+      labelPainter.paint(
+        canvas,
+        Offset(itemRect.center.dx - labelPainter.width / 2, topY + 20.0 + 2.0),
       );
       canvas.restore();
     }
+    canvas.restore();
 
-    // 2. 填充：淡主色 → 半透明白色透镜。
-    canvas.drawRRect(
-      rrect,
-      Paint()..color = Color.lerp(restColor, lensColor, elev) ?? restColor,
+    // 2. 干净的边缘细描边：无顶部模糊高光，保持通透。
+    final double rimAlpha = 0.14 + 0.45 * elev;
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.9 + 0.2 * elev
+        ..color = rimColor.withValues(
+          alpha: (rimColor.a * rimAlpha).clamp(0.0, 1.0),
+        ),
     );
-
-    // 3. 静止柔和高光细边：按 (1 - elev) 连续淡出，绝不硬切换。
-    if (restMix > 0.002) {
-      canvas.drawRRect(
-        rrect.deflate(0.6),
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.0
-          ..color = Colors.white.withValues(alpha: 0.45 * restMix),
-      );
-      canvas.drawRRect(
-        rrect,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 0.8
-          ..color = rimColor.withValues(alpha: 0.14 * restMix),
-      );
-    }
-
-    // 4. 鼓起顶部镜面高光与边缘折射：随 elev 连续淡入。
-    if (elev > 0.002) {
-      final Rect upper = Rect.fromLTRB(
-        rect.left + radius * 0.35,
-        rect.top + 1.5,
-        rect.right - radius * 0.35,
-        rect.center.dy,
-      );
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(upper, Radius.circular(upper.height / 2)),
-        Paint()
-          ..shader = LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: <Color>[
-              Colors.white.withValues(alpha: 0.55 * elev),
-              Colors.white.withValues(alpha: 0.0),
-            ],
-          ).createShader(upper),
-      );
-
-      canvas.drawRRect(
-        rrect.deflate(1.0),
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.2
-          ..color = Colors.white.withValues(alpha: 0.85 * elev),
-      );
-      canvas.drawRRect(
-        rrect,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.0
-          ..color = rimColor.withValues(alpha: rimColor.a * elev),
-      );
-    }
   }
 
   @override
-  bool shouldRepaint(covariant _LensPainter oldDelegate) =>
+  bool shouldRepaint(covariant _LensForegroundPainter oldDelegate) =>
       oldDelegate.rect != rect ||
       oldDelegate.lift != lift ||
-      oldDelegate.restColor != restColor ||
-      oldDelegate.lensColor != lensColor ||
-      oldDelegate.rimColor != rimColor;
+      oldDelegate.primaryColor != primaryColor ||
+      oldDelegate.rimColor != rimColor ||
+      !listEquals(oldDelegate.items, items) ||
+      !listEquals(oldDelegate.itemRects, itemRects);
 }
 
-/// 单个按钮（图标在上、文字在下）。
+/// 单个按钮（图标在上、文字在下），底层始终保持 1.0× 中性色，
+/// 不再根据距离提前变色或放大，由上层光学透镜按实际边界裁剪放大与着色。
 ///
 /// **刻意不带自己的 `onTap`**：内层识别器会赢下手势仲裁，外层 `onTapUp` 就不再
 /// 触发 —— "点哪"和"指示块归位"会变成两条路径，落点不一致。
 class _DockButton extends StatelessWidget {
-  const _DockButton({
-    super.key,
-    required this.item,
-    required this.minWidth,
-    required this.selected,
-    required this.focus,
-    required this.lift,
-  });
+  const _DockButton({super.key, required this.item, required this.minWidth});
 
   final FloatingDockItem item;
   final double minWidth;
-  final bool selected;
-
-  /// 透镜离这一项有多近（1 = 正下方，0 = 远离）。
-  final double focus;
-
-  /// 透镜鼓起程度：鼓起时透镜下的图标与文字一起"被放大"。
-  final double lift;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final color =
-        Color.lerp(scheme.onSurfaceVariant, scheme.primary, focus) ??
-        (selected ? scheme.primary : scheme.onSurfaceVariant);
-    // 静止时选中项轻微放大；透镜鼓起时透镜下的内容再放大一截（放大镜效果）。
-    final double magnify = 1.0 + 0.06 * focus + 0.14 * lift * focus;
+    final color = scheme.onSurfaceVariant;
     return ConstrainedBox(
       constraints: BoxConstraints(minWidth: minWidth, minHeight: 46),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        child: Transform.scale(
-          scale: magnify,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              Icon(
-                focus >= 0.5 ? item.activeIcon : item.icon,
-                size: 20,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            Icon(item.icon, size: 20, color: color),
+            const SizedBox(height: 2),
+            Text(
+              item.label,
+              maxLines: 1,
+              softWrap: false,
+              style: TextStyle(
+                fontSize: 11,
+                height: 1.15,
                 color: color,
+                fontWeight: FontWeight.w500,
               ),
-              const SizedBox(height: 2),
-              Text(
-                item.label,
-                maxLines: 1,
-                softWrap: false,
-                style: TextStyle(
-                  fontSize: 11,
-                  height: 1.15,
-                  color: color,
-                  fontWeight: focus >= 0.5 ? FontWeight.w600 : FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

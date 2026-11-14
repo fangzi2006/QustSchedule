@@ -1073,7 +1073,7 @@ class _DayHeader extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(vertical: 3),
                     decoration: BoxDecoration(
                       color: background,
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(10),
                     ),
                     child: Column(
                       children: <Widget>[
@@ -1120,7 +1120,7 @@ class _DayHeader extends StatelessWidget {
                   return Tooltip(
                     message: '周${kDayLabels[day - 1]}有调课冲突，点击查看',
                     child: InkWell(
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(10),
                       onTap: () => showDayConflicts(context, day, dayConflicts),
                       child: cell,
                     ),
@@ -1237,7 +1237,7 @@ class _ConflictCard extends StatelessWidget {
                   ),
                   decoration: BoxDecoration(
                     color: AppColors.of(context).conflictCardBg,
-                    borderRadius: BorderRadius.circular(4),
+                    borderRadius: BorderRadius.circular(6),
                   ),
                   child: Text(
                     '未显示',
@@ -1354,9 +1354,10 @@ class _EmptyWeek extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 16),
-              OutlinedButton(
+              TactileActionButton(
+                variant: TactileActionVariant.outlined,
                 onPressed: () => showCalibrateSheet(context, model),
-                child: const Text('校准周次'),
+                label: const Text('校准周次'),
               ),
             ],
           ),
@@ -1543,7 +1544,7 @@ class _RemarkCard extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
       decoration: BoxDecoration(
         color: scheme.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.7)),
       ),
       child: Column(

@@ -118,12 +118,14 @@ class _CaptchaPageState extends State<CaptchaPage> {
                     Center(
                       child: InkWell(
                         onTap: _busy ? null : model.refreshCaptcha,
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(AppRadius.medium),
                         child: Container(
                           padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
                             color: AppColors.of(context).captchaSurface,
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(
+                              AppRadius.medium,
+                            ),
                             border: Border.all(color: scheme.outlineVariant),
                           ),
                           child: Builder(
@@ -182,9 +184,11 @@ class _CaptchaPageState extends State<CaptchaPage> {
                       onSubmitted: (_) => _submit(),
                     ),
                     const SizedBox(height: 16),
-                    FilledButton(
+                    TactileActionButton(
+                      variant: TactileActionVariant.filled,
+                      borderRadius: 14.0,
                       onPressed: _busy ? null : _submit,
-                      child: Padding(
+                      label: Padding(
                         padding: const EdgeInsets.symmetric(vertical: 10),
                         child: _busy
                             ? const SizedBox(

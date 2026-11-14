@@ -439,9 +439,10 @@ class _IntervalStepper extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
         TactileIconButton(
-          icon: const Icon(Icons.remove_circle_outline_rounded),
+          icon: const Icon(Icons.remove_rounded),
           size: 32,
           iconSize: 20,
+          surfaceStyle: TactileSurfaceStyle.tinted,
           onPressed: value > minAutoRefreshIntervalMinutes
               ? () => onChanged(((value - 1) ~/ 60) * 60)
               : null,
@@ -451,9 +452,10 @@ class _IntervalStepper extends StatelessWidget {
           child: Text('$hours', style: const TextStyle(fontSize: 14)),
         ),
         TactileIconButton(
-          icon: const Icon(Icons.add_circle_outline_rounded),
+          icon: const Icon(Icons.add_rounded),
           size: 32,
           iconSize: 20,
+          surfaceStyle: TactileSurfaceStyle.tinted,
           onPressed: value < maxAutoRefreshIntervalMinutes
               ? () => onChanged(((value ~/ 60) + 1) * 60)
               : null,

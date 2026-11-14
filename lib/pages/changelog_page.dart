@@ -117,7 +117,8 @@ class _ChangelogPageState extends State<ChangelogPage> {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 16),
-              FilledButton.tonal(
+              TactileActionButton(
+                variant: TactileActionVariant.tonal,
                 onPressed: () {
                   setState(() {
                     _errorMessage = null;
@@ -125,7 +126,7 @@ class _ChangelogPageState extends State<ChangelogPage> {
                   });
                   _loadChangelog();
                 },
-                child: const Text('重试'),
+                label: const Text('重试'),
               ),
             ],
           ),
@@ -191,7 +192,7 @@ class _ChangelogPageState extends State<ChangelogPage> {
                           ),
                           decoration: BoxDecoration(
                             color: theme.colorScheme.primary,
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(6),
                             boxShadow: [
                               BoxShadow(
                                 color: theme.colorScheme.primary.withValues(

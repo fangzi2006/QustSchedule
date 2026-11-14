@@ -22,6 +22,12 @@ typedef TactileMenuTrigger = void Function(
   int? dragPointer,
 );
 
+/// 触控按钮的表面风格：
+///  - [elevated]：直接落在画布背景（如顶栏）上的纯白按钮，带一圈轻柔阴影与白色弹出菜单无缝衔接；
+///  - [tinted]：落在纯白卡片内部（如卡片操作、设置页步进器）的柔和浅灰底按钮，避免白底融成一片；
+///  - [transparent]：外层仅保留触控缩放手感，不绘制额外底色与阴影（如彩色 FAB、[TactileActionButton]）。
+enum TactileSurfaceStyle { elevated, tinted, transparent }
+
 class TactileSurfaceButton extends StatefulWidget {
   const TactileSurfaceButton({
     super.key,
@@ -33,6 +39,7 @@ class TactileSurfaceButton extends StatefulWidget {
     this.minSize = const Size(36, 36),
     this.enabled = true,
     this.filled = true,
+    this.surfaceStyle,
     this.tooltip,
   });
 
@@ -44,7 +51,12 @@ class TactileSurfaceButton extends StatefulWidget {
   final Size? minSize;
   final bool enabled;
   final bool filled;
+  final TactileSurfaceStyle? surfaceStyle;
   final String? tooltip;
+
+  TactileSurfaceStyle get effectiveSurfaceStyle =>
+      surfaceStyle ??
+      (filled ? TactileSurfaceStyle.elevated : TactileSurfaceStyle.transparent);
 
   /// 给内嵌 [IconButton] 或 [BackButton] 使用的干净样式：关闭旧式水波纹与灰底叠加层，
   /// 并对齐 36×36 触控盒尺寸，同时保留无障碍与单测句柄兼容性。
@@ -83,18 +95,18 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     with TickerProviderStateMixin {
   static const SpringDescription _pressSpring = SpringDescription(
     mass: 1.0,
-    stiffness: 640.0,
-    damping: 30.0,
+    stiffness: 860.0,
+    damping: 50.0,
   );
   static const SpringDescription _releaseSpring = SpringDescription(
     mass: 1.0,
-    stiffness: 460.0,
-    damping: 20.0,
+    stiffness: 760.0,
+    damping: 46.0,
   );
   static const SpringDescription _rubberSpring = SpringDescription(
     mass: 1.0,
-    stiffness: 440.0,
-    damping: 21.0,
+    stiffness: 740.0,
+    damping: 45.0,
   );
 
   late final AnimationController _press = AnimationController.unbounded(
@@ -294,20 +306,43 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
         final morphScale = isOwnMenuOpen ? (1.0 - 0.12 * fadePhase) : 1.0;
         final scale = (1.0 - 0.055 * p) * morphScale;
 
-        // 统一柔和浅灰底胶囊：平时无生硬白框，仅靠柔和底色统一形制；按下时带微主色反馈。
-        final restFill = scheme.surfaceContainerHigh.withValues(
-          alpha: _interactive ? 0.56 : 0.28,
-        );
-        final activeFill = Color.alphaBlend(
-          scheme.primary.withValues(alpha: 0.12),
-          scheme.surfaceContainerLowest,
-        );
-        final bgColor = widget.filled
-            ? Color.lerp(restFill, activeFill, pressT.clamp(0.0, 1.0))
-            : Colors.transparent;
-        final activeRim = _interactive && pressT > 0.02
-            ? scheme.primary.withValues(alpha: 0.28 * pressT.clamp(0.0, 1.0))
-            : Colors.transparent;
+        final pressClamped = pressT.clamp(0.0, 1.0);
+        final style = widget.effectiveSurfaceStyle;
+
+        final Color bgColor;
+        final List<BoxShadow>? boxShadow;
+        switch (style) {
+          case TactileSurfaceStyle.elevated:
+            final restFill = scheme.surfaceContainerLowest;
+            final activeFill = Color.alphaBlend(
+              scheme.primary.withValues(alpha: 0.08),
+              scheme.surfaceContainerLowest,
+            );
+            bgColor = Color.lerp(restFill, activeFill, pressClamped)!;
+            final shadowAlpha = _interactive
+                ? (0.045 - 0.018 * pressClamped)
+                : 0.02;
+            boxShadow = <BoxShadow>[
+              BoxShadow(
+                color: Colors.black.withValues(alpha: shadowAlpha),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ];
+          case TactileSurfaceStyle.tinted:
+            final restFill = scheme.surfaceContainerHigh.withValues(
+              alpha: _interactive ? 0.56 : 0.28,
+            );
+            final activeFill = Color.alphaBlend(
+              scheme.primary.withValues(alpha: 0.12),
+              scheme.surfaceContainerHigh,
+            );
+            bgColor = Color.lerp(restFill, activeFill, pressClamped)!;
+            boxShadow = null;
+          case TactileSurfaceStyle.transparent:
+            bgColor = Colors.transparent;
+            boxShadow = null;
+        }
 
         return FadeTransition(
           opacity: AlwaysStoppedAnimation<double>(morphOpacity),
@@ -319,9 +354,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
                 decoration: BoxDecoration(
                   color: bgColor,
                   borderRadius: radius,
-                  border: activeRim.a > 0
-                      ? Border.all(color: activeRim, width: 1.0)
-                      : null,
+                  boxShadow: boxShadow,
                 ),
                 child: ClipRRect(borderRadius: radius, child: child),
               ),
@@ -375,6 +408,7 @@ class TactileIconButton extends StatelessWidget {
     this.size = 36,
     this.iconSize = 20,
     this.filled = true,
+    this.surfaceStyle,
   });
 
   final Key? buttonKey;
@@ -385,6 +419,7 @@ class TactileIconButton extends StatelessWidget {
   final double size;
   final double iconSize;
   final bool filled;
+  final TactileSurfaceStyle? surfaceStyle;
 
   @override
   Widget build(BuildContext context) {
@@ -394,6 +429,7 @@ class TactileIconButton extends StatelessWidget {
       borderRadius: BorderRadius.circular(size / 2),
       enabled: onPressed != null,
       filled: filled,
+      surfaceStyle: surfaceStyle,
       child: SizedBox(
         width: size,
         height: size,
@@ -448,6 +484,104 @@ class TactileBackButton extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 统一操作按钮风格变体。
+enum TactileActionVariant { filled, tonal, outlined }
+
+/// 全应用统一触感操作按钮：复用 [TactileSurfaceButton] 按压缩放与微拖拽物理手感，
+/// 内部保留原生 [FilledButton] / [OutlinedButton] 语义与测试句柄，屏蔽 Material 旧水波纹。
+class TactileActionButton extends StatelessWidget {
+  const TactileActionButton({
+    super.key,
+    required this.onPressed,
+    required this.label,
+    this.icon,
+    this.variant = TactileActionVariant.tonal,
+    this.borderRadius = 999.0,
+    this.padding,
+  });
+
+  final VoidCallback? onPressed;
+  final Widget label;
+  final Widget? icon;
+  final TactileActionVariant variant;
+  final double borderRadius;
+  final EdgeInsetsGeometry? padding;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final radius = BorderRadius.circular(borderRadius);
+    final shape = RoundedRectangleBorder(borderRadius: radius);
+    const noOverlay = WidgetStatePropertyAll<Color>(Colors.transparent);
+
+    final Widget inner;
+    switch (variant) {
+      case TactileActionVariant.filled:
+        final style = FilledButton.styleFrom(
+          splashFactory: NoSplash.splashFactory,
+          shape: shape,
+          padding: padding,
+          elevation: 0,
+          shadowColor: Colors.transparent,
+        ).copyWith(overlayColor: noOverlay);
+        inner = icon != null
+            ? FilledButton.icon(
+                onPressed: onPressed,
+                style: style,
+                icon: icon!,
+                label: label,
+              )
+            : FilledButton(onPressed: onPressed, style: style, child: label);
+      case TactileActionVariant.tonal:
+        final style = FilledButton.styleFrom(
+          splashFactory: NoSplash.splashFactory,
+          shape: shape,
+          padding: padding,
+          elevation: 0,
+          shadowColor: Colors.transparent,
+        ).copyWith(overlayColor: noOverlay);
+        inner = icon != null
+            ? FilledButton.tonalIcon(
+                onPressed: onPressed,
+                style: style,
+                icon: icon!,
+                label: label,
+              )
+            : FilledButton.tonal(
+                onPressed: onPressed,
+                style: style,
+                child: label,
+              );
+      case TactileActionVariant.outlined:
+        final style = OutlinedButton.styleFrom(
+          splashFactory: NoSplash.splashFactory,
+          shape: shape,
+          padding: padding,
+          side: BorderSide(
+            color: scheme.outlineVariant.withValues(alpha: 0.78),
+          ),
+          shadowColor: Colors.transparent,
+        ).copyWith(overlayColor: noOverlay);
+        inner = icon != null
+            ? OutlinedButton.icon(
+                onPressed: onPressed,
+                style: style,
+                icon: icon!,
+                label: label,
+              )
+            : OutlinedButton(onPressed: onPressed, style: style, child: label);
+    }
+
+    return TactileSurfaceButton(
+      minSize: null,
+      borderRadius: radius,
+      filled: false,
+      enabled: onPressed != null,
+      child: inner,
     );
   }
 }

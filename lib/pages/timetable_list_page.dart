@@ -84,7 +84,8 @@ class TimetableListPage extends StatelessWidget {
                 const SizedBox(height: 10),
               ],
               const SizedBox(height: 4),
-              OutlinedButton.icon(
+              TactileActionButton(
+                variant: TactileActionVariant.outlined,
                 onPressed: tables.length >= maxTimetables
                     ? null
                     : () => _create(context, model, tables),
@@ -255,6 +256,7 @@ class _TimetableCard extends StatelessWidget {
               TactileSurfaceButton(
                 minSize: const Size(36, 36),
                 borderRadius: BorderRadius.circular(18),
+                surfaceStyle: TactileSurfaceStyle.tinted,
                 tooltip: '更多',
                 onMenuOpen: (buttonContext, dragPointer) => showAppMenu<String>(
                   context: buttonContext,

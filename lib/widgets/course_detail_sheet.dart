@@ -85,7 +85,7 @@ class _CourseDetailSheet extends StatelessWidget {
                 ),
                 decoration: BoxDecoration(
                   color: color.background,
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(14),
                   border: Border.all(color: color.border),
                 ),
                 child: Row(

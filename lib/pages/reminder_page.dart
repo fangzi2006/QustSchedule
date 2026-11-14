@@ -572,18 +572,25 @@ class _DiagnosticsCard extends StatelessWidget {
               spacing: 10,
               runSpacing: 8,
               children: <Widget>[
-                OutlinedButton(onPressed: onResync, child: const Text('立即重排')),
-                OutlinedButton(
+                TactileActionButton(
+                  variant: TactileActionVariant.outlined,
+                  onPressed: onResync,
+                  label: const Text('立即重排'),
+                ),
+                TactileActionButton(
+                  variant: TactileActionVariant.outlined,
                   onPressed: onPreview,
-                  child: const Text('立即显示通知'),
+                  label: const Text('立即显示通知'),
                 ),
-                OutlinedButton(
+                TactileActionButton(
+                  variant: TactileActionVariant.outlined,
                   onPressed: onTestIn5s,
-                  child: const Text('5 秒后测试提醒'),
+                  label: const Text('5 秒后测试提醒'),
                 ),
-                OutlinedButton(
+                TactileActionButton(
+                  variant: TactileActionVariant.outlined,
                   onPressed: onTestInOneMinute,
-                  child: const Text('1 分钟后测试提醒'),
+                  label: const Text('1 分钟后测试提醒'),
                 ),
               ],
             ),

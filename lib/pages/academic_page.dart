@@ -587,7 +587,7 @@ class NextExamHeroCard extends StatelessWidget {
                   ),
                   decoration: BoxDecoration(
                     color: badgeColor,
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(AppRadius.micro),
                   ),
                   child: Text(
                     countdownLabel,
@@ -1025,7 +1025,7 @@ class _GradeListTile extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
               color: scoreColor.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(AppRadius.small),
             ),
             child: Text(
               grade.rawScore,
@@ -1129,7 +1129,7 @@ class _ErrorBanner extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: scheme.errorContainer.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(AppRadius.medium),
         border: Border.all(color: scheme.error.withValues(alpha: 0.3)),
       ),
       child: Row(

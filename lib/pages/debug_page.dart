@@ -123,6 +123,7 @@ class _OverviewTab extends StatelessWidget {
                       icon: const Icon(Icons.copy_all),
                       size: 32,
                       iconSize: 18,
+                      surfaceStyle: TactileSurfaceStyle.tinted,
                       tooltip: '复制全部',
                       onPressed: () => _copyText(
                         context,
@@ -204,7 +205,8 @@ class _OverviewTab extends StatelessWidget {
                   style: TextStyle(fontSize: 12),
                 ),
                 const SizedBox(height: 10),
-                FilledButton.tonalIcon(
+                TactileActionButton(
+                  variant: TactileActionVariant.tonal,
                   icon: const Icon(Icons.cleaning_services_rounded, size: 16),
                   label: const Text('清除学业数据'),
                   onPressed: () async {

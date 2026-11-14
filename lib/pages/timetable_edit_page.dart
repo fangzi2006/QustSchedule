@@ -782,7 +782,8 @@ class _QuickSetupPanel extends StatelessWidget {
                     style: hint,
                   ),
                 ),
-                FilledButton.icon(
+                TactileActionButton(
+                  variant: TactileActionVariant.filled,
                   onPressed: onApply,
                   icon: const Icon(Icons.playlist_add_check_rounded, size: 18),
                   label: const Text('应用'),

@@ -170,7 +170,8 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
                 const SizedBox(height: 8),
               ],
               const SizedBox(height: 4),
-              OutlinedButton.icon(
+              TactileActionButton(
+                variant: TactileActionVariant.outlined,
                 onPressed: () => _addProxy(context),
                 icon: const Icon(Icons.add_rounded, size: 18),
                 label: const Text('新增自定义代理'),
@@ -304,6 +305,7 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
                       icon: const Icon(Icons.speed_rounded),
                       size: 32,
                       iconSize: 18,
+                      surfaceStyle: TactileSurfaceStyle.tinted,
                       tooltip: '测速',
                       onPressed: () => _testProxy(proxy),
                     ),
@@ -313,6 +315,7 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
                       icon: const Icon(Icons.delete_outline_rounded),
                       size: 32,
                       iconSize: 18,
+                      surfaceStyle: TactileSurfaceStyle.tinted,
                       tooltip: '删除',
                       onPressed: () => _removeProxy(context, proxy),
                     ),
@@ -365,7 +368,7 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
         result.isUsable ? '${result.latencyMs} ms' : '不可用 / 超时',
@@ -387,7 +390,7 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
         color: supportsApi
             ? theme.colorScheme.primaryContainer.withValues(alpha: 0.6)
             : theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
         text,

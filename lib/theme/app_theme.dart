@@ -15,6 +15,19 @@ const Color _seed = Color(0xFF3F5AA6);
 /// 页面底色：比纯白略灰，让白色卡片浮起来。
 const Color _canvas = Color(0xFFF6F7F9);
 
+/// 全工程统一圆角等级规范（特殊同心圆/课表块 8dp/胶囊 999dp 等除外）：
+/// - [card] (20dp)：主卡片、底部抽屉、弹出菜单、悬浮容器
+/// - [medium] (14dp)：输入框、块级按钮、提示横幅、嵌套子卡片
+/// - [small] (8dp)：小色块、内嵌列表块、进度条
+/// - [micro] (6dp)：极小状态标签与徽章
+abstract final class AppRadius {
+  static const double card = 20.0;
+  static const double medium = 14.0;
+  static const double small = 8.0;
+  static const double micro = 6.0;
+  static const double pill = 999.0;
+}
+
 /// 全工程语义色扩展，集中收口未纳入默认 [ColorScheme] 的业务与状态颜色。
 ///
 /// 当前仅配置浅色令牌 [light]；后续接入深色主题时只需补充对应的深色实例即可。
@@ -251,7 +264,9 @@ ThemeData buildLightTheme() {
       elevation: 0,
       color: scheme.surfaceContainerLowest,
       surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadius.card),
+      ),
       // 必须裁剪：否则 InkWell 的 hover/点击水波画出方形，在圆角卡片外面露出直角阴影。
       clipBehavior: Clip.antiAlias,
       margin: EdgeInsets.zero,
@@ -275,13 +290,17 @@ ThemeData buildLightTheme() {
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.medium),
+        ),
       ),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.medium),
+        ),
         side: BorderSide(color: scheme.outlineVariant),
       ),
     ),
@@ -289,11 +308,11 @@ ThemeData buildLightTheme() {
       filled: true,
       fillColor: scheme.surfaceContainerLowest,
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(AppRadius.medium),
         borderSide: BorderSide(color: scheme.outlineVariant),
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(AppRadius.medium),
         borderSide: BorderSide(color: scheme.outlineVariant),
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
@@ -302,14 +321,16 @@ ThemeData buildLightTheme() {
       backgroundColor: scheme.surfaceContainerLowest,
       surfaceTintColor: Colors.transparent,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(AppRadius.card),
+        ),
       ),
     ),
     snackBarTheme: SnackBarThemeData(
       behavior: SnackBarBehavior.floating,
       dismissDirection: DismissDirection.horizontal,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(AppRadius.card),
         side: BorderSide(
           color: scheme.outlineVariant.withValues(alpha: 0.6),
           width: 1,

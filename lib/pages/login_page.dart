@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import '../src/app_model.dart';
 import '../src/school.dart';
 import '../widgets/status_popup.dart';
+import '../widgets/tactile_button.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key, required this.model});
@@ -192,9 +193,11 @@ class _LoginPageState extends State<LoginPage> {
                               (value == null || value.isEmpty) ? '请输入密码' : null,
                         ),
                         const SizedBox(height: 16),
-                        FilledButton(
+                        TactileActionButton(
+                          variant: TactileActionVariant.filled,
+                          borderRadius: 14.0,
                           onPressed: busy ? null : _submit,
-                          child: Padding(
+                          label: Padding(
                             padding: const EdgeInsets.symmetric(vertical: 10),
                             child: busy
                                 ? const SizedBox(
@@ -314,7 +317,7 @@ class _Banner extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: isError ? scheme.errorContainer : scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(14),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,

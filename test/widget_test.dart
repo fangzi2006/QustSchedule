@@ -4,6 +4,7 @@
 library;
 
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:qustschedule/main.dart' show pageForStatus;
 import 'package:qustschedule/pages/academic_page.dart';
@@ -19,6 +20,7 @@ import 'package:qustschedule/pages/timetable_edit_page.dart';
 import 'package:qustschedule/pages/timetable_list_page.dart';
 import 'package:qustschedule/pages/update_proxy_page.dart';
 import 'package:qustschedule/theme/app_theme.dart';
+import 'package:qustschedule/widgets/app_menu.dart';
 import 'package:qustschedule/widgets/app_snack_bar.dart';
 import 'package:qustschedule/widgets/changelog_category_badge.dart';
 import 'package:qustschedule/widgets/course_tile.dart';
@@ -1559,7 +1561,7 @@ void main() {
       expect(find.text('退出登录'), findsNothing, reason: '危险操作只在设置页');
     });
 
-    testWidgets('菜单没有外边距，保持舒展宽高且约 350ms 弹簧原地变形展开完', (tester) async {
+    testWidgets('菜单保持舒展宽高与上下统一呼吸边距，约 350ms 弹簧原地变形展开完', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(SchedulePage(model: model)));
@@ -1572,6 +1574,12 @@ void main() {
       await tester.pump(const Duration(milliseconds: 370));
 
       final label = find.text('校准当前周次');
+      final fade = tester.widget<FadeTransition>(
+        find.ancestor(of: label, matching: find.byType(FadeTransition)).first,
+      );
+      expect(fade.opacity.value, 1, reason: '370ms 内内容与双弹簧展开必须落定');
+
+      await tester.pumpAndSettle();
       final card = find
           .ancestor(of: label, matching: find.byType(Material))
           .last;
@@ -1582,9 +1590,9 @@ void main() {
       final tileRect = tester.getRect(tile);
 
       expect(
-        (tileRect.top - cardRect.top).abs(),
-        lessThan(1),
-        reason: '上面不该留白',
+        tileRect.top - cardRect.top,
+        closeTo(4.0, 0.5),
+        reason: '上下留出 4dp 呼吸间距，配合胶囊内缩与左右 6dp 对齐',
       );
       expect(
         (tileRect.left - cardRect.left).abs(),
@@ -1599,11 +1607,6 @@ void main() {
         isTrue,
         reason: '菜单应从触发按钮原地展开衔接，重叠按钮位置',
       );
-
-      final fade = tester.widget<FadeTransition>(
-        find.ancestor(of: label, matching: find.byType(FadeTransition)).first,
-      );
-      expect(fade.opacity.value, 1, reason: '370ms 内内容与双弹簧展开必须落定');
     });
 
     testWidgets('作息时间表 / 教务地址都能从菜单进到对应页面', (tester) async {
@@ -2249,7 +2252,9 @@ void main() {
       );
       expect(capsule.height, closeTo(58, 0.5));
 
-      final scheduleIcon = tester.getCenter(find.byIcon(Icons.calendar_today));
+      final scheduleIcon = tester.getCenter(
+        find.byIcon(Icons.calendar_today_outlined),
+      );
       final scheduleLabel = tester.getCenter(find.text('课表'));
       expect(scheduleIcon.dy, lessThan(scheduleLabel.dy), reason: '图标必须在文字上方');
       expect(
@@ -2279,6 +2284,286 @@ void main() {
       );
       expect(narrowCapsule.width, lessThan(capsule.width));
       expect(narrowCapsule.width, lessThanOrEqualTo(240));
+    });
+
+    testWidgets('dock 光学透镜层裁剪着色与放大，底层按钮保持统一中性色且无靠近缩放冲突', (tester) async {
+      final items = const <FloatingDockItem>[
+        FloatingDockItem(
+          icon: Icons.calendar_today_outlined,
+          activeIcon: Icons.calendar_month_rounded,
+          label: '课表',
+        ),
+        FloatingDockItem(
+          icon: Icons.school_outlined,
+          activeIcon: Icons.school_rounded,
+          label: '学业',
+        ),
+        FloatingDockItem(
+          icon: Icons.settings_outlined,
+          activeIcon: Icons.settings_rounded,
+          label: '设置',
+        ),
+      ];
+      double progress = 0.0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.bottomCenter,
+              child: FloatingDock(
+                items: items,
+                index: 0,
+                onPillProgress: (p) => progress = p,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final dock = find.byType(FloatingDock);
+      final scheme = Theme.of(tester.element(dock)).colorScheme;
+      final rowFinder = find.descendant(of: dock, matching: find.byType(Row));
+      expect(
+        find.descendant(of: rowFinder, matching: find.byType(Transform)),
+        findsNothing,
+        reason: '底层按钮不再使用旧的靠近放大 Transform',
+      );
+      for (final label in const ['课表', '学业', '设置']) {
+        final text = tester.widget<Text>(
+          find.descendant(of: dock, matching: find.text(label)),
+        );
+        expect(text.style?.color, scheme.onSurfaceVariant);
+        expect(text.style?.fontWeight, FontWeight.w500);
+      }
+      expect(
+        find.descendant(of: dock, matching: find.byType(ClipPath)),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: dock, matching: find.byType(CustomPaint)),
+        findsAtLeastNWidgets(2),
+      );
+
+      final from = tester.getCenter(
+        find.descendant(of: dock, matching: find.text('课表')),
+      );
+      final to = tester.getCenter(
+        find.descendant(of: dock, matching: find.text('设置')),
+      );
+      final gesture = await tester.startGesture(from);
+      await gesture.moveTo(to);
+      await tester.pump(const Duration(milliseconds: 120));
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(progress, greaterThan(0.9));
+    });
+
+    test('dock 指示胶囊路径采用 FlClash 原生连续圆角并安全处理空/异常矩形', () {
+      for (final bad in <Rect>[
+        Rect.zero,
+        const Rect.fromLTWH(0, 0, 0, 46),
+        const Rect.fromLTWH(0, 0, 74, 0),
+        const Rect.fromLTRB(20, 10, 10, 50),
+        const Rect.fromLTWH(0, 0, double.nan, 46),
+        const Rect.fromLTWH(double.nan, 0, 74, 46),
+        const Rect.fromLTWH(0, 0, double.infinity, 46),
+        const Rect.fromLTWH(0, double.negativeInfinity, 74, 46),
+      ]) {
+        final emptyPath = FloatingDock.buildLensPathForTest(bad);
+        expect(emptyPath.computeMetrics(), isEmpty);
+        expect(emptyPath.getBounds().isEmpty, isTrue);
+      }
+
+      for (final rect in const <Rect>[
+        Rect.fromLTWH(6, 6, 74, 46),
+        Rect.fromLTWH(0, -1.8, 85.84, 61.64),
+        Rect.fromLTWH(20, 2.5, 111.6, 53.0),
+        Rect.fromLTWH(0, 0, 30, 60),
+      ]) {
+        final path = FloatingDock.buildLensPathForTest(rect);
+        final bounds = path.getBounds();
+        expect(bounds.left, closeTo(rect.left, 0.05));
+        expect(bounds.top, closeTo(rect.top, 0.05));
+        expect(bounds.right, closeTo(rect.right, 0.05));
+        expect(bounds.bottom, closeTo(rect.bottom, 0.05));
+
+        final metrics = path.computeMetrics().toList();
+        expect(metrics, hasLength(1));
+        expect(metrics.first.isClosed, isTrue);
+
+        // 中心与平直中段边界保持准确，上下边中点紧贴矩形上下沿（不偏方、不内陷）。
+        expect(path.contains(rect.center), isTrue);
+        expect(path.contains(Offset(rect.center.dx, rect.top + 0.05)), isTrue);
+        expect(
+          path.contains(Offset(rect.center.dx, rect.bottom - 0.05)),
+          isTrue,
+        );
+        expect(path.contains(Offset(rect.left + 0.5, rect.top + 0.5)), isFalse);
+
+        final radius = rect.shortestSide / 2;
+        final expectedBorder = RoundedSuperellipseBorder(
+          borderRadius: BorderRadius.all(Radius.circular(radius)),
+        ).getOuterPath(rect);
+        expect(
+          Path.combine(
+            PathOperation.xor,
+            path,
+            expectedBorder,
+          ).computeMetrics(),
+          isEmpty,
+        );
+      }
+
+      // 与标准半圆 RRect 在肩部存在连续曲率过渡差异，且保留顶部平直中段。
+      const rest = Rect.fromLTWH(0, 0, 74, 46);
+      final superellipsePath = FloatingDock.buildLensPathForTest(rest);
+      final rrectPath = Path()
+        ..addRRect(RRect.fromRectAndRadius(rest, const Radius.circular(23)));
+      expect(
+        Path.combine(
+          PathOperation.xor,
+          superellipsePath,
+          rrectPath,
+        ).computeMetrics(),
+        isNotEmpty,
+      );
+      expect(superellipsePath.contains(const Offset(33, 0.01)), isTrue);
+      expect(superellipsePath.contains(const Offset(41, 0.01)), isTrue);
+
+      // 即使高速横向拉伸使胶囊超出容器左右 40dp 以外，反向裁剪也不会出现 evenOdd 奇偶反转。
+      const wideStretch = Rect.fromLTWH(-65, -2, 230, 62);
+      const stackSize = Size(200, 58);
+      final wideClip = FloatingDock.buildOutsideLensClipForTest(
+        wideStretch,
+        stackSize,
+      );
+      expect(wideClip.contains(const Offset(-50, 29)), isFalse);
+      expect(wideClip.contains(wideStretch.center), isFalse);
+      expect(wideClip.contains(const Offset(185, 29)), isTrue);
+    });
+
+    testWidgets('dock 按下与快速拖动拉伸时内外裁剪路径同步更新且绘制无异常', (tester) async {
+      final items = const <FloatingDockItem>[
+        FloatingDockItem(
+          icon: Icons.grid_view_outlined,
+          activeIcon: Icons.grid_view_rounded,
+          label: '课表',
+        ),
+        FloatingDockItem(
+          icon: Icons.school_outlined,
+          activeIcon: Icons.school_rounded,
+          label: '学业',
+        ),
+        FloatingDockItem(
+          icon: Icons.settings_outlined,
+          activeIcon: Icons.settings_rounded,
+          label: '设置',
+        ),
+      ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(child: FloatingDock(items: items, index: 0)),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final dock = find.byType(FloatingDock);
+      final stackFinder = find
+          .descendant(of: dock, matching: find.byType(Stack))
+          .first;
+      final stackSize = tester.getSize(stackFinder);
+      final stackTopLeft = tester.getTopLeft(stackFinder);
+
+      ClipPath clipWidget() => tester.widget<ClipPath>(
+        find.descendant(of: dock, matching: find.byType(ClipPath)),
+      );
+
+      final item0Local =
+          tester.getCenter(
+            find.descendant(of: dock, matching: find.text('课表')),
+          ) -
+          stackTopLeft;
+      final item1Local =
+          tester.getCenter(
+            find.descendant(of: dock, matching: find.text('学业')),
+          ) -
+          stackTopLeft;
+      final item2Local =
+          tester.getCenter(
+            find.descendant(of: dock, matching: find.text('设置')),
+          ) -
+          stackTopLeft;
+
+      // 静止态：反向裁剪仅掏空第 0 项。
+      final restClip = clipWidget().clipper!.getClip(stackSize);
+      expect(restClip.contains(item0Local), isFalse);
+      expect(restClip.contains(item2Local), isTrue);
+
+      // 按下并快速横拖到中间项附近：产生抬升与速度拉伸形变，所有层正常绘制与裁剪。
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.descendant(of: dock, matching: find.text('课表'))),
+      );
+      await tester.pump(const Duration(milliseconds: 16));
+      await gesture.moveTo(
+        tester.getCenter(find.descendant(of: dock, matching: find.text('学业'))),
+      );
+      await tester.pump(const Duration(milliseconds: 16));
+      await tester.pump(const Duration(milliseconds: 16));
+      await tester.pump(const Duration(milliseconds: 16));
+
+      final midClip = clipWidget().clipper!.getClip(stackSize);
+      expect(midClip.contains(item1Local), isFalse);
+      expect(midClip.contains(item0Local), isTrue);
+
+      final customPaints = tester.widgetList<CustomPaint>(
+        find.descendant(of: dock, matching: find.byType(CustomPaint)),
+      );
+      for (final cp in customPaints) {
+        final painter = cp.painter;
+        if (painter == null) continue;
+        final recorder = ui.PictureRecorder();
+        final canvas = ui.Canvas(recorder);
+        painter.paint(canvas, stackSize);
+        recorder.endRecording().dispose();
+      }
+      expect(tester.takeException(), isNull);
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+
+      final endClip = clipWidget().clipper!.getClip(stackSize);
+      expect(endClip.contains(item1Local), isFalse);
+      expect(endClip.contains(item0Local), isTrue);
+
+      // 宽度压缩重布局（相同 items.length 但 itemRects 改变）：裁剪与前景重绘应保持同步且无异常。
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 220,
+                child: FloatingDock(items: items, index: 1),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final narrowStackSize = tester.getSize(stackFinder);
+      final narrowStackTopLeft = tester.getTopLeft(stackFinder);
+      final narrowItem1Local =
+          tester.getCenter(
+            find.descendant(of: dock, matching: find.text('学业')),
+          ) -
+          narrowStackTopLeft;
+      final narrowClip = clipWidget().clipper!.getClip(narrowStackSize);
+      expect(narrowClip.contains(narrowItem1Local), isFalse);
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets('学业页与二级页顶栏按钮均统一使用 36×36 TactileSurfaceButton', (tester) async {
@@ -3967,6 +4252,192 @@ void main() {
       }
       final addText = tester.widget<Text>(find.text('新增'));
       expect(addText.style?.color, AppColors.light.categoryAdd);
+    });
+  });
+
+  group('触控按钮表面样式与长按菜单胶囊定位', () {
+    testWidgets('背景按钮为纯白带阴影且按住无边框；卡片内与彩色按钮无阴影无按压边框', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: Scaffold(
+            body: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  TactileIconButton(
+                    icon: const Icon(Icons.refresh_rounded),
+                    onPressed: () {},
+                  ),
+                  TactileIconButton(
+                    icon: const Icon(Icons.delete_outline_rounded),
+                    surfaceStyle: TactileSurfaceStyle.tinted,
+                    onPressed: () {},
+                  ),
+                  TactileActionButton(
+                    variant: TactileActionVariant.tonal,
+                    onPressed: () {},
+                    label: const Text('检查更新'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final bgSurface = find.ancestor(
+        of: find.byIcon(Icons.refresh_rounded),
+        matching: find.byType(TactileSurfaceButton),
+      );
+      final bgDecor = tester.widget<DecoratedBox>(
+        find
+            .descendant(of: bgSurface, matching: find.byType(DecoratedBox))
+            .first,
+      );
+      final bgBox = bgDecor.decoration as BoxDecoration;
+      expect(bgBox.color, Colors.white);
+      expect(bgBox.boxShadow, isNotNull);
+      expect(bgBox.boxShadow, isNotEmpty);
+      expect(bgBox.border, isNull);
+
+      final cardSurface = find.ancestor(
+        of: find.byIcon(Icons.delete_outline_rounded),
+        matching: find.byType(TactileSurfaceButton),
+      );
+      final cardDecor = tester.widget<DecoratedBox>(
+        find
+            .descendant(of: cardSurface, matching: find.byType(DecoratedBox))
+            .first,
+      );
+      final cardBox = cardDecor.decoration as BoxDecoration;
+      expect(cardBox.boxShadow, isNull);
+      expect(cardBox.border, isNull);
+
+      // 按住「检查更新」与背景按钮，均不应出现旧版按压边框。
+      final checkBtn = find.text('检查更新');
+      final gesture1 = await tester.startGesture(tester.getCenter(checkBtn));
+      await tester.pump(const Duration(milliseconds: 60));
+      final actionSurface = find.ancestor(
+        of: checkBtn,
+        matching: find.byType(TactileSurfaceButton),
+      );
+      final actionDecor = tester.widget<DecoratedBox>(
+        find
+            .descendant(of: actionSurface, matching: find.byType(DecoratedBox))
+            .first,
+      );
+      expect((actionDecor.decoration as BoxDecoration).border, isNull);
+      await gesture1.up();
+      await tester.pumpAndSettle();
+
+      final gesture2 = await tester.startGesture(tester.getCenter(bgSurface));
+      await tester.pump(const Duration(milliseconds: 60));
+      final bgDecorPressed = tester.widget<DecoratedBox>(
+        find
+            .descendant(of: bgSurface, matching: find.byType(DecoratedBox))
+            .first,
+      );
+      expect((bgDecorPressed.decoration as BoxDecoration).border, isNull);
+      await gesture2.up();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('设置页最小更新间隔使用无边框加减号且落在白色卡片内无阴影', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+
+      await tester.pumpWidget(wrap(SettingsPage(model: model)));
+      await tester.pumpAndSettle();
+
+      await tester.dragUntilVisible(
+        find.text('最小更新间隔'),
+        find.byType(ListView),
+        const Offset(0, -120),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.remove_circle_outline_rounded), findsNothing);
+      expect(find.byIcon(Icons.add_circle_outline_rounded), findsNothing);
+      final minusBtn = find.widgetWithIcon(
+        TactileIconButton,
+        Icons.remove_rounded,
+      );
+      final plusBtn = find.widgetWithIcon(TactileIconButton, Icons.add_rounded);
+      expect(minusBtn, findsOneWidget);
+      expect(plusBtn, findsOneWidget);
+
+      final minusDecor = tester.widget<DecoratedBox>(
+        find
+            .descendant(of: minusBtn, matching: find.byType(DecoratedBox))
+            .first,
+      );
+      expect((minusDecor.decoration as BoxDecoration).boxShadow, isNull);
+    });
+
+    testWidgets('长按触发按钮展开菜单并滑选时，选择胶囊对齐选项位置并准确提交选中项', (tester) async {
+      String? picked;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: Scaffold(
+            appBar: AppBar(
+              actions: <Widget>[
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: TactileSurfaceButton(
+                    minSize: const Size(36, 36),
+                    onMenuOpen: (anchorCtx, dragPointer) {
+                      showAppMenu<String>(
+                        context: anchorCtx,
+                        dragPointer: dragPointer,
+                        items: const <AppMenuItem<String>>[
+                          AppMenuItem<String>(value: 'a', label: '选项甲'),
+                          AppMenuItem<String>(value: 'b', label: '选项乙'),
+                          AppMenuItem<String>(value: 'c', label: '选项丙'),
+                        ],
+                        onSelected: (v) => picked = v,
+                      );
+                    },
+                    child: const SizedBox(
+                      width: 36,
+                      height: 36,
+                      child: Icon(Icons.more_horiz_rounded),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            body: const SizedBox.expand(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final trigger = find.byIcon(Icons.more_horiz_rounded);
+      final downPos = tester.getCenter(trigger);
+      final gesture = await tester.startGesture(downPos);
+      // 等待 190ms 长按触发菜单展开
+      await tester.pump(const Duration(milliseconds: 220));
+      await tester.pump(const Duration(milliseconds: 40));
+
+      expect(find.text('选项甲'), findsOneWidget);
+      expect(find.text('选项乙'), findsOneWidget);
+
+      // 手指在菜单展开过程中先滑到「选项乙」，再短暂滑出菜单外触发橡皮筋偏移，然后滑回「选项丙」松手
+      final itemBPos = tester.getCenter(find.text('选项乙'));
+      await gesture.moveTo(itemBPos);
+      await tester.pump(const Duration(milliseconds: 20));
+      await gesture.moveTo(Offset(itemBPos.dx - 160, itemBPos.dy));
+      await tester.pump(const Duration(milliseconds: 20));
+      final itemCPos = tester.getCenter(find.text('选项丙'));
+      await gesture.moveTo(itemCPos);
+      await tester.pump(const Duration(milliseconds: 20));
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(picked, 'c');
     });
   });
 }

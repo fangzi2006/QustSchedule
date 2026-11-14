@@ -62,6 +62,7 @@ class ReschedulePage extends StatelessWidget {
                                 icon: const Icon(Icons.delete_outline_rounded),
                                 size: 32,
                                 iconSize: 18,
+                                surfaceStyle: TactileSurfaceStyle.tinted,
                                 tooltip: '删除',
                                 onPressed: () =>
                                     model.removeReschedule(rule.id),
