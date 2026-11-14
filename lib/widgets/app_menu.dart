@@ -1,19 +1,27 @@
-/// 轻量锚定菜单：贴着按钮弹出，**没有外边距**，带纵向帷幕展开与菜单项错峰浮现动效。
+/// 轻量非阻塞锚定菜单：支持按钮到菜单的无缝容器形变衔接、按住下拉直选、
+/// 短菜单指尖滑选与越界橡皮筋回弹，以及外部触控穿透即时关闭。
 ///
-/// 为什么不用 `PopupMenuButton`：
-///  1. 它固定 300ms 展开，四项的菜单点完要等半秒才落定，观感很拖；
-///  2. 它四周有 `menuPadding`（默认 8px），在圆角卡片里看起来就是"一圈白边"，
-///     和 app 里其它卡片（圆角 14、无内边距）明显不是一套；
-///  3. 这两点都没有主题开关可调。
-///
-/// 这里用一条 `PopupRoute` + `CustomSingleChildLayout` 自己摆位置：
-/// 横向居中于按钮、纵向贴在按钮下方，放不下就翻到上方，并夹在屏幕安全边距内；
-/// 展开/收起全程由单一路由 `animation` 驱动，中途点击菜单项或空白处可随时无跳变打断。
+/// 为什么放弃传统的 `PopupRoute`：
+///  1. `PopupRoute` 的 `ModalBarrier` 会吃掉第一次外部点击，导致打开菜单后无法
+///     直接拖动底部 Dock 栏或滑动课表；
+///  2. 改用非阻塞 [OverlayEntry] + 全局指针路由 + [LocalHistoryEntry]（系统返回键），
+///     菜单外任意位置手指一落下就会同步启动收起动画，同时原触控/拖动不丢帧直达底层组件；
+///  3. 配合 [TactileSurfaceButton]，支持按钮框线形变展开为菜单卡片，也支持“按住按钮
+///     下拉不松手”一指连贯滑入菜单预览、松手即选中。
 library;
 
+import 'dart:async' show Completer, unawaited;
 import 'dart:math' as math;
+import 'dart:ui' show lerpDouble;
 
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform;
+import 'package:flutter/gestures.dart'
+    show GestureBinding, PointerDeviceKind, kPrimaryButton;
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart' show SpringDescription, SpringSimulation;
+import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
+import 'package:flutter/services.dart' show HapticFeedback;
 
 /// 一项菜单。
 class AppMenuItem<T> {
@@ -26,7 +34,7 @@ class AppMenuItem<T> {
     this.selected = false,
   }) : isDivider = false;
 
-  /// 一条分隔线（点击不会有任何结果）。
+  /// 一条分隔线（点击不会有任何结果，手指滑过时会无缝吸附到上方或下方最近可用项）。
   const AppMenuItem.divider()
     : value = null,
       label = '',
@@ -45,259 +53,1151 @@ class AppMenuItem<T> {
   final bool selected;
 }
 
-/// 贴着 [context] 对应的控件弹出菜单；选中后回调 [onSelected]。
+/// 全局当前激活的菜单会话：同一时刻最多只存在一个锚定菜单，避免叠层打架。
+_ActiveMenuSession? _activeSession;
+
+/// 记录当前正在形变展开/收起的菜单触发器及进度（0..1），让原按钮原地渐隐融入变形。
+final ValueNotifier<(RenderObject?, double)> activeAppMenuMorph =
+    ValueNotifier<(RenderObject?, double)>((null, 0.0));
+
+/// 记录被同一触发按钮按下关闭时的 RenderObject，避免随后的 `onTap` 立即二次打开。
+RenderObject? _suppressedTriggerObject;
+int? _suppressedPointer;
+
+/// 贴着 [context] 对应的控件展开菜单；选中后回调 [onSelected]。
 ///
-/// [context] 必须是"要被当成锚点"的那个控件（用 `Builder` 拿它的 context）。
+/// [anchorRadius] 用于按钮 → 菜单容器形变衔接的起始圆角半径；
+/// [dragPointer] 不为 null 时，菜单会直接接管该手指实现“按住按钮不放下滑直选”。
 Future<void> showAppMenu<T>({
   required BuildContext context,
   required List<AppMenuItem<T>> items,
   required ValueChanged<T> onSelected,
   double maxHeight = 380,
+  double anchorRadius = 18,
+  int? dragPointer,
 }) async {
   final box = context.findRenderObject();
-  final overlay = Overlay.of(
-    context,
-    rootOverlay: true,
-  ).context.findRenderObject();
-  if (box is! RenderBox || overlay is! RenderBox || !box.hasSize) return;
+  final overlayState = Overlay.of(context, rootOverlay: true);
+  final overlayBox = overlayState.context.findRenderObject();
+  if (box is! RenderBox || overlayBox is! RenderBox || !box.hasSize) return;
 
-  final anchor = box.localToGlobal(Offset.zero, ancestor: overlay) & box.size;
-  final picked = await Navigator.of(context, rootNavigator: true).push<T>(
-    _AppMenuRoute<T>(anchor: anchor, items: items, maxHeight: maxHeight),
-  );
-  if (picked != null) onSelected(picked);
-}
+  // 若是同一个触发按钮刚在 PointerDown 被判定收起，本次点击不再重开（实现点一下开、再点一下关）。
+  if (dragPointer == null && identical(_suppressedTriggerObject, box)) {
+    _suppressedTriggerObject = null;
+    _suppressedPointer = null;
+    return;
+  }
+  _suppressedTriggerObject = null;
+  _suppressedPointer = null;
 
-class _AppMenuRoute<T> extends PopupRoute<T> {
-  _AppMenuRoute({
-    required this.anchor,
-    required this.items,
-    required this.maxHeight,
-  });
+  // 若同一按钮对应的菜单正打开着（例如键盘/无障碍直接触发），直接收起。
+  final existing = _activeSession;
+  if (existing != null &&
+      !existing.closing &&
+      identical(existing.triggerRenderObject, box)) {
+    existing.dismiss();
+    return;
+  }
+  existing?.dismiss();
 
-  final Rect anchor;
-  final List<AppMenuItem<T>> items;
-  final double maxHeight;
+  final anchor =
+      box.localToGlobal(Offset.zero, ancestor: overlayBox) & box.size;
+  final overlaySize = overlayBox.size;
+  final modalRoute = ModalRoute.of(context);
 
-  // 不压暗背景：菜单很小，压暗反而像弹了个对话框。
-  @override
-  Color? get barrierColor => null;
+  final completer = Completer<T?>();
+  late final _ActiveMenuSession session;
+  late final OverlayEntry entry;
 
-  @override
-  bool get barrierDismissible => true;
+  final menuKey = GlobalKey<_AppMenuState<T>>();
 
-  @override
-  String get barrierLabel => '关闭菜单';
-
-  @override
-  Duration get transitionDuration => const Duration(milliseconds: 140);
-
-  @override
-  Duration get reverseTransitionDuration => const Duration(milliseconds: 100);
-
-  @override
-  Widget buildPage(
-    BuildContext context,
-    Animation<double> animation,
-    Animation<double> secondaryAnimation,
-  ) => CustomSingleChildLayout(
-    delegate: _MenuLayout(anchor: anchor),
-    child: _AppMenu<T>(
+  entry = OverlayEntry(
+    builder: (_) => _AppMenu<T>(
+      key: menuKey,
+      session: session,
       items: items,
       maxHeight: maxHeight,
       anchor: anchor,
-      animation: animation,
+      anchorRadius: anchorRadius,
+      overlaySize: overlaySize,
+      dragPointer: dragPointer,
+      overlayVsync: overlayState,
+      onDismissed: (T? picked) {
+        if (!completer.isCompleted) {
+          completer.complete(picked);
+        }
+      },
+      onEntryDisposeReady: () {
+        session.cleanupEntry();
+      },
     ),
   );
 
-  @override
-  Widget buildTransitions(
-    BuildContext context,
-    Animation<double> animation,
-    Animation<double> secondaryAnimation,
-    Widget child,
-  ) {
-    final fade = CurvedAnimation(
-      parent: animation,
-      curve: const Interval(0.0, 0.65, curve: Curves.easeOut),
-    );
-    return FadeTransition(opacity: fade, child: child);
+  session = _ActiveMenuSession(
+    triggerRenderObject: box,
+    triggerGlobalRect:
+        box.localToGlobal(Offset.zero, ancestor: overlayBox) & box.size,
+    entry: entry,
+    modalRoute: modalRoute,
+    onRequestClose: ([Object? result]) {
+      menuKey.currentState?.closeWithResult(result as T?);
+    },
+  );
+
+  _activeSession = session;
+  session.attach();
+  overlayState.insert(entry);
+
+  final picked = await completer.future;
+  if (picked != null) {
+    onSelected(picked);
   }
 }
 
-/// 把菜单摆在锚点下方居中；下方放不下就翻到上方。
-class _MenuLayout extends SingleChildLayoutDelegate {
-  _MenuLayout({required this.anchor});
+class _ActiveMenuSession {
+  _ActiveMenuSession({
+    required this.triggerRenderObject,
+    required this.triggerGlobalRect,
+    required this.entry,
+    required this.modalRoute,
+    required this.onRequestClose,
+  });
 
-  final Rect anchor;
-  static const double margin = 8;
-  static const double gap = 6;
+  final RenderObject triggerRenderObject;
+  final Rect triggerGlobalRect;
+  final OverlayEntry entry;
+  final ModalRoute<dynamic>? modalRoute;
+  final void Function([Object? result]) onRequestClose;
 
-  @override
-  BoxConstraints getConstraintsForChild(BoxConstraints constraints) {
-    final maxWidth = constraints.maxWidth.isFinite
-        ? constraints.maxWidth - margin * 2
-        : 260.0;
-    final maxHeight = constraints.maxHeight.isFinite
-        ? constraints.maxHeight - margin * 2
-        : 380.0;
-    return BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight);
-  }
+  bool closing = false;
+  bool cleaned = false;
+  LocalHistoryEntry? _historyEntry;
+  bool _removingHistory = false;
+  _AppMenuState<dynamic>? state;
 
-  @override
-  Offset getPositionForChild(Size size, Size childSize) {
-    var x = anchor.center.dx - childSize.width / 2;
-    x = x.clamp(margin, size.width - childSize.width - margin);
-
-    var y = anchor.bottom + gap;
-    if (y + childSize.height > size.height - margin) {
-      final above = anchor.top - childSize.height - gap;
-      y = above >= margin ? above : size.height - childSize.height - margin;
+  void attach() {
+    if (modalRoute != null && modalRoute!.isActive) {
+      // impliesAppBarDismissal: false —— 只让系统返回键能收起菜单，
+      // 不要让 AppBar 因此自动冒出一个左上角返回按钮。
+      final localHistory = LocalHistoryEntry(
+        impliesAppBarDismissal: false,
+        onRemove: () {
+          if (_removingHistory || closing) return;
+          dismiss();
+        },
+      );
+      _historyEntry = localHistory;
+      modalRoute!.addLocalHistoryEntry(localHistory);
     }
-    return Offset(x, y);
   }
 
-  @override
-  bool shouldRelayout(covariant _MenuLayout oldDelegate) =>
-      oldDelegate.anchor != anchor;
+  void dismiss([Object? result]) {
+    if (closing) return;
+    closing = true;
+    _removeHistoryEntry();
+    onRequestClose(result);
+  }
+
+  void _removeHistoryEntry() {
+    final history = _historyEntry;
+    _historyEntry = null;
+    if (history == null) return;
+    _removingHistory = true;
+    try {
+      history.remove();
+    } finally {
+      _removingHistory = false;
+    }
+  }
+
+  void cleanupEntry() {
+    if (cleaned) return;
+    cleaned = true;
+    _removeHistoryEntry();
+    if (identical(_activeSession, this)) {
+      _activeSession = null;
+    }
+    if (identical(activeAppMenuMorph.value.$1, triggerRenderObject)) {
+      activeAppMenuMorph.value = (null, 0.0);
+    }
+    if (entry.mounted) {
+      entry.remove();
+    }
+  }
 }
 
-class _AppMenu<T> extends StatelessWidget {
+class _AppMenu<T> extends StatefulWidget {
   const _AppMenu({
+    super.key,
+    required this.session,
     required this.items,
     required this.maxHeight,
     required this.anchor,
-    required this.animation,
+    required this.anchorRadius,
+    required this.overlaySize,
+    required this.dragPointer,
+    required this.overlayVsync,
+    required this.onDismissed,
+    required this.onEntryDisposeReady,
   });
 
+  final _ActiveMenuSession session;
   final List<AppMenuItem<T>> items;
   final double maxHeight;
   final Rect anchor;
-  final Animation<double> animation;
+  final double anchorRadius;
+  final Size overlaySize;
+  final int? dragPointer;
+  final TickerProvider overlayVsync;
+  final ValueChanged<T?> onDismissed;
+  final VoidCallback onEntryDisposeReady;
+
+  @override
+  State<_AppMenu<T>> createState() => _AppMenuState<T>();
+}
+
+class _AppMenuState<T> extends State<_AppMenu<T>>
+    with TickerProviderStateMixin {
+  /// 高亮胶囊在菜单项间切换的果冻弹簧：快速追随并带轻巧回弹。
+  static const SpringDescription _pillSpring = SpringDescription(
+    mass: 1.0,
+    stiffness: 560.0,
+    damping: 30.0,
+  );
+
+  /// 胶囊出现/隐去及纵向拉伸形变弹簧。
+  static const SpringDescription _presenceSpring = SpringDescription(
+    mass: 1.0,
+    stiffness: 480.0,
+    damping: 26.0,
+  );
+
+  /// 滑出菜单外松手后的整卡橡皮筋回弹弹簧。
+  static const SpringDescription _rubberSpring = SpringDescription(
+    mass: 1.0,
+    stiffness: 440.0,
+    damping: 20.0,
+  );
+
+  final GlobalKey _restBoxKey = GlobalKey();
+  final GlobalKey _menuStackKey = GlobalKey();
+  final ScrollController _scrollController = ScrollController();
+  final List<GlobalKey> _itemKeys = <GlobalKey>[];
+
+  late final AnimationController _openAnim = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 240),
+    reverseDuration: const Duration(milliseconds: 170),
+  );
+  late final AnimationController _pillSlide = AnimationController.unbounded(
+    vsync: this,
+    value: 1.0,
+  );
+  late final AnimationController _pillPresence = AnimationController.unbounded(
+    vsync: this,
+    value: 0.0,
+  );
+  late final AnimationController _pillStretch = AnimationController.unbounded(
+    vsync: this,
+    value: 0.0,
+  );
+  late final AnimationController _pressLift = AnimationController.unbounded(
+    vsync: this,
+    value: 0.0,
+  );
+  late final AnimationController _rubberAnim = AnimationController.unbounded(
+    vsync: this,
+    value: 1.0,
+  );
+
+  List<Rect> _itemRects = const <Rect>[];
+  Size _menuSize = Size.zero;
+  Rect? _targetRect;
+  bool _openUp = false;
+  bool _alignRight = false;
+  bool _isScrollable = false;
+
+  static const Curve _morphOpenCurve = Cubic(0.18, 1.14, 0.32, 1.0);
+  static const Curve _morphCloseCurve = Curves.easeInCubic;
+
+  double _morphProgress(double rawT) {
+    final t = rawT.clamp(0.0, 1.0);
+    if (t == 0.0 || t == 1.0) return t;
+    final reverse = _openAnim.status == AnimationStatus.reverse;
+    return reverse
+        ? _morphCloseCurve.transform(t)
+        : _morphOpenCurve.transform(t);
+  }
+
+  void _syncAnchorMorph() {
+    if (!mounted) return;
+    activeAppMenuMorph.value = (
+      widget.session.triggerRenderObject,
+      _openAnim.value.clamp(0.0, 1.0),
+    );
+  }
+
+  int? _activePointer;
+  int? _handoffPointer;
+  int? _hoveredIndex;
+  int? _pressedScrollableIndex;
+  bool _committed = false;
+
+  Rect _pillFrom = Rect.zero;
+  Rect _pillTo = Rect.zero;
+  Offset _rubberFrom = Offset.zero;
+  Offset _rubberTarget = Offset.zero;
+  final ValueNotifier<Offset> _rubberOffset = ValueNotifier<Offset>(
+    Offset.zero,
+  );
+
+  bool _globalRouterAttached = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.session.state = this;
+    _syncKeys();
+    _rubberAnim.addListener(_syncRubberOffset);
+    _openAnim.addListener(_syncAnchorMorph);
+    _attachGlobalPointerRouter();
+
+    if (widget.dragPointer != null) {
+      _handoffPointer = widget.dragPointer;
+      _activePointer = widget.dragPointer;
+      _setPressLift(1.0);
+    }
+
+    _openAnim.forward();
+  }
+
+  void _attachGlobalPointerRouter() {
+    if (_globalRouterAttached) return;
+    _globalRouterAttached = true;
+    GestureBinding.instance.pointerRouter.addGlobalRoute(_handleGlobalPointer);
+  }
+
+  void _detachGlobalPointerRouter() {
+    if (!_globalRouterAttached) return;
+    _globalRouterAttached = false;
+    GestureBinding.instance.pointerRouter.removeGlobalRoute(
+      _handleGlobalPointer,
+    );
+  }
+
+  void _handleGlobalPointer(PointerEvent event) {
+    if (!mounted) return;
+
+    // 若用户直接触发触发按钮后的释放完成，延迟清理防二次重开标记。
+    if (_suppressedPointer == event.pointer &&
+        (event is PointerUpEvent || event is PointerCancelEvent)) {
+      final releasedPointer = event.pointer;
+      Future<void>.microtask(() {
+        if (_suppressedPointer == releasedPointer) {
+          _suppressedTriggerObject = null;
+          _suppressedPointer = null;
+        }
+      });
+    }
+
+    // 处理从触发按钮"按住不放下滑进入菜单"的接管手指。
+    if (_handoffPointer != null && event.pointer == _handoffPointer) {
+      if (event is PointerMoveEvent) {
+        _measure();
+        _onPointerMove(event);
+      } else if (event is PointerUpEvent) {
+        _handoffPointer = null;
+        _measure();
+        _onPointerUp(event);
+      } else if (event is PointerCancelEvent) {
+        _handoffPointer = null;
+        _onPointerCancel(event);
+      }
+      return;
+    }
+
+    // 外部触控即时穿透关闭：当菜单空闲打开时，任何落在菜单外的新按下都同步触发关菜单，
+    // 但不拦截该事件，让底层的 Dock / 课表 / 其它按钮在同一手势内立刻响应！
+    if (event is PointerDownEvent && !widget.session.closing && !_committed) {
+      if (_activePointer != null) return;
+      final currentMenuRect = _currentVisualMenuRect;
+      if (currentMenuRect.contains(event.position)) {
+        return;
+      }
+      if (widget.session.triggerGlobalRect.contains(event.position)) {
+        _suppressedTriggerObject = widget.session.triggerRenderObject;
+        _suppressedPointer = event.pointer;
+      }
+      widget.session.dismiss();
+    }
+  }
+
+  Rect get _currentVisualMenuRect {
+    final target = _targetRect;
+    if (target == null) return widget.anchor;
+    final morphT = _morphProgress(_openAnim.value);
+    final rect = Rect.lerp(widget.anchor, target, morphT) ?? target;
+    return rect.shift(_rubberOffset.value);
+  }
+
+  void _syncRubberOffset() {
+    _rubberOffset.value =
+        Offset.lerp(_rubberFrom, _rubberTarget, _rubberAnim.value) ??
+        _rubberTarget;
+  }
+
+  @override
+  void didUpdateWidget(_AppMenu<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.items.length != widget.items.length) {
+      _syncKeys();
+      _itemRects = const <Rect>[];
+      _targetRect = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _detachGlobalPointerRouter();
+    _openAnim.removeListener(_syncAnchorMorph);
+    final triggerRo = widget.session.triggerRenderObject;
+    if (identical(activeAppMenuMorph.value.$1, triggerRo)) {
+      if (SchedulerBinding.instance.schedulerPhase ==
+          SchedulerPhase.persistentCallbacks) {
+        Future<void>.microtask(() {
+          if (identical(activeAppMenuMorph.value.$1, triggerRo)) {
+            activeAppMenuMorph.value = (null, 0.0);
+          }
+        });
+      } else {
+        activeAppMenuMorph.value = (null, 0.0);
+      }
+    }
+    if (identical(_activeSession?.state, this)) {
+      _activeSession?.state = null;
+      _activeSession = null;
+    }
+    _rubberAnim.removeListener(_syncRubberOffset);
+    _rubberOffset.dispose();
+    _scrollController.dispose();
+    _openAnim.dispose();
+    _pillSlide.dispose();
+    _pillPresence.dispose();
+    _pillStretch.dispose();
+    _pressLift.dispose();
+    _rubberAnim.dispose();
+    super.dispose();
+  }
+
+  void _syncKeys() {
+    _itemKeys
+      ..clear()
+      ..addAll(<GlobalKey>[
+        for (var i = 0; i < widget.items.length; i++)
+          GlobalKey(debugLabel: 'menu-item-$i'),
+      ]);
+  }
+
+  Rect _computeTargetRect(Size menuSize) {
+    const margin = 8.0;
+    final screen = widget.overlaySize;
+    final maxX = math.max(margin, screen.width - menuSize.width - margin);
+    final alignRight = widget.anchor.center.dx > screen.width * 0.5;
+    _alignRight = alignRight;
+    final x =
+        (alignRight ? widget.anchor.right - menuSize.width : widget.anchor.left)
+            .clamp(margin, maxX);
+
+    // 原位覆合生长：卡片与触发按钮角点对齐并原地长出，而非孤立悬在下方。
+    var y = widget.anchor.top;
+    var openUp = false;
+    if (y + menuSize.height > screen.height - margin) {
+      final above = widget.anchor.bottom - menuSize.height;
+      if (above >= margin) {
+        y = above;
+        openUp = true;
+      } else {
+        y = math.max(margin, screen.height - menuSize.height - margin);
+      }
+    }
+    _openUp = openUp;
+    return Offset(x, y) & menuSize;
+  }
+
+  void _measure() {
+    if (!mounted) return;
+    final stackBox = _menuStackKey.currentContext?.findRenderObject();
+    if (stackBox is! RenderBox || !stackBox.hasSize) return;
+    final rects = <Rect>[];
+    for (final key in _itemKeys) {
+      final itemRender = key.currentContext?.findRenderObject();
+      if (itemRender is! RenderBox || !itemRender.hasSize) return;
+      rects.add(
+        itemRender.localToGlobal(Offset.zero, ancestor: stackBox) &
+            itemRender.size,
+      );
+    }
+    final scrollable =
+        _scrollController.hasClients &&
+        _scrollController.position.maxScrollExtent > 1.0;
+
+    final clampedSize = Size(
+      stackBox.size.width.clamp(0.0, widget.overlaySize.width - 16.0),
+      stackBox.size.height.clamp(0.0, widget.maxHeight),
+    );
+    final computedTarget = _computeTargetRect(clampedSize);
+    final targetChanged =
+        _targetRect == null ||
+        (_targetRect!.left - computedTarget.left).abs() > 0.5 ||
+        (_targetRect!.top - computedTarget.top).abs() > 0.5 ||
+        (_targetRect!.width - computedTarget.width).abs() > 0.5 ||
+        (_targetRect!.height - computedTarget.height).abs() > 0.5;
+
+    final sizeChanged =
+        (clampedSize.width - _menuSize.width).abs() > 0.5 ||
+        (clampedSize.height - _menuSize.height).abs() > 0.5;
+    if (!sizeChanged &&
+        !targetChanged &&
+        scrollable == _isScrollable &&
+        _sameRects(rects, _itemRects)) {
+      return;
+    }
+    final needRebuildForLayout = _targetRect == null || targetChanged;
+    _menuSize = clampedSize;
+    _targetRect = computedTarget;
+    _itemRects = rects;
+    _isScrollable = scrollable;
+    if (needRebuildForLayout && mounted) {
+      setState(() {});
+    }
+  }
+
+  static bool _sameRects(List<Rect> a, List<Rect> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if ((a[i].left - b[i].left).abs() > 0.5 ||
+          (a[i].top - b[i].top).abs() > 0.5 ||
+          (a[i].width - b[i].width).abs() > 0.5 ||
+          (a[i].height - b[i].height).abs() > 0.5) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  Rect get _currentPillRect {
+    final t = _pillSlide.value;
+    if (_pillFrom.isEmpty) return _pillTo;
+    return Rect.lerp(_pillFrom, _pillTo, t) ?? _pillTo;
+  }
+
+  void _showPillAt(Rect target, {required bool immediate}) {
+    if (immediate) {
+      _pillSlide.stop();
+      _pillSlide.value = 1.0;
+      _pillFrom = target;
+      _pillTo = target;
+    } else {
+      final current = _currentPillRect;
+      final travel = (target.center.dy - current.center.dy).abs();
+      _pillFrom = current;
+      _pillTo = target;
+      _pillSlide.animateWith(SpringSimulation(_pillSpring, 0.0, 1.0, 0.0));
+      final stretchPeak = (travel / 52.0).clamp(0.0, 1.0);
+      if (stretchPeak > 0.05) {
+        _pillStretch.animateWith(
+          SpringSimulation(_presenceSpring, stretchPeak, 0.0, 0.0),
+        );
+      }
+    }
+    _pillPresence.animateWith(
+      SpringSimulation(_presenceSpring, _pillPresence.value, 1.0, 0.0),
+    );
+  }
+
+  void _hidePill() {
+    if (_pillPresence.value <= 0.001 && !_pillPresence.isAnimating) return;
+    _pillPresence.animateWith(
+      SpringSimulation(_presenceSpring, _pillPresence.value, 0.0, 0.0),
+    );
+  }
+
+  void _setPressLift(double target) {
+    if ((target - _pressLift.value).abs() < 0.005) return;
+    _pressLift.animateWith(
+      SpringSimulation(_presenceSpring, _pressLift.value, target, 0.0),
+    );
+  }
+
+  void _setRubberDirect(Offset offset) {
+    _rubberAnim.stop();
+    _rubberOffset.value = offset;
+  }
+
+  void _springRubberHome() {
+    final current = _rubberOffset.value;
+    if (current.distance < 0.1) {
+      _setRubberDirect(Offset.zero);
+      return;
+    }
+    _rubberFrom = current;
+    _rubberTarget = Offset.zero;
+    _rubberAnim.animateWith(SpringSimulation(_rubberSpring, 0.0, 1.0, 0.0));
+  }
+
+  void _hapticTick() {
+    if (defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS) {
+      unawaited(HapticFeedback.selectionClick());
+    }
+  }
+
+  Offset? _toMenuLocal(Offset globalPosition) {
+    final target = _targetRect;
+    if (target != null) {
+      return globalPosition - target.topLeft;
+    }
+    final box = _restBoxKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return null;
+    return box.globalToLocal(globalPosition);
+  }
+
+  int? _nearestSelectable(int around, {required bool preferAbove}) {
+    if (preferAbove) {
+      for (var i = around - 1; i >= 0; i--) {
+        if (!widget.items[i].isDivider && widget.items[i].enabled) return i;
+      }
+      for (var i = around + 1; i < widget.items.length; i++) {
+        if (!widget.items[i].isDivider && widget.items[i].enabled) return i;
+      }
+    } else {
+      for (var i = around + 1; i < widget.items.length; i++) {
+        if (!widget.items[i].isDivider && widget.items[i].enabled) return i;
+      }
+      for (var i = around - 1; i >= 0; i--) {
+        if (!widget.items[i].isDivider && widget.items[i].enabled) return i;
+      }
+    }
+    return null;
+  }
+
+  int? _hitSelectableIndex(Offset local) {
+    if (_menuSize.isEmpty || _itemRects.length != widget.items.length) {
+      return null;
+    }
+    if (local.dx < 0 ||
+        local.dx > _menuSize.width ||
+        local.dy < 0 ||
+        local.dy > _menuSize.height) {
+      return null;
+    }
+    for (var i = 0; i < _itemRects.length; i++) {
+      final rect = _itemRects[i];
+      if (!rect.contains(local)) continue;
+      final item = widget.items[i];
+      if (item.isDivider) {
+        // 跨分割线时按纵坐标中线无缝吸附上方或下方菜单项，滑动胶囊不闪烁、不中断。
+        return _nearestSelectable(i, preferAbove: local.dy < rect.center.dy);
+      }
+      if (!item.enabled) return null;
+      return i;
+    }
+    return null;
+  }
+
+  static double _rubberDelta(double delta, double maxPull) {
+    if (delta == 0) return 0;
+    return delta.sign * maxPull * (1.0 - math.exp(-delta.abs() / 48.0));
+  }
+
+  void _updateHoverState(int? nextIndex, {required bool hapticOnSwitch}) {
+    if (nextIndex == _hoveredIndex) return;
+    final wasNull = _hoveredIndex == null;
+    setState(() => _hoveredIndex = nextIndex);
+    if (nextIndex != null) {
+      if (hapticOnSwitch) _hapticTick();
+      _showPillAt(_itemRects[nextIndex], immediate: wasNull);
+    } else {
+      _hidePill();
+    }
+  }
+
+  void _commitSelection(int index) {
+    if (_committed || !mounted) return;
+    final item = widget.items[index];
+    if (item.isDivider || !item.enabled) return;
+    _committed = true;
+    widget.session.dismiss(item.value);
+  }
+
+  void closeWithResult(T? picked) {
+    if (!mounted) {
+      widget.onDismissed(picked);
+      widget.onEntryDisposeReady();
+      return;
+    }
+    _committed = true;
+    _detachGlobalPointerRouter();
+    widget.onDismissed(picked);
+    _openAnim.reverse().whenCompleteOrCancel(() {
+      widget.onEntryDisposeReady();
+    });
+  }
+
+  void _onPointerDown(PointerDownEvent event) {
+    if (_isScrollable || _committed) return;
+    if (event.kind == PointerDeviceKind.mouse &&
+        (event.buttons & kPrimaryButton == 0)) {
+      return;
+    }
+    _measure();
+    if (_isScrollable || _itemRects.length != widget.items.length) return;
+    final local = _toMenuLocal(event.position);
+    if (local == null) return;
+
+    _activePointer = event.pointer;
+    final hit = _hitSelectableIndex(local);
+    _setPressLift(1.0);
+    _setRubberDirect(Offset.zero);
+    _updateHoverState(hit, hapticOnSwitch: hit != null);
+  }
+
+  void _onPointerMove(PointerMoveEvent event) {
+    if (_activePointer != event.pointer || _committed || _isScrollable) return;
+    final local = _toMenuLocal(event.position);
+    if (local == null || _menuSize.isEmpty) return;
+
+    final inside =
+        local.dx >= 0 &&
+        local.dx <= _menuSize.width &&
+        local.dy >= 0 &&
+        local.dy <= _menuSize.height;
+
+    if (inside) {
+      _setRubberDirect(Offset.zero);
+      _setPressLift(1.0);
+      final hit = _hitSelectableIndex(local);
+      final isTouch =
+          event.kind == PointerDeviceKind.touch ||
+          event.kind == PointerDeviceKind.stylus;
+      _updateHoverState(hit, hapticOnSwitch: isTouch && hit != null);
+      return;
+    }
+
+    // 从触发按钮按住下拉进入菜单途中，手指仍在按钮与菜单之间的缝隙时先不施加上拉橡皮筋，保持展开稳定。
+    if (_handoffPointer == event.pointer &&
+        _hoveredIndex == null &&
+        local.dy < 0 &&
+        local.dx >= -14 &&
+        local.dx <= _menuSize.width + 14) {
+      return;
+    }
+
+    // 滑出菜单边界：取消任何候选高亮（松手也不选不关），并对整卡施加微橡皮筋张力跟随动效。
+    _updateHoverState(null, hapticOnSwitch: false);
+    final ox = local.dx < 0
+        ? local.dx
+        : (local.dx > _menuSize.width ? local.dx - _menuSize.width : 0.0);
+    final oy = local.dy < 0
+        ? local.dy
+        : (local.dy > _menuSize.height ? local.dy - _menuSize.height : 0.0);
+    _setRubberDirect(Offset(_rubberDelta(ox, 8.0), _rubberDelta(oy, 10.0)));
+    _setPressLift(-0.65);
+  }
+
+  void _onPointerUp(PointerUpEvent event) {
+    if (_activePointer != event.pointer) return;
+    _activePointer = null;
+    final picked = _hoveredIndex;
+    _springRubberHome();
+    _setPressLift(0.0);
+    if (picked != null) {
+      _commitSelection(picked);
+      return;
+    }
+    // 在菜单外部或从触发按钮按住没滑到任何菜单项就松手：保持菜单打开，弹性复位。
+    _updateHoverState(null, hapticOnSwitch: false);
+  }
+
+  void _onPointerCancel(PointerCancelEvent event) {
+    if (_activePointer != event.pointer) return;
+    _activePointer = null;
+    _springRubberHome();
+    _setPressLift(0.0);
+    _updateHoverState(null, hapticOnSwitch: false);
+  }
+
+  void _onMouseHover(PointerEvent event) {
+    if (_activePointer != null || _isScrollable || _committed) return;
+    _measure();
+    if (_isScrollable || _itemRects.length != widget.items.length) return;
+    final local = _toMenuLocal(event.position);
+    if (local == null) return;
+    _updateHoverState(_hitSelectableIndex(local), hapticOnSwitch: false);
+  }
 
   @override
   Widget build(BuildContext context) {
     final divider = Theme.of(context).dividerTheme;
-    final screen = MediaQuery.sizeOf(context);
-    final estHeight = (items.length * 40.0).clamp(40.0, maxHeight);
-    final noRoomBelow = anchor.bottom + 6 + estHeight > screen.height - 8;
-    final openUp = noRoomBelow && anchor.top >= estHeight + 14;
+    final scheme = Theme.of(context).colorScheme;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
 
-    const half = 70.0;
-    final maxLeft = math.max(8.0, screen.width - 140.0 - 8.0);
-    final left = (anchor.center.dx - half).clamp(8.0, maxLeft);
-    final dxRatio = (anchor.center.dx - left) / half - 1.0;
-    final alignX = dxRatio.clamp(-0.85, 0.85);
-    final alignY = openUp ? 1.0 : -1.0;
-    final align = openUp ? Alignment.bottomCenter : Alignment.topCenter;
-
-    return AnimatedBuilder(
-      animation: animation,
-      builder: (context, _) {
-        final t = animation.value.clamp(0.0, 1.0);
-        final curveT = Curves.easeOutCubic.transform(t);
-        final scale = 0.92 + 0.08 * curveT;
-        final heightFactor = 0.55 + 0.45 * curveT;
-
-        return Transform.scale(
-          alignment: Alignment(alignX, alignY),
-          scale: scale,
-          child: Material(
-            color: Theme.of(context).colorScheme.surfaceContainerLowest,
-            surfaceTintColor: Colors.transparent,
-            elevation: 4,
-            shadowColor: Colors.black.withValues(alpha: 0.20),
-            borderRadius: BorderRadius.circular(14),
-            // 必须裁剪：既防止水波纹越出圆角，又在帷幕展开时裁出平滑圆角底边。
-            clipBehavior: Clip.antiAlias,
-            child: Align(
-              alignment: align,
-              widthFactor: 1.0,
-              heightFactor: heightFactor,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: maxHeight),
-                child: SingleChildScrollView(
-                  child: IntrinsicWidth(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: <Widget>[
-                        for (var i = 0; i < items.length; i++)
-                          _buildStaggeredItem(divider, i, t, openUp),
-                      ],
-                    ),
+    final menuStack = Stack(
+      key: _menuStackKey,
+      children: <Widget>[
+        Positioned.fill(
+          child: IgnorePointer(
+            child: AnimatedBuilder(
+              animation: Listenable.merge(<Listenable>[
+                _pillSlide,
+                _pillPresence,
+                _pillStretch,
+              ]),
+              builder: (context, _) {
+                final presence = _pillPresence.value.clamp(0.0, 1.0);
+                if (presence <= 0.001 || _pillTo.isEmpty) {
+                  return const SizedBox.shrink();
+                }
+                final rect = _currentPillRect;
+                if (rect.isEmpty) {
+                  return const SizedBox.shrink();
+                }
+                final stretch = _pillStretch.value.clamp(0.0, 1.0);
+                final scale = 0.90 + 0.10 * presence;
+                final insetRect = Rect.fromLTRB(
+                  rect.left + 5,
+                  rect.top + 2.5,
+                  rect.right - 5,
+                  rect.bottom - 2.5,
+                );
+                final stretched = Rect.fromCenter(
+                  center: insetRect.center,
+                  width: insetRect.width * scale * (1 - 0.025 * stretch),
+                  height: insetRect.height * scale * (1 + 0.12 * stretch),
+                );
+                return CustomPaint(
+                  painter: _MenuPillPainter(
+                    rect: stretched,
+                    color: scheme.primary.withValues(alpha: 0.11 * presence),
+                    rimColor: scheme.primary.withValues(alpha: 0.18 * presence),
                   ),
+                );
+              },
+            ),
+          ),
+        ),
+        AnimatedBuilder(
+          animation: _openAnim,
+          builder: (context, _) {
+            final t = _openAnim.value.clamp(0.0, 1.0);
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                for (var i = 0; i < widget.items.length; i++)
+                  _buildStaggeredItem(divider, i, t),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+
+    final innerContent = ConstrainedBox(
+      constraints: BoxConstraints(
+        maxWidth: math.max(120.0, widget.overlaySize.width - 16.0),
+        maxHeight: widget.maxHeight,
+      ),
+      child: SingleChildScrollView(
+        controller: _scrollController,
+        child: IntrinsicWidth(child: menuStack),
+      ),
+    );
+
+    // 首次布局前（_targetRect 尚未算好）：放到无边距定位位置透明测出真实尺寸，
+    // 第二帧起即可从按钮外框（anchor）精确容器形变展开，且零跳变。
+    final targetRect = _targetRect;
+    if (targetRect == null) {
+      return Positioned.fill(
+        child: IgnorePointer(
+          child: Opacity(
+            opacity: 0.0,
+            child: CustomSingleChildLayout(
+              delegate: _FallbackMeasureLayout(anchor: widget.anchor),
+              child: KeyedSubtree(
+                key: _restBoxKey,
+                child: Material(
+                  color: scheme.surfaceContainerLowest,
+                  surfaceTintColor: Colors.transparent,
+                  borderRadius: BorderRadius.circular(20),
+                  child: innerContent,
                 ),
               ),
             ),
           ),
-        );
-      },
+        ),
+      );
+    }
+
+    final alignY = _openUp ? 1.0 : -1.0;
+    final alignX = _alignRight ? 1.0 : -1.0;
+    final align = Alignment(alignX, alignY);
+
+    final fadeAnim = CurvedAnimation(
+      parent: _openAnim,
+      curve: const Interval(0.0, 0.42, curve: Curves.easeOut),
+      reverseCurve: const Interval(0.35, 1.0, curve: Curves.easeIn),
+    );
+
+    return Positioned.fill(
+      child: Stack(
+        children: <Widget>[
+          AnimatedBuilder(
+            animation: Listenable.merge(<Listenable>[
+              _openAnim,
+              _pressLift,
+              _rubberOffset,
+            ]),
+            builder: (context, child) {
+              final t = _openAnim.value.clamp(0.0, 1.0);
+              final morphT = _morphProgress(t);
+              final clampedMorph = morphT.clamp(0.0, 1.0);
+              final currentRect =
+                  Rect.lerp(widget.anchor, targetRect, morphT) ?? targetRect;
+              final currentRadius =
+                  lerpDouble(widget.anchorRadius, 20.0, clampedMorph) ?? 20.0;
+              final interactiveScale = 1.0 + 0.016 * _pressLift.value;
+              final rubber = _rubberOffset.value;
+
+              Widget card = Material(
+                color: scheme.surfaceContainerLowest,
+                surfaceTintColor: Colors.transparent,
+                elevation: 6 * clampedMorph,
+                shadowColor: Colors.black.withValues(alpha: 0.16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(currentRadius),
+                  side: BorderSide(
+                    color: scheme.outlineVariant.withValues(
+                      alpha: 0.38 - 0.14 * clampedMorph,
+                    ),
+                    width: 1.0,
+                  ),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: SizedBox(
+                  width: currentRect.width,
+                  height: currentRect.height,
+                  child: t >= 1.0
+                      ? child
+                      : OverflowBox(
+                          alignment: align,
+                          minWidth: targetRect.width,
+                          maxWidth: targetRect.width,
+                          minHeight: targetRect.height,
+                          maxHeight: targetRect.height,
+                          child: child,
+                        ),
+                ),
+              );
+
+              if ((interactiveScale - 1.0).abs() > 0.0005) {
+                card = Transform.scale(
+                  alignment: Alignment(alignX, alignY),
+                  scale: interactiveScale,
+                  child: card,
+                );
+              }
+              if (rubber.distanceSquared > 0.001) {
+                card = Transform.translate(offset: rubber, child: card);
+              }
+
+              return Positioned(
+                left: currentRect.left,
+                top: currentRect.top,
+                width: currentRect.width,
+                height: currentRect.height,
+                child: FadeTransition(
+                  opacity: fadeAnim,
+                  child: KeyedSubtree(
+                    key: _restBoxKey,
+                    child: MouseRegion(
+                      onHover: _onMouseHover,
+                      onExit: (_) {
+                        if (_activePointer == null) {
+                          _updateHoverState(null, hapticOnSwitch: false);
+                        }
+                      },
+                      child: Listener(
+                        behavior: HitTestBehavior.translucent,
+                        onPointerDown: _onPointerDown,
+                        onPointerMove: _onPointerMove,
+                        onPointerUp: _onPointerUp,
+                        onPointerCancel: _onPointerCancel,
+                        child: card,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+            child: innerContent,
+          ),
+        ],
+      ),
     );
   }
 
   /// 单项错峰浮现：全部由当前帧 `t` 纯函数算出，任意时刻反转都能无跳变回退。
-  Widget _buildStaggeredItem(
-    DividerThemeData divider,
-    int index,
-    double t,
-    bool openUp,
-  ) {
-    final item = items[index];
+  Widget _buildStaggeredItem(DividerThemeData divider, int index, double t) {
+    final item = widget.items[index];
     final step = index < 6 ? index : 6;
-    final start = step * 0.05;
+    final start = step * 0.04;
     final end = start + 0.65;
     final raw = ((t - start) / (end - start)).clamp(0.0, 1.0);
     final itemT = Curves.easeOutCubic.transform(raw);
-    final dy = (1.0 - itemT) * (openUp ? 6.0 : -6.0);
+    final dy = (1.0 - itemT) * (_openUp ? 5.0 : -5.0);
 
     final Widget child;
     if (item.isDivider) {
-      child = Divider(
-        height: 1,
-        thickness: divider.thickness,
-        color: divider.color,
+      child = SizedBox(
+        key: _itemKeys[index],
+        child: Divider(
+          height: 1,
+          thickness: divider.thickness,
+          color: divider.color,
+        ),
       );
     } else {
-      child = _MenuTile<T>(item: item);
+      child = _MenuTile<T>(
+        key: _itemKeys[index],
+        item: item,
+        hovered: _hoveredIndex == index || _pressedScrollableIndex == index,
+        onTap: () => _commitSelection(index),
+        onPressChanged: (pressed) {
+          if (!_isScrollable || !mounted) return;
+          setState(() {
+            _pressedScrollableIndex = pressed ? index : null;
+          });
+        },
+      );
     }
 
-    final offset = Offset(0, dy);
-    final shifted = Transform.translate(offset: offset, child: child);
-    return Opacity(opacity: itemT, child: shifted);
+    if (t >= 1.0) return child;
+    return Opacity(
+      opacity: itemT,
+      child: Transform.translate(offset: Offset(0, dy), child: child),
+    );
   }
 }
 
+class _FallbackMeasureLayout extends SingleChildLayoutDelegate {
+  _FallbackMeasureLayout({required this.anchor});
+  final Rect anchor;
+
+  @override
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
+      BoxConstraints(
+        maxWidth: math.max(120.0, constraints.maxWidth - 16),
+        maxHeight: math.max(120.0, constraints.maxHeight - 16),
+      );
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) => Offset.zero;
+
+  @override
+  bool shouldRelayout(covariant _FallbackMeasureLayout oldDelegate) =>
+      oldDelegate.anchor != anchor;
+}
+
+class _MenuPillPainter extends CustomPainter {
+  _MenuPillPainter({
+    required this.rect,
+    required this.color,
+    required this.rimColor,
+  });
+
+  final Rect rect;
+  final Color color;
+  final Color rimColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(12));
+    canvas.drawRRect(rrect, Paint()..color = color);
+    if (rimColor.a > 0) {
+      canvas.drawRRect(
+        rrect,
+        Paint()
+          ..color = rimColor
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _MenuPillPainter oldDelegate) =>
+      oldDelegate.rect != rect ||
+      oldDelegate.color != color ||
+      oldDelegate.rimColor != rimColor;
+}
+
 class _MenuTile<T> extends StatelessWidget {
-  const _MenuTile({required this.item});
+  const _MenuTile({
+    super.key,
+    required this.item,
+    required this.hovered,
+    required this.onTap,
+    required this.onPressChanged,
+  });
 
   final AppMenuItem<T> item;
+  final bool hovered;
+  final VoidCallback onTap;
+  final ValueChanged<bool> onPressChanged;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final highlighted = item.selected || hovered;
     final color = !item.enabled
         ? theme.hintColor
-        : item.selected
-        ? theme.colorScheme.primary
-        : theme.colorScheme.onSurface;
-    final fontWeight = item.selected ? FontWeight.w600 : FontWeight.normal;
+        : highlighted
+        ? scheme.primary
+        : scheme.onSurface;
+    final fontWeight = highlighted ? FontWeight.w600 : FontWeight.normal;
     return InkWell(
-      onTap: item.enabled ? () => Navigator.of(context).pop(item.value) : null,
+      // 彻底屏蔽旧版 Material 水波纹与灰底阴影，仅留无障碍与可测试句柄，高亮全权交给滑动胶囊。
+      splashFactory: NoSplash.splashFactory,
+      splashColor: Colors.transparent,
+      hoverColor: Colors.transparent,
+      highlightColor: Colors.transparent,
+      focusColor: Colors.transparent,
+      overlayColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
+      onTapDown: item.enabled ? (_) => onPressChanged(true) : null,
+      onTapCancel: item.enabled ? () => onPressChanged(false) : null,
+      onTap: item.enabled
+          ? () {
+              onPressChanged(false);
+              onTap();
+            }
+          : null,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
             if (item.icon != null) ...<Widget>[
-              Icon(
-                item.icon,
-                size: 18,
-                color: item.enabled
-                    ? (item.selected
-                          ? theme.colorScheme.primary
-                          : theme.colorScheme.onSurfaceVariant)
-                    : theme.hintColor,
+              Transform.scale(
+                scale: hovered ? 1.08 : 1.0,
+                child: Icon(
+                  item.icon,
+                  size: 18,
+                  color: item.enabled
+                      ? (highlighted ? scheme.primary : scheme.onSurfaceVariant)
+                      : theme.hintColor,
+                ),
               ),
               const SizedBox(width: 10),
             ],

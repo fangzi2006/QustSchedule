@@ -224,7 +224,7 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
     return Card(
       elevation: isSelected ? 1.5 : 0.5,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(20),
         side: isSelected
             ? BorderSide(color: theme.colorScheme.primary, width: 1.5)
             : BorderSide(
@@ -232,7 +232,7 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
               ),
       ),
       child: InkWell(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(20),
         onTap: () => widget.model.setSelectedUpdateProxy(proxy),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),

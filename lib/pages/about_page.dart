@@ -175,7 +175,7 @@ class _AboutPageState extends State<AboutPage> {
               Card(
                 elevation: 0.8,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(20),
                 ),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(

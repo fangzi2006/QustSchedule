@@ -151,7 +151,7 @@ class _ChangelogPageState extends State<ChangelogPage> {
             elevation: isCurrentVersion ? 2.0 : 0.5,
             color: theme.colorScheme.surface,
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(20),
               side: isCurrentVersion
                   ? BorderSide(color: theme.colorScheme.primary, width: 1.5)
                   : BorderSide(

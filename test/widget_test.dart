@@ -1558,14 +1558,17 @@ void main() {
       expect(find.text('退出登录'), findsNothing, reason: '危险操作只在设置页');
     });
 
-    testWidgets('菜单没有外边距，且 120ms 就展开完', (tester) async {
+    testWidgets('菜单没有外边距，且 240ms 内原地变形展开完', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(SchedulePage(model: model)));
 
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      final triggerFinder = find.byIcon(Icons.more_horiz_rounded);
+      final triggerRect = tester.getRect(triggerFinder);
+
+      await tester.tap(triggerFinder);
       await tester.pump(); // 起动画
-      await tester.pump(const Duration(milliseconds: 140));
+      await tester.pump(const Duration(milliseconds: 240));
 
       final label = find.text('校准当前周次');
       final card = find
@@ -1588,11 +1591,16 @@ void main() {
         reason: '左右不该留白',
       );
       expect((cardRect.right - tileRect.right).abs(), lessThan(1));
+      expect(
+        cardRect.contains(triggerRect.center),
+        isTrue,
+        reason: '菜单应从触发按钮原地展开衔接，重叠按钮位置',
+      );
 
       final fade = tester.widget<FadeTransition>(
         find.ancestor(of: label, matching: find.byType(FadeTransition)).first,
       );
-      expect(fade.opacity.value, 1, reason: '140ms 内必须完全展开（旧实现要 300ms）');
+      expect(fade.opacity.value, 1, reason: '240ms 内内容与展开变形必须完成');
     });
 
     testWidgets('作息时间表 / 教务地址都能从菜单进到对应页面', (tester) async {
@@ -1629,6 +1637,236 @@ void main() {
       await tester.tapAt(const Offset(20, 200));
       await tester.pumpAndSettle();
       expect(find.text('校准当前周次'), findsNothing);
+    });
+
+    testWidgets('短菜单按住上下滑动预览，松手时选中当前悬停项', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+
+      final start = tester.getCenter(find.text('校准当前周次'));
+      final end = tester.getCenter(find.text('教务地址'));
+      final gesture = await tester.startGesture(start);
+      await gesture.moveTo(end);
+      await tester.pump();
+
+      // 滑行中尚未松手，菜单仍在且未触发跳转
+      expect(find.text('教务地址'), findsOneWidget);
+      expect(find.byType(SchoolAddressPage), findsNothing);
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(find.byType(SchoolAddressPage), findsOneWidget);
+    });
+
+    testWidgets('短菜单滑出边界外再松手：既不选中也不关闭，保持打开可继续选', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+
+      final label = find.text('校准当前周次');
+      final card = find
+          .ancestor(of: label, matching: find.byType(Material))
+          .last;
+      final cardRect = tester.getRect(card);
+
+      final gesture = await tester.startGesture(tester.getCenter(label));
+      await gesture.moveTo(Offset(cardRect.left - 80, cardRect.center.dy));
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      // 菜单仍在原地打开，且没有切走页面
+      expect(find.text('校准当前周次'), findsOneWidget);
+      expect(find.text('作息时间表'), findsOneWidget);
+      expect(find.byType(TimetableListPage), findsNothing);
+
+      // 回弹后仍可继续正常选择
+      await tester.tap(find.text('作息时间表'));
+      await tester.pumpAndSettle();
+      expect(find.byType(TimetableListPage), findsOneWidget);
+    });
+
+    testWidgets('长菜单（20 周）保持列表滚动，不因滑动误选中', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(
+        schedule: Schedule(
+          termId: '2026-2027-1',
+          maxWeeks: 20,
+          entries: sparseSchedule().entries,
+        ),
+        week: 1,
+      );
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+
+      await tester.tap(find.text('第 1 周'));
+      await tester.pumpAndSettle();
+
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.text('第 5 周')),
+      );
+      await gesture.moveBy(const Offset(0, -30));
+      await tester.pump();
+      await gesture.moveBy(const Offset(0, -200));
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      // 长菜单滑后仍保持打开、当前周未误改
+      expect(model.week, 1);
+      expect(find.text('第 12 周'), findsOneWidget);
+
+      await tester.tap(find.text('第 12 周'));
+      await tester.pumpAndSettle();
+      expect(model.week, 12);
+    });
+
+    testWidgets('菜单项关闭旧版 Material 水波纹与灰底阴影，仅保留滑动胶囊高亮', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+
+      final inkWell = tester.widget<InkWell>(
+        find
+            .ancestor(of: find.text('教务地址'), matching: find.byType(InkWell))
+            .first,
+      );
+      expect(inkWell.splashFactory, NoSplash.splashFactory);
+      expect(inkWell.splashColor, Colors.transparent);
+      expect(inkWell.highlightColor, Colors.transparent);
+      expect(inkWell.hoverColor, Colors.transparent);
+    });
+
+    testWidgets('滑到教务地址与外观之间的分割线上松手时无缝吸附选中，不会断档', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+
+      final dividerRect = tester.getRect(find.byType(Divider).last);
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.text('校准当前周次')),
+      );
+      await gesture.moveTo(
+        Offset(dividerRect.center.dx, dividerRect.center.dy + 0.2),
+      );
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(find.text('外观'), findsWidgets);
+      expect(
+        find.text('外观设置').evaluate().isNotEmpty ||
+            find.byType(BottomSheet).evaluate().isNotEmpty ||
+            find.text('课程文本大小').evaluate().isNotEmpty,
+        isTrue,
+      );
+    });
+
+    testWidgets('菜单打开后直接拖动 Dock 栏，无需先点空白关闭即可一指切页并同步收起菜单', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      final dock = find.byType(FloatingDock);
+      final schedulePos = tester.getCenter(
+        find.descendant(of: dock, matching: find.text('课表')),
+      );
+      final settingsPos = tester.getCenter(
+        find.descendant(of: dock, matching: find.text('设置')),
+      );
+
+      final gesture = await tester.startGesture(schedulePos);
+      await gesture.moveTo(settingsPos);
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(find.text('校准当前周次'), findsNothing, reason: '外部触控后菜单同步关闭');
+      expect(shellPagePosition(tester), 2, reason: '同一手势直接透传 Dock 并切换页面');
+      expect(find.byType(SettingsPage), findsOneWidget);
+    });
+
+    testWidgets('打开菜单时顶栏不会冒出多余的返回按钮', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      expect(find.byType(BackButton), findsNothing);
+
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+      expect(find.byType(BackButton), findsNothing);
+      expect(find.byType(CloseButton), findsNothing);
+    });
+
+    testWidgets('原地变形打开时触发按钮隐入菜单，点外部收起后按钮平滑恢复', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+
+      final triggerFinder = find.byIcon(Icons.more_horiz_rounded);
+      await tester.tap(triggerFinder);
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      final openFade = tester.widget<FadeTransition>(
+        find
+            .ancestor(of: triggerFinder, matching: find.byType(FadeTransition))
+            .first,
+      );
+      expect(openFade.opacity.value, lessThan(0.05));
+
+      await tester.tapAt(const Offset(12, 12));
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+
+      final closedFade = tester.widget<FadeTransition>(
+        find
+            .ancestor(of: triggerFinder, matching: find.byType(FadeTransition))
+            .first,
+      );
+      expect(closedFade.opacity.value, 1.0);
+
+      await tester.tap(triggerFinder);
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+    });
+
+    testWidgets('按住右上角按钮下拉直滑入短菜单，松手一指连贯选中', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byIcon(Icons.more_horiz_rounded)),
+      );
+      await tester.pump(const Duration(milliseconds: 220));
+      await tester.pumpAndSettle();
+
+      expect(find.text('教务地址'), findsOneWidget);
+      await gesture.moveTo(tester.getCenter(find.text('教务地址')));
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SchoolAddressPage), findsOneWidget);
     });
   });
 
@@ -1779,7 +2017,10 @@ void main() {
         Offset(capsule.left + capsule.width * 0.16, capsule.center.dy),
       );
       await gesture.moveBy(Offset(capsule.width * 0.18, 0));
-      await tester.pump();
+      // 透镜是带轻微滞后地追手指的：给它几帧时间追上。
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
 
       // 还没松手，页面就该已经滑出去一部分了。
       final double mid = shellPagePosition(tester);
@@ -1922,7 +2163,10 @@ void main() {
         tester.getCenter(find.descendant(of: dock, matching: find.text('课表'))),
       );
       await gesture.moveBy(const Offset(40, 0));
-      await tester.pump();
+      // 透镜带轻微滞后地追手指：给它几帧时间追上。
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
       final double mid = shellPagePosition(tester);
       expect(
         mid,

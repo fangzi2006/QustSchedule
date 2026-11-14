@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../src/app_model.dart';
 import '../src/timetable.dart';
 import '../widgets/app_menu.dart';
+import '../widgets/tactile_button.dart';
 import '../widgets/time_wheel_picker.dart';
 import 'timetable_edit_page.dart';
 
@@ -189,7 +190,7 @@ class _TimetableCard extends StatelessWidget {
 
     return Card(
       child: InkWell(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(20),
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
@@ -247,22 +248,34 @@ class _TimetableCard extends StatelessWidget {
                   ],
                 ),
               ),
-              Builder(
-                builder: (buttonContext) => IconButton(
-                  icon: const Icon(Icons.more_vert_rounded, size: 20),
-                  tooltip: '更多',
-                  onPressed: () => showAppMenu<String>(
-                    context: buttonContext,
-                    items: <AppMenuItem<String>>[
-                      AppMenuItem<String>(
-                        value: 'delete',
-                        label: canDelete ? '删除' : '至少保留一张',
-                        enabled: canDelete,
-                      ),
-                    ],
-                    onSelected: (value) {
-                      if (value == 'delete') onDelete();
-                    },
+              TactileSurfaceButton(
+                minSize: const Size(36, 36),
+                borderRadius: BorderRadius.circular(18),
+                tooltip: '更多',
+                onMenuOpen: (buttonContext, dragPointer) => showAppMenu<String>(
+                  context: buttonContext,
+                  anchorRadius: 18,
+                  dragPointer: dragPointer,
+                  items: <AppMenuItem<String>>[
+                    AppMenuItem<String>(
+                      value: 'delete',
+                      label: canDelete ? '删除' : '至少保留一张',
+                      enabled: canDelete,
+                    ),
+                  ],
+                  onSelected: (value) {
+                    if (value == 'delete') onDelete();
+                  },
+                ),
+                child: SizedBox(
+                  width: 36,
+                  height: 36,
+                  child: Center(
+                    child: Icon(
+                      Icons.more_vert_rounded,
+                      size: 18,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
               ),

@@ -33,6 +33,7 @@ import '../widgets/course_detail_sheet.dart';
 import '../widgets/course_tile.dart';
 import '../widgets/floating_dock.dart';
 import '../widgets/status_popup.dart';
+import '../widgets/tactile_button.dart';
 import '../widgets/time_wheel_picker.dart';
 import '../widgets/week_pager.dart';
 import 'appearance_sheet.dart';
@@ -120,15 +121,36 @@ class _SchedulePageState extends State<SchedulePage> {
               model.routeNotifier,
               model.refreshingNotifier,
             ]),
-            builder: (BuildContext context, _) => IconButton(
-              icon: const Icon(Icons.refresh_rounded),
-              tooltip: '刷新课表',
-              onPressed: model.status == AppStatus.ready && !model.refreshing
-                  ? model.refresh
-                  : null,
-            ),
+            builder: (BuildContext context, _) {
+              final canRefresh =
+                  model.status == AppStatus.ready && !model.refreshing;
+              final scheme = Theme.of(context).colorScheme;
+              return Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: TactileSurfaceButton(
+                  minSize: const Size(36, 36),
+                  borderRadius: BorderRadius.circular(18),
+                  enabled: canRefresh,
+                  child: SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: IconButton(
+                      icon: const Icon(Icons.refresh_rounded, size: 20),
+                      tooltip: '刷新课表',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      style: TactileSurfaceButton.cleanIconButtonStyle(scheme),
+                      onPressed: canRefresh ? model.refresh : null,
+                    ),
+                  ),
+                ),
+              );
+            },
           ),
-          _MoreMenu(model: model),
+          Padding(
+            padding: const EdgeInsets.only(right: 10),
+            child: _MoreMenu(model: model),
+          ),
         ],
       ),
       // 备注不固定在这里：它跟着周网格一起滚（放在 _WeekView 的滚动内容底部）。
@@ -325,11 +347,25 @@ class _UpdateStatusButton extends StatelessWidget {
           ),
         };
 
-        return IconButton(
-          key: const ValueKey<String>('schedule-update-button'),
-          icon: icon,
-          tooltip: tooltip,
-          onPressed: () => showUpdateDialog(context, controller: flow),
+        return Padding(
+          padding: const EdgeInsets.only(right: 6),
+          child: TactileSurfaceButton(
+            minSize: const Size(36, 36),
+            borderRadius: BorderRadius.circular(18),
+            child: SizedBox(
+              width: 36,
+              height: 36,
+              child: IconButton(
+                key: const ValueKey<String>('schedule-update-button'),
+                icon: icon,
+                tooltip: tooltip,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                style: TactileSurfaceButton.cleanIconButtonStyle(scheme),
+                onPressed: () => showUpdateDialog(context, controller: flow),
+              ),
+            ),
+          ),
         );
       },
     );
@@ -378,69 +414,91 @@ class _MoreMenu extends StatelessWidget {
 
   final AppModel model;
 
+  void _open(
+    BuildContext pageContext,
+    BuildContext anchorContext,
+    int? dragPointer,
+  ) {
+    showAppMenu<String>(
+      context: anchorContext,
+      anchorRadius: 18,
+      dragPointer: dragPointer,
+      items: const <AppMenuItem<String>>[
+        AppMenuItem<String>(
+          value: 'calibrate',
+          label: '校准当前周次',
+          icon: Icons.event_repeat_rounded,
+        ),
+        AppMenuItem<String>(
+          value: 'timetables',
+          label: '作息时间表',
+          icon: Icons.schedule_rounded,
+        ),
+        AppMenuItem<String>(
+          value: 'school',
+          label: '教务地址',
+          icon: Icons.link_rounded,
+        ),
+        AppMenuItem<String>.divider(),
+        AppMenuItem<String>(
+          value: 'appearance',
+          label: '外观',
+          icon: Icons.palette_outlined,
+        ),
+        AppMenuItem<String>(
+          value: 'reschedule',
+          label: '调课',
+          icon: Icons.swap_horiz_rounded,
+        ),
+      ],
+      onSelected: (value) {
+        if (!pageContext.mounted) return;
+        switch (value) {
+          case 'calibrate':
+            showCalibrateSheet(pageContext, model);
+          case 'timetables':
+            Navigator.of(pageContext).push(
+              MaterialPageRoute<void>(
+                builder: (_) => TimetableListPage(model: model),
+              ),
+            );
+          case 'school':
+            Navigator.of(pageContext).push(
+              MaterialPageRoute<void>(
+                builder: (_) => SchoolAddressPage(model: model),
+              ),
+            );
+          case 'appearance':
+            showAppearanceSheet(pageContext, model);
+          case 'reschedule':
+            Navigator.of(pageContext).push(
+              MaterialPageRoute<void>(
+                builder: (_) => ReschedulePage(model: model),
+              ),
+            );
+        }
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Builder 只是为了拿到按钮自己的 context：菜单要靠它定位。
-    return Builder(
-      builder: (buttonContext) => IconButton(
-        icon: const Icon(Icons.more_horiz_rounded),
-        tooltip: '更多',
-        onPressed: () => showAppMenu<String>(
-          context: buttonContext,
-          items: const <AppMenuItem<String>>[
-            AppMenuItem<String>(
-              value: 'calibrate',
-              label: '校准当前周次',
-              icon: Icons.event_repeat_rounded,
-            ),
-            AppMenuItem<String>(
-              value: 'timetables',
-              label: '作息时间表',
-              icon: Icons.schedule_rounded,
-            ),
-            AppMenuItem<String>(
-              value: 'school',
-              label: '教务地址',
-              icon: Icons.link_rounded,
-            ),
-            AppMenuItem<String>.divider(),
-            AppMenuItem<String>(
-              value: 'appearance',
-              label: '外观',
-              icon: Icons.palette_outlined,
-            ),
-            AppMenuItem<String>(
-              value: 'reschedule',
-              label: '调课',
-              icon: Icons.swap_horiz_rounded,
-            ),
-          ],
-          onSelected: (value) {
-            switch (value) {
-              case 'calibrate':
-                showCalibrateSheet(context, model);
-              case 'timetables':
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => TimetableListPage(model: model),
-                  ),
-                );
-              case 'school':
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => SchoolAddressPage(model: model),
-                  ),
-                );
-              case 'appearance':
-                showAppearanceSheet(context, model);
-              case 'reschedule':
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => ReschedulePage(model: model),
-                  ),
-                );
-            }
-          },
+    final scheme = Theme.of(context).colorScheme;
+    return TactileSurfaceButton(
+      minSize: const Size(36, 36),
+      borderRadius: BorderRadius.circular(18),
+      tooltip: '更多',
+      onMenuOpen: (anchorContext, dragPointer) =>
+          _open(context, anchorContext, dragPointer),
+      child: SizedBox(
+        width: 36,
+        height: 36,
+        child: Center(
+          child: Icon(
+            Icons.more_horiz_rounded,
+            size: 20,
+            color: scheme.onSurface,
+          ),
         ),
       ),
     );
@@ -491,54 +549,54 @@ class _WeekBar extends StatelessWidget {
                   ? () => model.goToWeek(shownWeek - 1)
                   : null,
             ),
-            Builder(
-              builder: (buttonContext) => InkWell(
-                onTap: () =>
-                    showWeekPicker(buttonContext, model, current: shownWeek),
-                borderRadius: BorderRadius.circular(8),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
-                  ),
-                  child: Column(
+            const SizedBox(width: 4),
+            TactileSurfaceButton(
+              minSize: const Size(0, 36),
+              borderRadius: BorderRadius.circular(18),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+              onMenuOpen: (anchorContext, dragPointer) => showWeekPicker(
+                anchorContext,
+                model,
+                current: shownWeek,
+                dragPointer: dragPointer,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Row(
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          Text(
-                            '第 $shownWeek 周',
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          Text(
-                            ' / 共 ${model.maxWeek} 周',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.hintColor,
-                            ),
-                          ),
-                          const SizedBox(width: 3),
-                          Icon(
-                            Icons.arrow_drop_down_rounded,
-                            size: 18,
-                            color: theme.hintColor,
-                          ),
-                        ],
-                      ),
-                      if (range.isNotEmpty)
-                        Text(
-                          range,
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: theme.hintColor,
-                          ),
+                      Text(
+                        '第 $shownWeek 周',
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w500,
                         ),
+                      ),
+                      Text(
+                        ' / 共 ${model.maxWeek} 周',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.hintColor,
+                        ),
+                      ),
+                      const SizedBox(width: 3),
+                      Icon(
+                        Icons.arrow_drop_down_rounded,
+                        size: 18,
+                        color: theme.hintColor,
+                      ),
                     ],
                   ),
-                ),
+                  if (range.isNotEmpty)
+                    Text(
+                      range,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.hintColor,
+                      ),
+                    ),
+                ],
               ),
             ),
+            const SizedBox(width: 4),
             _SmallIconButton(
               icon: Icons.chevron_right_rounded,
               tooltip: '下一周',
@@ -572,16 +630,23 @@ class _SmallIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: size,
-      height: size,
-      child: IconButton(
-        icon: Icon(icon, size: 20),
-        tooltip: tooltip,
-        onPressed: onPressed,
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(),
-        visualDensity: VisualDensity.compact,
+    final scheme = Theme.of(context).colorScheme;
+    return TactileSurfaceButton(
+      minSize: const Size(size, size),
+      borderRadius: BorderRadius.circular(18),
+      enabled: onPressed != null,
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: IconButton(
+          icon: Icon(icon, size: 20),
+          tooltip: tooltip,
+          onPressed: onPressed,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(),
+          visualDensity: VisualDensity.compact,
+          style: TactileSurfaceButton.cleanIconButtonStyle(scheme),
+        ),
       ),
     );
   }
@@ -1344,11 +1409,14 @@ Future<void> showWeekPicker(
   BuildContext context,
   AppModel model, {
   int? current,
+  int? dragPointer,
 }) async {
   final selected = current ?? model.week;
   await showAppMenu<int>(
     context: context,
     maxHeight: 340,
+    anchorRadius: 18,
+    dragPointer: dragPointer,
     items: <AppMenuItem<int>>[
       for (var week = 1; week <= model.maxWeek; week++)
         AppMenuItem<int>(

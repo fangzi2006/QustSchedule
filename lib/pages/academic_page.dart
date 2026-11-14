@@ -17,6 +17,7 @@ import '../theme/app_theme.dart';
 import '../widgets/app_menu.dart';
 import '../widgets/floating_dock.dart';
 import '../widgets/status_popup.dart';
+import '../widgets/tactile_button.dart';
 
 class AcademicPage extends StatefulWidget {
   const AcademicPage({super.key, required this.model});
@@ -206,35 +207,34 @@ class _TermSelectorButton extends StatelessWidget {
     final enrollmentYear = parseEnrollmentYear(studentId);
     final displayLabel = _displayLabelOf(currentTermId, enrollmentYear);
 
-    return Builder(
-      builder: (anchorContext) => InkWell(
-        borderRadius: BorderRadius.circular(8),
-        onTap: () => _openMenu(anchorContext, enrollmentYear),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Text(
-                displayLabel,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  color: scheme.primary,
-                ),
-              ),
-              const SizedBox(width: 2),
-              Icon(Icons.arrow_drop_down_rounded, color: scheme.primary),
-            ],
+    return TactileSurfaceButton(
+      minSize: const Size(0, 36),
+      borderRadius: BorderRadius.circular(18),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      onMenuOpen: (anchorContext, dragPointer) =>
+          _openMenu(anchorContext, enrollmentYear, dragPointer: dragPointer),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Text(
+            displayLabel,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: scheme.primary,
+            ),
           ),
-        ),
+          const SizedBox(width: 2),
+          Icon(Icons.arrow_drop_down_rounded, color: scheme.primary),
+        ],
       ),
     );
   }
 
   Future<void> _openMenu(
     BuildContext anchorContext,
-    int? enrollmentYear,
-  ) async {
+    int? enrollmentYear, {
+    int? dragPointer,
+  }) async {
     final theme = Theme.of(anchorContext);
     final scheme = theme.colorScheme;
 
@@ -249,6 +249,8 @@ class _TermSelectorButton extends StatelessWidget {
     if (filtered.isEmpty) {
       await showAppMenu<String>(
         context: anchorContext,
+        anchorRadius: 18,
+        dragPointer: dragPointer,
         items: const <AppMenuItem<String>>[
           AppMenuItem<String>(value: '', label: '暂无可选项', enabled: false),
         ],
@@ -294,6 +296,8 @@ class _TermSelectorButton extends StatelessWidget {
     await showAppMenu<String>(
       context: anchorContext,
       maxHeight: 260,
+      anchorRadius: 18,
+      dragPointer: dragPointer,
       items: menuItems,
       onSelected: onSelected,
     );
@@ -482,7 +486,7 @@ class _ExamSection extends StatelessWidget {
             elevation: 0,
             clipBehavior: Clip.antiAlias,
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(20),
               side: BorderSide(
                 color: scheme.outlineVariant.withValues(alpha: 0.5),
               ),
@@ -561,7 +565,7 @@ class NextExamHeroCard extends StatelessWidget {
       elevation: 0,
       color: scheme.primaryContainer.withValues(alpha: 0.4),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(20),
         side: BorderSide(
           color: scheme.primary.withValues(alpha: 0.3),
           width: 1.5,
@@ -846,7 +850,7 @@ class _GradeSection extends StatelessWidget {
           elevation: 0,
           clipBehavior: Clip.antiAlias,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(20),
             side: BorderSide(
               color: scheme.outlineVariant.withValues(alpha: 0.5),
             ),
@@ -881,7 +885,7 @@ class _GpaStatsCard extends StatelessWidget {
       elevation: 0,
       color: scheme.secondaryContainer.withValues(alpha: 0.35),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(20),
         side: BorderSide(color: scheme.secondary.withValues(alpha: 0.25)),
       ),
       child: Padding(
@@ -1065,7 +1069,7 @@ class _EvaluationWarningBanner extends StatelessWidget {
       elevation: 0,
       color: colors.warningBannerBg,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(20),
         side: BorderSide(color: colors.warningBannerBorder),
       ),
       child: Padding(
