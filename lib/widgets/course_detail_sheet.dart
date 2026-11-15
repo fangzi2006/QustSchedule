@@ -70,70 +70,73 @@ class _CourseDetailSheet extends StatelessWidget {
       top: false,
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(context).size.height * 0.8,
+          maxHeight: MediaQuery.sizeOf(context).height * 0.8,
         ),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: color.background,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: color.border),
-                ),
-                child: Row(
-                  children: <Widget>[
-                    Expanded(
-                      child: Text(
-                        entry.name,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          color: color.foreground,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
+        child: SelectionArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                SelectionContainer.disabled(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
                     ),
-                    Text(
-                      '第 ${entry.startPeriod}-${entry.endPeriod} 节',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: color.foreground,
-                      ),
+                    decoration: BoxDecoration(
+                      color: color.background,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: color.border),
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              for (final (label, value) in rows)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      SizedBox(
-                        width: 68,
-                        child: Text(
-                          label,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.hintColor,
+                    child: Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            entry.name,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              color: color.foreground,
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
                         ),
-                      ),
-                      Expanded(
-                        child: SelectableText(
-                          value,
-                          style: theme.textTheme.bodyMedium,
+                        Text(
+                          '第 ${entry.startPeriod}-${entry.endPeriod} 节',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: color.foreground,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-            ],
+                const SizedBox(height: 16),
+                for (final (label, value) in rows)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        SizedBox(
+                          width: 68,
+                          child: SelectionContainer.disabled(
+                            child: Text(
+                              label,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.hintColor,
+                              ),
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child: Text(value, style: theme.textTheme.bodyMedium),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),

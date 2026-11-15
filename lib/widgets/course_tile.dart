@@ -116,102 +116,104 @@ class CourseBlock extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final conflictColor = conflict ? AppColors.of(context).conflictBadge : null;
 
-    return Material(
-      color: color.background,
-      borderRadius: BorderRadius.circular(8),
-      child: InkWell(
+    return RepaintBoundary(
+      child: Material(
+        color: color.background,
         borderRadius: BorderRadius.circular(8),
-        onTap: onTap,
-        child: Stack(
-          children: <Widget>[
-            Positioned.fill(
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: _paddingX,
-                  vertical: _paddingY,
-                ),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: color.border),
-                ),
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final plan = _BlockPlan.solve(
-                      title: entry.name,
-                      teacher: showTeacher ? entry.teacher : null,
-                      location: location,
-                      width: constraints.maxWidth,
-                      height: constraints.maxHeight,
-                      scaler: scaler,
-                      textDirection: textDirection,
-                      locale: locale,
-                      titleStyle: effectiveTitleStyle,
-                      detailStyle: effectiveDetailStyle,
-                    );
-                    return ClipRect(
-                      child: Center(
-                        child: SizedBox(
-                          width: constraints.maxWidth,
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: <Widget>[
-                              if (plan.titleLines > 0)
-                                Text(
-                                  entry.name,
-                                  maxLines: plan.titleLines,
-                                  textAlign: TextAlign.center,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: effectiveTitleStyle,
-                                ),
-                              if (plan.teacherLines > 0) ...<Widget>[
-                                const SizedBox(height: _gap),
-                                Text(
-                                  entry.teacher!,
-                                  maxLines: plan.teacherLines,
-                                  textAlign: TextAlign.center,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: effectiveDetailStyle,
-                                ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: Stack(
+            children: <Widget>[
+              Positioned.fill(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: _paddingX,
+                    vertical: _paddingY,
+                  ),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: color.border),
+                  ),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final plan = _BlockPlan.solve(
+                        title: entry.name,
+                        teacher: showTeacher ? entry.teacher : null,
+                        location: location,
+                        width: constraints.maxWidth,
+                        height: constraints.maxHeight,
+                        scaler: scaler,
+                        textDirection: textDirection,
+                        locale: locale,
+                        titleStyle: effectiveTitleStyle,
+                        detailStyle: effectiveDetailStyle,
+                      );
+                      return ClipRect(
+                        child: Center(
+                          child: SizedBox(
+                            width: constraints.maxWidth,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: <Widget>[
+                                if (plan.titleLines > 0)
+                                  Text(
+                                    entry.name,
+                                    maxLines: plan.titleLines,
+                                    textAlign: TextAlign.center,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: effectiveTitleStyle,
+                                  ),
+                                if (plan.teacherLines > 0) ...<Widget>[
+                                  const SizedBox(height: _gap),
+                                  Text(
+                                    entry.teacher!,
+                                    maxLines: plan.teacherLines,
+                                    textAlign: TextAlign.center,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: effectiveDetailStyle,
+                                  ),
+                                ],
+                                if (plan.locationLines > 0) ...<Widget>[
+                                  const SizedBox(height: _gap),
+                                  Text(
+                                    location,
+                                    maxLines: plan.locationLines,
+                                    textAlign: TextAlign.center,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: effectiveDetailStyle,
+                                  ),
+                                ],
                               ],
-                              if (plan.locationLines > 0) ...<Widget>[
-                                const SizedBox(height: _gap),
-                                Text(
-                                  location,
-                                  maxLines: plan.locationLines,
-                                  textAlign: TextAlign.center,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: effectiveDetailStyle,
-                                ),
-                              ],
-                            ],
+                            ),
                           ),
                         ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ),
-            if (conflict)
-              Positioned(
-                top: 1,
-                left: 1,
-                child: Container(
-                  key: const ValueKey<String>('course-conflict-badge'),
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: conflictColor,
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: scheme.surfaceContainerLowest,
-                      width: 1,
-                    ),
+                      );
+                    },
                   ),
                 ),
               ),
-          ],
+              if (conflict)
+                Positioned(
+                  top: 1,
+                  left: 1,
+                  child: Container(
+                    key: const ValueKey<String>('course-conflict-badge'),
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: conflictColor,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: scheme.surfaceContainerLowest,
+                        width: 1,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );

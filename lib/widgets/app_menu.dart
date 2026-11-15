@@ -15,7 +15,7 @@ import 'dart:math' as math;
 import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform;
+    show TargetPlatform, ValueListenable, defaultTargetPlatform;
 import 'package:flutter/gestures.dart'
     show GestureBinding, PointerDeviceKind, kPrimaryButton;
 import 'package:flutter/material.dart';
@@ -119,9 +119,10 @@ Future<void> showAppMenu<T>({
   late final OverlayEntry entry;
 
   final menuKey = GlobalKey<_AppMenuState<T>>();
+  Widget? cachedMenu;
 
   entry = OverlayEntry(
-    builder: (_) => _AppMenu<T>(
+    builder: (_) => cachedMenu ??= _AppMenu<T>(
       key: menuKey,
       session: session,
       items: items,
@@ -354,6 +355,31 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     vsync: this,
     value: 1.0,
   );
+  late final CurvedAnimation _shellFade = CurvedAnimation(
+    parent: _openAnim,
+    curve: const Interval(0.0, 0.18, curve: Curves.easeOut),
+    reverseCurve: const Interval(0.0, 0.30, curve: Curves.easeIn),
+  );
+  late final List<CurvedAnimation> _staggerFades =
+      List<CurvedAnimation>.generate(7, (int step) {
+        final start = 0.05 + step * 0.035;
+        final end = math.min(1.0, start + 0.42);
+        return CurvedAnimation(
+          parent: _openAnim,
+          curve: Interval(start, end, curve: Curves.easeOutCubic),
+        );
+      });
+  late final Listenable _pillListenable = Listenable.merge(<Listenable>[
+    _pillSlide,
+    _pillPresence,
+    _pillStretch,
+  ]);
+  late final Listenable _cardMorphListenable = Listenable.merge(<Listenable>[
+    _widthMorph,
+    _heightMorph,
+    _pressLift,
+    _rubberOffset,
+  ]);
 
   List<Rect> _itemRects = const <Rect>[];
   Size _menuSize = Size.zero;
@@ -361,6 +387,8 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
   bool _openUp = false;
   double _alignX = -1.0;
   bool _isScrollable = false;
+  bool _needsMeasure = true;
+  final ValueNotifier<int?> _highlightedIndex = ValueNotifier<int?>(null);
 
   void _syncAnchorMorph() {
     if (!mounted) return;
@@ -526,12 +554,37 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _needsMeasure = true;
+  }
+
+  @override
   void didUpdateWidget(_AppMenu<T> oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.items.length != widget.items.length) {
       _syncKeys();
       _itemRects = const <Rect>[];
       _targetRect = null;
+      _needsMeasure = true;
+      if (_hoveredIndex != null && _hoveredIndex! >= widget.items.length) {
+        _hoveredIndex = null;
+        _highlightedIndex.value = null;
+        _hidePill();
+      }
+      if (_pressedScrollableIndex != null &&
+          _pressedScrollableIndex! >= widget.items.length) {
+        _pressedScrollableIndex = null;
+        _highlightedIndex.value = null;
+      }
+    } else if (oldWidget.items != widget.items ||
+        oldWidget.maxHeight != widget.maxHeight ||
+        oldWidget.minWidth != widget.minWidth ||
+        oldWidget.overlaySize != widget.overlaySize ||
+        oldWidget.centerHorizontally != widget.centerHorizontally ||
+        oldWidget.centerItems != widget.centerItems) {
+      _targetRect = null;
+      _needsMeasure = true;
     }
   }
 
@@ -557,8 +610,13 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
       _activeSession = null;
     }
     _rubberAnim.removeListener(_syncRubberOffset);
+    _highlightedIndex.dispose();
     _rubberOffset.dispose();
     _scrollController.dispose();
+    _shellFade.dispose();
+    for (final fade in _staggerFades) {
+      fade.dispose();
+    }
     _openAnim.dispose();
     _widthMorph.dispose();
     _heightMorph.dispose();
@@ -656,7 +714,11 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
         _sameRects(rects, _itemRects)) {
       return;
     }
-    final needRebuildForLayout = _targetRect == null || targetChanged;
+    final needRebuildForLayout =
+        _targetRect == null || targetChanged || scrollable != _isScrollable;
+    if (_targetRect == null) {
+      _needsMeasure = true;
+    }
     _menuSize = clampedSize;
     _targetRect = computedTarget;
     _itemRects = rects;
@@ -681,12 +743,15 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
       if (initialHit != null) {
         _suppressInitialHoverHaptic = false;
         _hoveredIndex = initialHit;
+        _highlightedIndex.value = initialHit;
         _showPillAt(_itemRects[initialHit], immediate: true);
         hoverInitialized = true;
       }
     }
-    if ((needRebuildForLayout || hoverInitialized) && mounted) {
+    if (needRebuildForLayout && mounted) {
       setState(() {});
+    } else if (hoverInitialized && _isScrollable) {
+      _highlightedIndex.value = _hoveredIndex;
     }
   }
 
@@ -852,7 +917,10 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
   void _updateHoverState(int? nextIndex, {required bool hapticOnSwitch}) {
     if (nextIndex == _hoveredIndex) return;
     final wasNull = _hoveredIndex == null;
-    setState(() => _hoveredIndex = nextIndex);
+    _hoveredIndex = nextIndex;
+    if (!_isScrollable) {
+      _highlightedIndex.value = nextIndex;
+    }
     if (nextIndex != null) {
       final shouldHaptic = hapticOnSwitch && !_suppressInitialHoverHaptic;
       _suppressInitialHoverHaptic = false;
@@ -868,7 +936,8 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     final item = widget.items[index];
     if (item.isDivider || !item.enabled) return;
     if (_isScrollable && _pressedScrollableIndex != index) {
-      setState(() => _pressedScrollableIndex = index);
+      _pressedScrollableIndex = index;
+      _highlightedIndex.value = index;
     }
     _committed = true;
     widget.session.dismiss(item.value);
@@ -1003,93 +1072,93 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
   Widget build(BuildContext context) {
     final divider = Theme.of(context).dividerTheme;
     final scheme = Theme.of(context).colorScheme;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
+    if (_needsMeasure) {
+      _needsMeasure = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
+    }
 
+    final targetRect = _targetRect;
     final menuStack = Stack(
       key: _menuStackKey,
       children: <Widget>[
         Positioned.fill(
           child: IgnorePointer(
-            child: AnimatedBuilder(
-              animation: Listenable.merge(<Listenable>[
-                _pillSlide,
-                _pillPresence,
-                _pillStretch,
-              ]),
-              builder: (context, _) {
-                final presence = _pillPresence.value.clamp(0.0, 1.0);
-                if (presence <= 0.001 || _pillTo.isEmpty) {
-                  return const SizedBox.shrink();
-                }
-                final rect = _currentPillRect;
-                if (rect.isEmpty) {
-                  return const SizedBox.shrink();
-                }
-                final stretch = _pillStretch.value.clamp(0.0, 1.0);
-                final scale = 0.90 + 0.10 * presence;
-                final insetRect = Rect.fromLTRB(
-                  rect.left + _kMenuPillHorizontalInset,
-                  rect.top + _kMenuPillVerticalInset,
-                  rect.right - _kMenuPillHorizontalInset,
-                  rect.bottom - _kMenuPillVerticalInset,
-                );
-                final stretched = Rect.fromCenter(
-                  center: insetRect.center,
-                  width: insetRect.width * scale * (1 - 0.025 * stretch),
-                  height: insetRect.height * scale * (1 + 0.12 * stretch),
-                );
-                return CustomPaint(
-                  painter: _MenuPillPainter(
-                    rect: stretched,
-                    color: scheme.primary.withValues(
-                      alpha: _kMenuPillFillAlpha * presence,
+            child: RepaintBoundary(
+              child: AnimatedBuilder(
+                animation: _pillListenable,
+                builder: (context, _) {
+                  final presence = _pillPresence.value.clamp(0.0, 1.0);
+                  if (presence <= 0.001 || _pillTo.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  final rect = _currentPillRect;
+                  if (rect.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  final stretch = _pillStretch.value.clamp(0.0, 1.0);
+                  final scale = 0.90 + 0.10 * presence;
+                  final insetRect = Rect.fromLTRB(
+                    rect.left + _kMenuPillHorizontalInset,
+                    rect.top + _kMenuPillVerticalInset,
+                    rect.right - _kMenuPillHorizontalInset,
+                    rect.bottom - _kMenuPillVerticalInset,
+                  );
+                  final stretched = Rect.fromCenter(
+                    center: insetRect.center,
+                    width: insetRect.width * scale * (1 - 0.025 * stretch),
+                    height: insetRect.height * scale * (1 + 0.12 * stretch),
+                  );
+                  return CustomPaint(
+                    painter: _MenuPillPainter(
+                      rect: stretched,
+                      color: scheme.primary.withValues(
+                        alpha: _kMenuPillFillAlpha * presence,
+                      ),
+                      rimColor: scheme.primary.withValues(
+                        alpha: _kMenuPillRimAlpha * presence,
+                      ),
                     ),
-                    rimColor: scheme.primary.withValues(
-                      alpha: _kMenuPillRimAlpha * presence,
-                    ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
           ),
         ),
-        AnimatedBuilder(
-          animation: _openAnim,
-          builder: (context, _) {
-            final t = _openAnim.value.clamp(0.0, 1.0);
-            return ConstrainedBox(
-              constraints: BoxConstraints(minWidth: widget.minWidth),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: <Widget>[
-                    for (var i = 0; i < widget.items.length; i++)
-                      _buildStaggeredItem(divider, i, t),
-                  ],
-                ),
+        ConstrainedBox(
+          constraints: BoxConstraints(minWidth: widget.minWidth),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: RepaintBoundary(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: _buildStaggeredChildren(divider),
               ),
-            );
-          },
+            ),
+          ),
         ),
       ],
     );
 
-    final innerContent = ConstrainedBox(
-      constraints: BoxConstraints(
-        maxWidth: math.max(widget.minWidth, widget.overlaySize.width - 16.0),
-        maxHeight: widget.maxHeight,
-      ),
-      child: SingleChildScrollView(
-        controller: _scrollController,
-        child: IntrinsicWidth(child: menuStack),
+    final Widget scrollChild = targetRect == null
+        ? IntrinsicWidth(child: menuStack)
+        : SizedBox(width: targetRect.width, child: menuStack);
+
+    final innerContent = RepaintBoundary(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: math.max(widget.minWidth, widget.overlaySize.width - 16.0),
+          maxHeight: widget.maxHeight,
+        ),
+        child: SingleChildScrollView(
+          controller: _scrollController,
+          child: scrollChild,
+        ),
       ),
     );
 
     // 首次布局前（_targetRect 尚未算好）：放到无边距定位位置透明测出真实尺寸，
     // 第二帧起即可从按钮外框（anchor）精确容器形变展开，且零跳变。
-    final targetRect = _targetRect;
     if (targetRect == null) {
       return Positioned.fill(
         child: IgnorePointer(
@@ -1117,103 +1186,89 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
 
     final alignY = _openUp ? 1.0 : -1.0;
     final align = Alignment(_alignX, alignY);
+    final startScale =
+        (widget.anchor.shortestSide / math.max(1.0, targetRect.shortestSide))
+            .clamp(0.22, 0.45);
+    // 菜单卡片面积较大，采用克制的按压抬升倍率，既明显可见又不显突兀。
+    final liftSpan = (0.025 + 4.0 / math.max(140.0, targetRect.longestSide))
+        .clamp(0.032, 0.048);
 
-    final shellFade = CurvedAnimation(
-      parent: _openAnim,
-      curve: const Interval(0.0, 0.18, curve: Curves.easeOut),
-      reverseCurve: const Interval(0.0, 0.30, curve: Curves.easeIn),
+    final cardMaterial = RepaintBoundary(
+      child: Material(
+        color: scheme.surfaceContainerLowest,
+        surfaceTintColor: Colors.transparent,
+        elevation: 8,
+        shadowColor: Colors.black.withValues(alpha: 0.16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(
+            color: scheme.outlineVariant.withValues(alpha: 0.22),
+            width: 1.0,
+          ),
+        ),
+        clipBehavior: _isScrollable ? Clip.antiAlias : Clip.none,
+        child: SizedBox(
+          width: targetRect.width,
+          height: targetRect.height,
+          child: innerContent,
+        ),
+      ),
     );
 
     return Positioned.fill(
       child: Stack(
         children: <Widget>[
-          AnimatedBuilder(
-            animation: Listenable.merge(<Listenable>[
-              _openAnim,
-              _widthMorph,
-              _heightMorph,
-              _pressLift,
-              _rubberOffset,
-            ]),
-            builder: (context, child) {
-              final morphValue = (_widthMorph.value + _heightMorph.value) * 0.5;
-              final morphClamped = morphValue.clamp(0.0, 1.0);
-              final startScale =
-                  (widget.anchor.shortestSide /
-                          math.max(1.0, targetRect.shortestSide))
-                      .clamp(0.22, 0.45);
-              final openScale = lerpDouble(startScale, 1.0, morphValue) ?? 1.0;
-              // 菜单卡片面积较大，采用克制的按压抬升倍率，既明显可见又不显突兀。
-              final liftSpan =
-                  (0.025 + 4.0 / math.max(140.0, targetRect.longestSide)).clamp(
-                    0.032,
-                    0.048,
-                  );
-              final interactiveScale = 1.0 + liftSpan * _pressLift.value;
-              final totalScale = math.max(0.01, openScale * interactiveScale);
-              final rubber = _rubberOffset.value;
+          Positioned(
+            left: targetRect.left,
+            top: targetRect.top,
+            width: targetRect.width,
+            height: targetRect.height,
+            child: FadeTransition(
+              opacity: _shellFade,
+              child: KeyedSubtree(
+                key: _restBoxKey,
+                child: MouseRegion(
+                  onHover: _onMouseHover,
+                  onExit: (_) {
+                    if (_activePointer == null) {
+                      _updateHoverState(null, hapticOnSwitch: false);
+                    }
+                  },
+                  child: Listener(
+                    behavior: HitTestBehavior.translucent,
+                    onPointerDown: _onPointerDown,
+                    onPointerMove: _onPointerMove,
+                    onPointerUp: _onPointerUp,
+                    onPointerCancel: _onPointerCancel,
+                    child: AnimatedBuilder(
+                      animation: _cardMorphListenable,
+                      builder: (context, child) {
+                        final morphValue =
+                            (_widthMorph.value + _heightMorph.value) * 0.5;
+                        final openScale =
+                            lerpDouble(startScale, 1.0, morphValue) ?? 1.0;
+                        final interactiveScale =
+                            1.0 + liftSpan * _pressLift.value;
+                        final totalScale = math.max(
+                          0.01,
+                          openScale * interactiveScale,
+                        );
 
-              Widget card = Material(
-                color: scheme.surfaceContainerLowest,
-                surfaceTintColor: Colors.transparent,
-                elevation: 8 * morphClamped,
-                shadowColor: Colors.black.withValues(alpha: 0.16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
-                  side: BorderSide(
-                    color: scheme.outlineVariant.withValues(
-                      alpha: 0.36 - 0.14 * morphClamped,
-                    ),
-                    width: 1.0,
-                  ),
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: SizedBox(
-                  width: targetRect.width,
-                  height: targetRect.height,
-                  child: child,
-                ),
-              );
-
-              card = Transform.translate(
-                offset: rubber,
-                child: Transform.scale(
-                  alignment: align,
-                  scale: totalScale,
-                  child: card,
-                ),
-              );
-
-              return Positioned(
-                left: targetRect.left,
-                top: targetRect.top,
-                width: targetRect.width,
-                height: targetRect.height,
-                child: FadeTransition(
-                  opacity: shellFade,
-                  child: KeyedSubtree(
-                    key: _restBoxKey,
-                    child: MouseRegion(
-                      onHover: _onMouseHover,
-                      onExit: (_) {
-                        if (_activePointer == null) {
-                          _updateHoverState(null, hapticOnSwitch: false);
-                        }
+                        return Transform.translate(
+                          offset: _rubberOffset.value,
+                          child: Transform.scale(
+                            alignment: align,
+                            scale: totalScale,
+                            child: child,
+                          ),
+                        );
                       },
-                      child: Listener(
-                        behavior: HitTestBehavior.translucent,
-                        onPointerDown: _onPointerDown,
-                        onPointerMove: _onPointerMove,
-                        onPointerUp: _onPointerUp,
-                        onPointerCancel: _onPointerCancel,
-                        child: card,
-                      ),
+                      child: cardMaterial,
                     ),
                   ),
                 ),
-              );
-            },
-            child: innerContent,
+              ),
+            ),
           ),
         ],
       ),
@@ -1221,42 +1276,63 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
   }
 
   /// 单项错峰浮现：在容器展开后依序利落滑入，任意时刻反转均可无跳变回退。
-  Widget _buildStaggeredItem(DividerThemeData divider, int index, double t) {
+  Widget _buildItemContent(DividerThemeData divider, int index) {
     final item = widget.items[index];
-    final step = index < 6 ? index : 6;
-    final start = 0.05 + step * 0.035;
-    final end = math.min(1.0, start + 0.42);
-    final raw = ((t - start) / math.max(0.01, end - start)).clamp(0.0, 1.0);
-    final itemT = t >= 1.0 ? 1.0 : Curves.easeOutCubic.transform(raw);
-
-    final Widget child;
     if (item.isDivider) {
-      final baseColor = divider.color;
-      child = Divider(
+      return Divider(
         height: 1,
         thickness: divider.thickness,
-        color: baseColor == null || itemT >= 1.0
-            ? baseColor
-            : baseColor.withValues(alpha: baseColor.a * itemT),
-      );
-    } else {
-      child = _MenuTile<T>(
-        item: item,
-        hovered: _hoveredIndex == index || _pressedScrollableIndex == index,
-        showCapsule: _isScrollable,
-        centerItems: widget.centerItems,
-        opacity: itemT,
-        onTap: () => _commitSelection(index),
-        onPressChanged: (pressed) {
-          if (!_isScrollable || _committed || !mounted) return;
-          setState(() {
-            _pressedScrollableIndex = pressed ? index : null;
-          });
-        },
+        color: divider.color,
       );
     }
+    return _MenuTile<T>(
+      item: item,
+      index: index,
+      highlightedIndex: _highlightedIndex,
+      showCapsule: _isScrollable,
+      centerItems: widget.centerItems,
+      onTap: () => _commitSelection(index),
+      onPressChanged: (pressed) {
+        if (!_isScrollable || _committed || !mounted) return;
+        _pressedScrollableIndex = pressed ? index : null;
+        _highlightedIndex.value = _pressedScrollableIndex;
+      },
+    );
+  }
 
-    return KeyedSubtree(key: _itemKeys[index], child: child);
+  List<Widget> _buildStaggeredChildren(DividerThemeData divider) {
+    final children = <Widget>[];
+    final singleCount = math.min(6, widget.items.length);
+    for (var i = 0; i < singleCount; i++) {
+      children.add(
+        FadeTransition(
+          opacity: _staggerFades[i],
+          child: KeyedSubtree(
+            key: _itemKeys[i],
+            child: _buildItemContent(divider, i),
+          ),
+        ),
+      );
+    }
+    if (widget.items.length > 6) {
+      children.add(
+        FadeTransition(
+          opacity: _staggerFades[6],
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              for (var i = 6; i < widget.items.length; i++)
+                KeyedSubtree(
+                  key: _itemKeys[i],
+                  child: _buildItemContent(divider, i),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+    return children;
   }
 }
 
@@ -1324,53 +1400,84 @@ class _MenuPillPainter extends CustomPainter {
       oldDelegate.rimColor != rimColor;
 }
 
-class _MenuTile<T> extends StatelessWidget {
+class _MenuTile<T> extends StatefulWidget {
   const _MenuTile({
     super.key,
     required this.item,
-    required this.hovered,
+    required this.index,
+    required this.highlightedIndex,
     required this.showCapsule,
     required this.centerItems,
-    required this.opacity,
     required this.onTap,
     required this.onPressChanged,
   });
 
   final AppMenuItem<T> item;
-  final bool hovered;
+  final int index;
+  final ValueListenable<int?> highlightedIndex;
 
   /// 长菜单不可滑动切换，按住/选中条目时直接在条目内绘制与短菜单同源的选择胶囊；
   /// 已选中的常态条目保持自身高亮与对勾指示，无需常驻胶囊。
   final bool showCapsule;
   final bool centerItems;
-  final double opacity;
   final VoidCallback onTap;
   final ValueChanged<bool> onPressChanged;
+
+  @override
+  State<_MenuTile<T>> createState() => _MenuTileState<T>();
+}
+
+class _MenuTileState<T> extends State<_MenuTile<T>> {
+  late bool _hovered = widget.highlightedIndex.value == widget.index;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.highlightedIndex.addListener(_onHighlightChanged);
+  }
+
+  @override
+  void didUpdateWidget(_MenuTile<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.highlightedIndex != widget.highlightedIndex ||
+        oldWidget.index != widget.index) {
+      oldWidget.highlightedIndex.removeListener(_onHighlightChanged);
+      widget.highlightedIndex.addListener(_onHighlightChanged);
+      _hovered = widget.highlightedIndex.value == widget.index;
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.highlightedIndex.removeListener(_onHighlightChanged);
+    super.dispose();
+  }
+
+  void _onHighlightChanged() {
+    final next = widget.highlightedIndex.value == widget.index;
+    if (next != _hovered) {
+      setState(() => _hovered = next);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final highlighted = item.selected || hovered;
-    final double capsuleStrength = (showCapsule && hovered) ? 1.0 : 0.0;
-    final effectiveCapsule = (capsuleStrength * opacity).clamp(0.0, 1.0);
-    final baseColor = !item.enabled
+    final item = widget.item;
+    final highlighted = item.selected || _hovered;
+    final double capsuleStrength = (widget.showCapsule && _hovered) ? 1.0 : 0.0;
+    final color = !item.enabled
         ? theme.hintColor
         : highlighted
         ? scheme.primary
         : scheme.onSurface;
-    final baseIconColor = item.enabled
+    final iconColor = item.enabled
         ? (highlighted ? scheme.primary : scheme.onSurfaceVariant)
         : theme.hintColor;
-    final color = opacity >= 1.0
-        ? baseColor
-        : baseColor.withValues(alpha: baseColor.a * opacity);
-    final iconColor = opacity >= 1.0
-        ? baseIconColor
-        : baseIconColor.withValues(alpha: baseIconColor.a * opacity);
     final fontWeight = highlighted ? FontWeight.w600 : FontWeight.normal;
     final Widget tileBody;
-    if (centerItems) {
+    if (widget.centerItems) {
       tileBody = Stack(
         alignment: Alignment.center,
         children: <Widget>[
@@ -1385,7 +1492,7 @@ class _MenuTile<T> extends StatelessWidget {
               children: <Widget>[
                 if (item.icon != null) ...<Widget>[
                   Transform.scale(
-                    scale: hovered ? 1.08 : 1.0,
+                    scale: _hovered ? 1.08 : 1.0,
                     child: Icon(item.icon, size: 18, color: iconColor),
                   ),
                   const SizedBox(width: 8),
@@ -1410,9 +1517,7 @@ class _MenuTile<T> extends StatelessWidget {
               right: 6,
               top: 0,
               bottom: 0,
-              child: Center(
-                child: Opacity(opacity: opacity, child: item.trailing!),
-              ),
+              child: Center(child: item.trailing!),
             ),
         ],
       );
@@ -1430,7 +1535,7 @@ class _MenuTile<T> extends StatelessWidget {
             children: <Widget>[
               if (item.icon != null) ...<Widget>[
                 Transform.scale(
-                  scale: hovered ? 1.08 : 1.0,
+                  scale: _hovered ? 1.08 : 1.0,
                   child: Icon(item.icon, size: 18, color: iconColor),
                 ),
                 const SizedBox(width: 12),
@@ -1448,7 +1553,7 @@ class _MenuTile<T> extends StatelessWidget {
               ),
               if (item.trailing != null) ...<Widget>[
                 const SizedBox(width: 16),
-                Opacity(opacity: opacity, child: item.trailing!),
+                item.trailing!,
               ],
             ],
           ),
@@ -1463,9 +1568,9 @@ class _MenuTile<T> extends StatelessWidget {
       highlightColor: Colors.transparent,
       focusColor: Colors.transparent,
       overlayColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
-      onTapDown: item.enabled ? (_) => onPressChanged(true) : null,
-      onTapCancel: item.enabled ? () => onPressChanged(false) : null,
-      onTap: item.enabled ? onTap : null,
+      onTapDown: item.enabled ? (_) => widget.onPressChanged(true) : null,
+      onTapCancel: item.enabled ? () => widget.onPressChanged(false) : null,
+      onTap: item.enabled ? widget.onTap : null,
       child: ConstrainedBox(
         constraints: const BoxConstraints(minHeight: 46),
         child: Padding(
@@ -1475,16 +1580,16 @@ class _MenuTile<T> extends StatelessWidget {
           ),
           child: DecoratedBox(
             decoration: BoxDecoration(
-              color: effectiveCapsule > 0.001
+              color: capsuleStrength > 0.001
                   ? scheme.primary.withValues(
-                      alpha: _kMenuPillFillAlpha * effectiveCapsule,
+                      alpha: _kMenuPillFillAlpha * capsuleStrength,
                     )
                   : Colors.transparent,
               borderRadius: BorderRadius.circular(_kMenuPillRadius),
               border: Border.all(
-                color: effectiveCapsule > 0.001
+                color: capsuleStrength > 0.001
                     ? scheme.primary.withValues(
-                        alpha: _kMenuPillRimAlpha * effectiveCapsule,
+                        alpha: _kMenuPillRimAlpha * capsuleStrength,
                       )
                     : Colors.transparent,
                 width: _kMenuPillRimWidth,

@@ -127,6 +127,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     value: 1.0,
   );
   final ValueNotifier<Offset> _dragOffset = ValueNotifier<Offset>(Offset.zero);
+  final ValueNotifier<double> _morphProgress = ValueNotifier<double>(0.0);
 
   int? _pointer;
   Offset _downPos = Offset.zero;
@@ -139,6 +140,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
   _TactileArenaRecognizer? _arenaRecognizer;
   late Listenable _motionListenable;
   bool _inScrollable = false;
+  bool _elementActive = true;
   double _touchSlop = kTouchSlop;
 
   bool get _interactive => widget.enabled;
@@ -147,6 +149,9 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
   void initState() {
     super.initState();
     _dragAnim.addListener(_syncDragOffset);
+    if (widget.onMenuOpen != null) {
+      activeAppMenuMorph.addListener(_onGlobalMenuMorphChanged);
+    }
     _motionListenable = _buildMotionListenable();
   }
 
@@ -158,12 +163,40 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
         MediaQuery.maybeGestureSettingsOf(context)?.touchSlop ?? kTouchSlop;
   }
 
+  @override
+  void activate() {
+    super.activate();
+    _elementActive = true;
+    if (widget.onMenuOpen != null) {
+      _onGlobalMenuMorphChanged();
+    }
+  }
+
+  @override
+  void deactivate() {
+    _elementActive = false;
+    super.deactivate();
+  }
+
+  void _onGlobalMenuMorphChanged() {
+    if (!mounted || !_elementActive) return;
+    final (morphTarget, morphT) = activeAppMenuMorph.value;
+    if (morphTarget == null && _morphProgress.value == 0.0) return;
+    final selfRo = context.findRenderObject();
+    final next = (morphTarget != null && identical(morphTarget, selfRo))
+        ? morphT
+        : 0.0;
+    if (_morphProgress.value != next) {
+      _morphProgress.value = next;
+    }
+  }
+
   Listenable _buildMotionListenable() {
     if (widget.onMenuOpen != null) {
       return Listenable.merge(<Listenable>[
         _press,
         _dragOffset,
-        activeAppMenuMorph,
+        _morphProgress,
       ]);
     }
     return Listenable.merge(<Listenable>[_press, _dragOffset]);
@@ -177,7 +210,16 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
   @override
   void didUpdateWidget(TactileSurfaceButton oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if ((oldWidget.onMenuOpen != null) != (widget.onMenuOpen != null)) {
+    final hadMenu = oldWidget.onMenuOpen != null;
+    final hasMenu = widget.onMenuOpen != null;
+    if (hadMenu != hasMenu) {
+      if (hasMenu) {
+        activeAppMenuMorph.addListener(_onGlobalMenuMorphChanged);
+        _onGlobalMenuMorphChanged();
+      } else {
+        activeAppMenuMorph.removeListener(_onGlobalMenuMorphChanged);
+        _morphProgress.value = 0.0;
+      }
       _motionListenable = _buildMotionListenable();
     }
     if (!widget.enabled ||
@@ -192,7 +234,11 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
   @override
   void dispose() {
     _holdTimer?.cancel();
+    if (widget.onMenuOpen != null) {
+      activeAppMenuMorph.removeListener(_onGlobalMenuMorphChanged);
+    }
     _dragAnim.removeListener(_syncDragOffset);
+    _morphProgress.dispose();
     _dragOffset.dispose();
     _press.dispose();
     _dragAnim.dispose();
@@ -363,9 +409,8 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
         var morphOpacity = 1.0;
         var morphScale = 1.0;
         if (hasMenuTrigger) {
-          final (morphTarget, morphT) = activeAppMenuMorph.value;
-          if (morphTarget != null &&
-              identical(morphTarget, context.findRenderObject())) {
+          final morphT = _morphProgress.value;
+          if (morphT > 0.0) {
             final fadePhase = (morphT * 2.8).clamp(0.0, 1.0);
             morphOpacity = 1.0 - fadePhase;
             morphScale = 1.0 - 0.12 * fadePhase;
@@ -437,6 +482,10 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
       },
       child: content,
     );
+
+    if (hasMenuTrigger) {
+      surface = RepaintBoundary(child: surface);
+    }
 
     final hasSelfHandler = widget.onTap != null || hasMenuTrigger;
 

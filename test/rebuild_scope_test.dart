@@ -15,6 +15,7 @@ import 'package:qustschedule/src/preferences_repository.dart';
 import 'package:qustschedule/src/schedule_service.dart';
 import 'package:qustschedule/widgets/course_tile.dart';
 import 'package:qustschedule/widgets/status_popup.dart';
+import 'package:qustschedule/widgets/tactile_button.dart';
 import 'package:zf_academic/zf_academic_io.dart';
 
 import 'support/fake_backend.dart';
@@ -203,5 +204,146 @@ void main() {
     );
     expect(weekRebuilt.contains(HomeShell), isFalse);
     expect(routeBuildCount, initialRouteBuilds);
+  });
+
+  testWidgets('打开与关闭右上角菜单、滑选菜单项及点课程看详情期间不重建无关菜单按钮或全量菜单项', (tester) async {
+    final model = _buildReadyModel();
+    addTearDown(model.dispose);
+
+    await tester.pumpWidget(MaterialApp(home: HomeShell(model: model)));
+    await tester.pumpAndSettle();
+
+    final weekTriggerElement = tester.element(
+      find.ancestor(
+        of: find.text('第 1 周'),
+        matching: find.byType(TactileSurfaceButton),
+      ),
+    );
+
+    bool isInSubtree(Element candidate, Element root) {
+      if (identical(candidate, root)) return true;
+      var matched = false;
+      candidate.visitAncestorElements((ancestor) {
+        if (identical(ancestor, root)) {
+          matched = true;
+          return false;
+        }
+        return true;
+      });
+      return matched;
+    }
+
+    Future<
+      ({Set<Type> types, int weekTriggerRebuilds, Set<String> rebuiltTexts})
+    >
+    captureFrames(Future<void> Function() action) async {
+      final types = <Type>{};
+      final rebuiltTexts = <String>{};
+      var weekTriggerRebuilds = 0;
+      final previous = debugOnRebuildDirtyWidget;
+      debugOnRebuildDirtyWidget = (Element element, bool builtOnce) {
+        types.add(element.widget.runtimeType);
+        final widget = element.widget;
+        if (widget is Text && widget.data != null) {
+          rebuiltTexts.add(widget.data!);
+        }
+        if (isInSubtree(element, weekTriggerElement)) {
+          weekTriggerRebuilds++;
+        }
+        previous?.call(element, builtOnce);
+      };
+      try {
+        await action();
+      } finally {
+        debugOnRebuildDirtyWidget = previous;
+      }
+      return (
+        types: types,
+        weekTriggerRebuilds: weekTriggerRebuilds,
+        rebuiltTexts: rebuiltTexts,
+      );
+    }
+
+    // 1. 打开右上角三点菜单并完整跑完展开动画：周次条触发按钮与课程卡片不重建。
+    final openCapture = await captureFrames(() async {
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+    });
+    await tester.pumpAndSettle();
+    expect(find.text('校准当前周次'), findsOneWidget);
+    expect(openCapture.weekTriggerRebuilds, 0);
+    expect(openCapture.types.contains(HomeShell), isFalse);
+    expect(openCapture.types.contains(SchedulePage), isFalse);
+    expect(openCapture.types.contains(CourseBlock), isFalse);
+
+    // 2. 在菜单内滑选时，仅切换到的目标菜单项局部刷新，未命中菜单项（如「外观」）不重建。
+    final hoverGesture = await tester.startGesture(
+      tester.getCenter(find.text('校准当前周次')),
+    );
+    await tester.pump();
+    final hoverCapture = await captureFrames(() async {
+      await hoverGesture.moveTo(tester.getCenter(find.text('教务地址')));
+      for (var i = 0; i < 4; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+    });
+    expect(hoverCapture.rebuiltTexts.contains('教务地址'), isTrue);
+    expect(hoverCapture.rebuiltTexts.contains('外观'), isFalse);
+    expect(hoverCapture.weekTriggerRebuilds, 0);
+    // 滑出菜单外松手保持菜单打开以便下一步测试点击课程卡片。
+    await hoverGesture.moveTo(const Offset(12, 300));
+    await tester.pump();
+    await hoverGesture.up();
+    await tester.pumpAndSettle();
+    expect(find.text('校准当前周次'), findsOneWidget);
+
+    // 3. 菜单打开时直接点击课表页课程卡片：菜单收起动画帧内不重建菜单条目、周次按钮、课表页或课程块，且详情顺利弹出。
+    final courseBlock = find.byType(CourseBlock).first;
+    final closeAndDetailCapture = await captureFrames(() async {
+      await tester.tap(courseBlock);
+      for (var i = 0; i < 14; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+    });
+    await tester.pumpAndSettle();
+
+    expect(find.text('校准当前周次'), findsNothing);
+    expect(find.byType(BottomSheet), findsOneWidget);
+    expect(closeAndDetailCapture.weekTriggerRebuilds, 0);
+    expect(closeAndDetailCapture.types.contains(HomeShell), isFalse);
+    expect(closeAndDetailCapture.types.contains(SchedulePage), isFalse);
+    expect(closeAndDetailCapture.types.contains(CourseBlock), isFalse);
+    expect(closeAndDetailCapture.rebuiltTexts.contains('校准当前周次'), isFalse);
+    expect(closeAndDetailCapture.rebuiltTexts.contains('作息时间表'), isFalse);
+    expect(closeAndDetailCapture.rebuiltTexts.contains('教务地址'), isFalse);
+    expect(closeAndDetailCapture.rebuiltTexts.contains('外观'), isFalse);
+
+    Navigator.of(tester.element(find.byType(BottomSheet))).pop();
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsNothing);
+
+    // 4. 菜单展开动画中途（60ms）直接点击课程卡片：同样不重建无关周次按钮、菜单条目、课表页或课程块。
+    await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 60));
+
+    final midOpenTapCapture = await captureFrames(() async {
+      await tester.tap(find.byType(CourseBlock).first);
+      for (var i = 0; i < 14; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+    });
+    await tester.pumpAndSettle();
+
+    expect(find.text('校准当前周次'), findsNothing);
+    expect(find.byType(BottomSheet), findsOneWidget);
+    expect(midOpenTapCapture.weekTriggerRebuilds, 0);
+    expect(midOpenTapCapture.types.contains(HomeShell), isFalse);
+    expect(midOpenTapCapture.types.contains(SchedulePage), isFalse);
+    expect(midOpenTapCapture.types.contains(CourseBlock), isFalse);
+    expect(midOpenTapCapture.rebuiltTexts.contains('校准当前周次'), isFalse);
+    expect(midOpenTapCapture.rebuiltTexts.contains('外观'), isFalse);
   });
 }

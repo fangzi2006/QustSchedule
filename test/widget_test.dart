@@ -1876,6 +1876,46 @@ void main() {
 
       expect(find.byType(SchoolAddressPage), findsOneWidget);
     });
+
+    testWidgets('打开右上角菜单后直接点击课程卡片，同步收起菜单并弹出课程详情（含展开中途打断）', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      await tester.pumpAndSettle();
+
+      // 1. 菜单完全展开后直接点课程卡片：一指透传关闭菜单并直接打开详情弹窗。
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      await tester.tap(find.byType(CourseBlock).first);
+      await tester.pumpAndSettle();
+
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(find.byType(BottomSheet), findsOneWidget);
+      expect(find.text('周次'), findsOneWidget);
+      expect(find.text('1-2 周'), findsWidgets);
+      expect(find.text('张老师'), findsNWidgets(2));
+      expect(find.text('课程 ID'), findsOneWidget);
+      expect(find.text('early'), findsOneWidget);
+
+      Navigator.of(tester.element(find.byType(BottomSheet))).pop();
+      await tester.pumpAndSettle();
+      expect(find.byType(BottomSheet), findsNothing);
+
+      // 2. 菜单展开动画中途直接点课程卡片打断，也应顺畅收起并弹出详情。
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 60));
+
+      await tester.tap(find.byType(CourseBlock).first);
+      await tester.pumpAndSettle();
+
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(find.byType(BottomSheet), findsOneWidget);
+      expect(find.text('early'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
   });
 
   group('外观面板', () {
@@ -4545,6 +4585,251 @@ void main() {
       expect(childBuilds, 1);
     });
 
+    testWidgets('课程详情弹窗改用单层 SelectionArea 与纯 Text，仅字段值可选中而标签与标题禁用选择', (
+      tester,
+    ) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(CourseBlock).first);
+      await tester.pumpAndSettle();
+
+      final sheet = find.byType(BottomSheet);
+      expect(sheet, findsOneWidget);
+      expect(
+        find.descendant(of: sheet, matching: find.byType(SelectableText)),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: sheet, matching: find.byType(SelectionArea)),
+        findsOneWidget,
+      );
+
+      final headerTitle = find.descendant(
+        of: sheet,
+        matching: find.text('期初课'),
+      );
+      final weekLabel = find.descendant(of: sheet, matching: find.text('周次'));
+      final weekValue = find.descendant(
+        of: sheet,
+        matching: find.text('1-2 周'),
+      );
+      final idValue = find.descendant(of: sheet, matching: find.text('early'));
+
+      SelectionContainer nearestSelectionContainer(Finder target) => tester
+          .widgetList<SelectionContainer>(
+            find.ancestor(
+              of: target,
+              matching: find.byType(SelectionContainer),
+            ),
+          )
+          .first;
+
+      expect(nearestSelectionContainer(headerTitle).registrar, isNull);
+      expect(nearestSelectionContainer(weekLabel).registrar, isNull);
+      expect(nearestSelectionContainer(weekValue).registrar, isNotNull);
+      expect(nearestSelectionContainer(idValue).registrar, isNotNull);
+
+      // 真实交互选中 + 复制：全选复制时只包含字段值，不包含标题与左侧标签。
+      String? copiedText;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copiedText =
+                (call.arguments as Map<dynamic, dynamic>)['text'] as String?;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+
+      await tester.longPress(weekValue);
+      await tester.pumpAndSettle();
+
+      final selectableRegion = tester.state<SelectableRegionState>(
+        find.descendant(of: sheet, matching: find.byType(SelectableRegion)),
+      );
+      selectableRegion.selectAll(SelectionChangedCause.toolbar);
+      await tester.pump();
+      Actions.invoke(weekValue.evaluate().first, CopySelectionTextIntent.copy);
+      await tester.pump();
+
+      expect(copiedText, isNotNull);
+      expect(copiedText, contains('1-2 周'));
+      expect(copiedText, contains('张老师'));
+      expect(copiedText, contains('early'));
+      expect(copiedText, isNot(contains('期初课')));
+      expect(copiedText, isNot(contains('周次')));
+      expect(copiedText, isNot(contains('课程 ID')));
+    });
+
+    testWidgets('课程详情包含大量扩展字段时仍可在 SelectionArea 内正常滚动与长按选字', (tester) async {
+      final longDetails = <ScheduleDetail>[
+        for (var i = 1; i <= 20; i++)
+          ScheduleDetail(id: 'ext-$i', label: '扩展项$i', value: '字段值内容-$i'),
+      ];
+      final schedule = Schedule(
+        termId: '2026-2027-1',
+        maxWeeks: 18,
+        entries: <ScheduleEntry>[
+          ScheduleEntry(
+            id: 'long-detail-course',
+            name: '长详情课程',
+            day: 1,
+            startPeriod: 1,
+            endPeriod: 2,
+            weeks: const <int>[1, 2],
+            teacher: '李老师',
+            location: '教学楼 A101',
+            details: longDetails,
+          ),
+        ],
+      );
+      final model = buildModel();
+      model.hydrateForTest(schedule: schedule, week: 1);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(CourseBlock).first);
+      await tester.pumpAndSettle();
+
+      final sheet = find.byType(BottomSheet);
+      final scrollView = find.descendant(
+        of: sheet,
+        matching: find.byType(SingleChildScrollView),
+      );
+      final scrollable = tester.state<ScrollableState>(
+        find.descendant(of: scrollView, matching: find.byType(Scrollable)),
+      );
+      expect(scrollable.position.maxScrollExtent, greaterThan(0));
+
+      await tester.drag(scrollView, const Offset(0, -600));
+      await tester.pumpAndSettle();
+      expect(scrollable.position.pixels, greaterThan(0));
+      await tester.ensureVisible(find.text('字段值内容-20'));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('字段值内容-20'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('TactileSurfaceButton 失活卸载同帧触发菜单形变通知不抛出 inactive element 异常', (
+      tester,
+    ) async {
+      var showButton = true;
+      late StateSetter setHostState;
+      final dummyAnchorKey = GlobalKey();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                setHostState = setState;
+                return Column(
+                  children: <Widget>[
+                    SizedBox(key: dummyAnchorKey, width: 10, height: 10),
+                    if (showButton)
+                      TactileSurfaceButton(
+                        onMenuOpen: (_, _) {},
+                        child: const Text('菜单按钮'),
+                      ),
+                    if (showButton)
+                      _DisposeNotifyHelper(
+                        onDispose: () {
+                          final ro = dummyAnchorKey.currentContext
+                              ?.findRenderObject();
+                          activeAppMenuMorph.value = (ro, 0.5);
+                        },
+                      ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      );
+
+      setHostState(() => showButton = false);
+      await tester.pump();
+      activeAppMenuMorph.value = (null, 0.0);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('CourseBlock 使用 RepaintBoundary 隔离点击反馈重绘', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      await tester.pumpAndSettle();
+
+      final block = find.byType(CourseBlock).first;
+      expect(
+        find.descendant(of: block, matching: find.byType(RepaintBoundary)),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('锚定菜单完成测量后退出 IntrinsicWidth 并以静态阴影卡片承载', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(
+        schedule: Schedule(
+          termId: '2026-2027-1',
+          maxWeeks: 20,
+          entries: sparseSchedule().entries,
+        ),
+        week: 1,
+      );
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      await tester.pumpAndSettle();
+
+      // 短菜单：测量后无 IntrinsicWidth，静态 elevation = 8，且不启用 Clip.antiAlias。
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.byType(Overlay),
+          matching: find.byType(IntrinsicWidth),
+        ),
+        findsNothing,
+      );
+      final shortCard = tester.widget<Material>(
+        find
+            .ancestor(of: find.text('校准当前周次'), matching: find.byType(Material))
+            .first,
+      );
+      expect(shortCard.elevation, 8);
+      expect(shortCard.clipBehavior, Clip.none);
+
+      // 关掉短菜单后再打开可滚动 20 周长菜单：测量后同样无 IntrinsicWidth，滚动列表保留抗锯齿裁剪。
+      await tester.tapAt(const Offset(12, 12));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('第 1 周'));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.byType(Overlay),
+          matching: find.byType(IntrinsicWidth),
+        ),
+        findsNothing,
+      );
+      final longCard = tester.widget<Material>(
+        find
+            .ancestor(of: find.text('第 2 周'), matching: find.byType(Material))
+            .first,
+      );
+      expect(longCard.elevation, 8);
+      expect(longCard.clipBehavior, Clip.antiAlias);
+    });
+
     testWidgets('HomeShell 按目标按需懒加载：直达设置页时不提前构建学业页', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
@@ -5570,4 +5855,23 @@ void main() {
       }
     });
   });
+}
+
+class _DisposeNotifyHelper extends StatefulWidget {
+  const _DisposeNotifyHelper({required this.onDispose});
+  final VoidCallback onDispose;
+
+  @override
+  State<_DisposeNotifyHelper> createState() => _DisposeNotifyHelperState();
+}
+
+class _DisposeNotifyHelperState extends State<_DisposeNotifyHelper> {
+  @override
+  void dispose() {
+    widget.onDispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
 }
