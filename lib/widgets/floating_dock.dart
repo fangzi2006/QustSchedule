@@ -81,6 +81,22 @@ class FloatingDock extends StatefulWidget {
   static double contentInset(BuildContext context) =>
       height + bottomMargin * 2 + MediaQuery.of(context).padding.bottom;
 
+  /// 判断屏幕全局坐标 [globalPosition] 是否落在与 [route] 同属一页的活跃 Dock 操作区内。
+  ///
+  /// 用于锚定菜单的选择性遮罩放行：菜单展开时除 Dock 栏外一律拦截外部点击并收起菜单，
+  /// 唯有 Dock 栏保持最高优先级可直接响应切页并同步关闭菜单。
+  static bool hitTestGlobalPosition(
+    Offset globalPosition, {
+    ModalRoute<dynamic>? route,
+  }) {
+    for (final state in FloatingDockState._activeInstances) {
+      if (state._containsGlobalPosition(globalPosition, route)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   @visibleForTesting
   static Path buildLensPathForTest(Rect rect) => _buildLensPath(rect);
 
@@ -94,8 +110,12 @@ class FloatingDock extends StatefulWidget {
 
 class FloatingDockState extends State<FloatingDock>
     with TickerProviderStateMixin {
+  static final Set<FloatingDockState> _activeInstances = <FloatingDockState>{};
+
+  final GlobalKey _capsuleKey = GlobalKey(debugLabel: 'floating-dock-capsule');
   final GlobalKey _stackKey = GlobalKey();
   final List<GlobalKey> _itemKeys = <GlobalKey>[];
+  ModalRoute<dynamic>? _modalRoute;
   List<Rect> _rects = const <Rect>[];
   List<_LensGlyphEntry> _cachedGlyphs = const <_LensGlyphEntry>[];
   final List<_LensGlyphEntry> _pendingDisposeGlyphs = <_LensGlyphEntry>[];
@@ -202,10 +222,17 @@ class FloatingDockState extends State<FloatingDock>
   @override
   void initState() {
     super.initState();
+    _activeInstances.add(this);
     _preview = widget.index;
     _syncKeys();
     // 指示块自己的滑动（按下 / 松手 / 取消）也要逐帧报给外壳。
     _slide.addListener(_reportPillProgress);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _modalRoute = ModalRoute.of(context);
   }
 
   @override
@@ -230,6 +257,7 @@ class FloatingDockState extends State<FloatingDock>
 
   @override
   void dispose() {
+    _activeInstances.remove(this);
     _disposeGlyphCache();
     _slide.removeListener(_reportPillProgress);
     _physics.dispose();
@@ -238,6 +266,26 @@ class FloatingDockState extends State<FloatingDock>
     _lift.dispose();
     _edge.dispose();
     super.dispose();
+  }
+
+  bool _containsGlobalPosition(
+    Offset globalPosition,
+    ModalRoute<dynamic>? route,
+  ) {
+    if (!mounted) return false;
+    final dockRoute = _modalRoute;
+    if (!identical(dockRoute, route)) {
+      return false;
+    }
+    if (dockRoute != null && !dockRoute.isCurrent) {
+      return false;
+    }
+    final ro = _capsuleKey.currentContext?.findRenderObject();
+    if (ro is! RenderBox || !ro.attached || !ro.hasSize) {
+      return false;
+    }
+    final local = ro.globalToLocal(globalPosition);
+    return ro.paintBounds.contains(local);
   }
 
   void _disposeGlyphCache() {
@@ -766,6 +814,7 @@ class FloatingDockState extends State<FloatingDock>
                 _syncLift();
               },
               child: GestureDetector(
+                key: _capsuleKey,
                 // 整条胶囊都是操作区：按钮之间的留白、两侧内边距都算。
                 behavior: HitTestBehavior.opaque,
                 onTapUp: _onTapUp,
