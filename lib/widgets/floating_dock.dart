@@ -79,7 +79,7 @@ class FloatingDock extends StatefulWidget {
   static const double bottomMargin = 16;
 
   static double contentInset(BuildContext context) =>
-      height + bottomMargin * 2 + MediaQuery.of(context).padding.bottom;
+      height + bottomMargin * 2 + MediaQuery.paddingOf(context).bottom;
 
   /// 判断屏幕全局坐标 [globalPosition] 是否落在与 [route] 同属一页的活跃 Dock 操作区内。
   ///
@@ -778,7 +778,7 @@ class FloatingDockState extends State<FloatingDock>
     return Padding(
       padding: EdgeInsets.only(
         bottom:
-            FloatingDock.bottomMargin + MediaQuery.of(context).padding.bottom,
+            FloatingDock.bottomMargin + MediaQuery.paddingOf(context).bottom,
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {

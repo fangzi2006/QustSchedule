@@ -108,54 +108,62 @@ class _OverviewTab extends StatelessWidget {
         Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Row(
-                  children: <Widget>[
-                    const Expanded(
-                      child: Text(
-                        '环境与状态',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    TactileIconButton(
-                      icon: const Icon(Icons.copy_all),
-                      size: 32,
-                      iconSize: 18,
-                      surfaceStyle: TactileSurfaceStyle.tinted,
-                      tooltip: '复制全部',
-                      onPressed: () => _copyText(
-                        context,
-                        rows.map((row) => '${row.$1}: ${row.$2}').join('\n'),
-                        '概览已复制',
-                      ),
-                    ),
-                  ],
-                ),
-                for (final (label, value) in rows)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
+            child: SelectionArea(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  SelectionContainer.disabled(
                     child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
-                        SizedBox(
-                          width: 92,
+                        const Expanded(
                           child: Text(
-                            label,
-                            style: Theme.of(context).textTheme.bodySmall,
+                            '环境与状态',
+                            style: TextStyle(fontWeight: FontWeight.bold),
                           ),
                         ),
-                        Expanded(
-                          child: SelectableText(
-                            value,
-                            style: Theme.of(context).textTheme.bodySmall,
+                        TactileIconButton(
+                          icon: const Icon(Icons.copy_all),
+                          size: 32,
+                          iconSize: 18,
+                          surfaceStyle: TactileSurfaceStyle.tinted,
+                          tooltip: '复制全部',
+                          onPressed: () => _copyText(
+                            context,
+                            rows
+                                .map((row) => '${row.$1}: ${row.$2}')
+                                .join('\n'),
+                            '概览已复制',
                           ),
                         ),
                       ],
                     ),
                   ),
-              ],
+                  for (final (label, value) in rows)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          SizedBox(
+                            width: 92,
+                            child: SelectionContainer.disabled(
+                              child: Text(
+                                label,
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: Text(
+                              value,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
@@ -379,47 +387,53 @@ class _RawTab extends StatelessWidget {
     if (body == null && rows.isEmpty) {
       return const Center(child: Text('还没有获取过课表'));
     }
-    return ListView(
-      padding: const EdgeInsets.all(12),
-      children: <Widget>[
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Row(
-                  children: <Widget>[
-                    Expanded(
-                      child: Text(
-                        '原始响应（${body?.length ?? 0} 字符）',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
+    return SelectionArea(
+      child: ListView(
+        padding: const EdgeInsets.all(12),
+        children: <Widget>[
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  SelectionContainer.disabled(
+                    child: Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            '原始响应（${body?.length ?? 0} 字符）',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        TactileActionButton(
+                          variant: TactileActionVariant.text,
+                          icon: const Icon(Icons.copy, size: 16),
+                          label: const Text('复制'),
+                          onPressed: body == null
+                              ? null
+                              : () => _copyText(context, body, '原始响应已复制'),
+                        ),
+                      ],
                     ),
-                    TactileActionButton(
-                      variant: TactileActionVariant.text,
-                      icon: const Icon(Icons.copy, size: 16),
-                      label: const Text('复制'),
-                      onPressed: body == null
-                          ? null
-                          : () => _copyText(context, body, '原始响应已复制'),
-                    ),
-                  ],
-                ),
-                _CollapsibleText(text: body ?? ''),
-              ],
+                  ),
+                  _CollapsibleText(text: body ?? ''),
+                ],
+              ),
             ),
           ),
-        ),
-        const SizedBox(height: 12),
-        Text(
-          'kbList 行（${rows.length}）',
-          style: const TextStyle(fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 4),
-        for (var index = 0; index < rows.length; index++)
-          _RawRowTile(index: index, row: rows[index]),
-      ],
+          const SizedBox(height: 12),
+          SelectionContainer.disabled(
+            child: Text(
+              'kbList 行（${rows.length}）',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          const SizedBox(height: 4),
+          for (var index = 0; index < rows.length; index++)
+            _RawRowTile(index: index, row: rows[index]),
+        ],
+      ),
     );
   }
 }
@@ -442,10 +456,14 @@ class _RawRowTile extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 6),
       child: ExpansionTile(
         dense: true,
-        title: Text('$name', style: const TextStyle(fontSize: 13)),
-        subtitle: Text(
-          '#$index  周$day  第$periods节  $weeks',
-          style: const TextStyle(fontSize: 11),
+        title: SelectionContainer.disabled(
+          child: Text('$name', style: const TextStyle(fontSize: 13)),
+        ),
+        subtitle: SelectionContainer.disabled(
+          child: Text(
+            '#$index  周$day  第$periods节  $weeks',
+            style: const TextStyle(fontSize: 11),
+          ),
         ),
         children: <Widget>[
           Padding(
@@ -453,16 +471,19 @@ class _RawRowTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TactileActionButton(
-                    variant: TactileActionVariant.text,
-                    icon: const Icon(Icons.copy, size: 16),
-                    label: const Text('复制这行 JSON'),
-                    onPressed: () => _copyText(context, text, '已复制第 $index 行'),
+                SelectionContainer.disabled(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: TactileActionButton(
+                      variant: TactileActionVariant.text,
+                      icon: const Icon(Icons.copy, size: 16),
+                      label: const Text('复制这行 JSON'),
+                      onPressed: () =>
+                          _copyText(context, text, '已复制第 $index 行'),
+                    ),
                   ),
                 ),
-                SelectableText(
+                Text(
                   text,
                   style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
                 ),
@@ -597,17 +618,19 @@ class _CollapsibleTextState extends State<_CollapsibleText> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        SelectableText(
+        Text(
           shown,
           style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
         ),
         if (long)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TactileActionButton(
-              variant: TactileActionVariant.text,
-              onPressed: () => setState(() => _expanded = !_expanded),
-              label: Text(_expanded ? '收起' : '展开全部（${text.length} 字符）'),
+          SelectionContainer.disabled(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: TactileActionButton(
+                variant: TactileActionVariant.text,
+                onPressed: () => setState(() => _expanded = !_expanded),
+                label: Text(_expanded ? '收起' : '展开全部（${text.length} 字符）'),
+              ),
             ),
           ),
       ],

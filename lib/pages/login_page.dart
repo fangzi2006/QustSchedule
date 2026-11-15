@@ -289,7 +289,7 @@ class _LoginPageState extends State<LoginPage> {
           ),
           // 登录进度 / 报错与课表页共用同一个弹窗组件。
           Positioned(
-            top: MediaQuery.of(context).padding.top + 8,
+            top: MediaQuery.paddingOf(context).top + 8,
             right: 10,
             child: ListenableBuilder(
               listenable: Listenable.merge(<Listenable>[

@@ -399,15 +399,17 @@ class _LicenseTextPageState extends State<LicenseTextPage> {
     if (_text == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
-      child: SelectableText(
-        _reflow(_text!),
-        textAlign: TextAlign.left,
-        style: theme.textTheme.bodySmall?.copyWith(
-          fontSize: 13,
-          height: 1.6,
-          color: theme.colorScheme.onSurface,
+    return SelectionArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+        child: Text(
+          _reflow(_text!),
+          textAlign: TextAlign.left,
+          style: theme.textTheme.bodySmall?.copyWith(
+            fontSize: 13,
+            height: 1.6,
+            color: theme.colorScheme.onSurface,
+          ),
         ),
       ),
     );

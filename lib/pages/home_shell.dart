@@ -174,7 +174,7 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    final topInset = MediaQuery.of(context).padding.top + kToolbarHeight;
+    final topInset = MediaQuery.paddingOf(context).top + kToolbarHeight;
     final Widget? academicPage = _academicPage;
     final Widget? settingsPage = _settingsPage;
 
