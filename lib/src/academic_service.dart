@@ -105,26 +105,39 @@ class AcademicService {
   });
 
   /// 抓取并缓存指定学期的考试安排。
-  Future<List<ExamItem>> fetchExams(String termId) async {
+  Future<List<ExamItem>> fetchExams(
+    String termId, {
+    bool Function()? shouldCache,
+  }) async {
     final exams = await service.fetchExams(termId);
-    await examCache.save(termId, exams);
+    if (shouldCache == null || shouldCache()) {
+      await examCache.save(termId, exams);
+    }
     return exams;
   }
 
   /// 抓取并缓存指定学期的成绩清单。
-  Future<List<GradeItem>> fetchGrades(String termId) async {
+  Future<List<GradeItem>> fetchGrades(
+    String termId, {
+    bool Function()? shouldCache,
+  }) async {
     try {
       final grades = await service.fetchGrades(termId);
-      await gradesCache.save(termId, grades, isNotEvaluated: false);
+      if (shouldCache == null || shouldCache()) {
+        await gradesCache.save(termId, grades, isNotEvaluated: false);
+      }
       return grades;
     } on AcademicError catch (e) {
-      if (e.code == ErrorCode.notEvaluated) {
+      if (e.code == ErrorCode.notEvaluated &&
+          (shouldCache == null || shouldCache())) {
         final existing = await gradesCache.load(termId);
-        await gradesCache.save(
-          termId,
-          existing?.items ?? const <GradeItem>[],
-          isNotEvaluated: true,
-        );
+        if (shouldCache == null || shouldCache()) {
+          await gradesCache.save(
+            termId,
+            existing?.items ?? const <GradeItem>[],
+            isNotEvaluated: true,
+          );
+        }
       }
       rethrow;
     }
@@ -136,11 +149,18 @@ class AcademicService {
   Future<void> syncCurrentTermAsync({
     required String termId,
     VoidCallback? onDataUpdated,
+    bool Function()? shouldCache,
   }) async {
     if (termId.isEmpty) return;
     await Future.wait(<Future<dynamic>>[
-      fetchExams(termId).catchError((_) => const <ExamItem>[]),
-      fetchGrades(termId).catchError((_) => const <GradeItem>[]),
+      fetchExams(
+        termId,
+        shouldCache: shouldCache,
+      ).catchError((_) => const <ExamItem>[]),
+      fetchGrades(
+        termId,
+        shouldCache: shouldCache,
+      ).catchError((_) => const <GradeItem>[]),
     ]);
     onDataUpdated?.call();
   }

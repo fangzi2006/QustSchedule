@@ -233,9 +233,12 @@ class AcademicController extends ChangeNotifier {
           }
         }
 
+        bool canCache() =>
+            !_disposed && seq == _academicLoadSeq && !_isNeedLoginReader();
+
         final results = await Future.wait<dynamic>(<Future<dynamic>>[
-          safeRun(_academicService.fetchExams(target)),
-          safeRun(_academicService.fetchGrades(target)),
+          safeRun(_academicService.fetchExams(target, shouldCache: canCache)),
+          safeRun(_academicService.fetchGrades(target, shouldCache: canCache)),
         ]);
         if (_disposed || seq != _academicLoadSeq) return;
 
@@ -305,13 +308,19 @@ class AcademicController extends ChangeNotifier {
               scope: HintScope.academic,
             );
           }
+        } else if (touchedNetwork &&
+            !networkCleanupHandled &&
+            !_disposed &&
+            !_academicLoading) {
+          networkCleanupHandled = true;
+          _onNetworkLoadFinished?.call();
         }
       }
     } finally {
       if (touchedNetwork &&
           !networkCleanupHandled &&
           !_disposed &&
-          seq == _academicLoadSeq) {
+          (seq == _academicLoadSeq || !_academicLoading)) {
         _onNetworkLoadFinished?.call();
       }
     }
@@ -346,7 +355,11 @@ class AcademicController extends ChangeNotifier {
       final bool isDebugCleared = _academicDataClearedForDebug;
       _academicDataClearedForDebug = false;
 
-      await _academicService.syncCurrentTermAsync(termId: termId);
+      await _academicService.syncCurrentTermAsync(
+        termId: termId,
+        shouldCache: () =>
+            !_disposed && seq == _academicLoadSeq && !_isNeedLoginReader(),
+      );
       if (_disposed || seq != _academicLoadSeq || _isNeedLoginReader()) return;
       if (academicTermId == termId) {
         await restoreCachedData(termId);

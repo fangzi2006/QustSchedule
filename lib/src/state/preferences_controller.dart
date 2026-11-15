@@ -314,13 +314,14 @@ class PreferencesController {
     final height = _cellHeightDraft;
     final textScale = _courseTextScaleDraft;
     if (height == null && textScale == null) return;
+    final prefs = _preferences;
     _cellHeightDraft = null;
     _courseTextScaleDraft = null;
     if (height != null) {
-      await _preferences.setCellHeight(height);
+      await prefs.setCellHeight(height);
     }
     if (textScale != null) {
-      await _preferences.setCourseTextScale(textScale);
+      await prefs.setCourseTextScale(textScale);
     }
   }
 

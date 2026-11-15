@@ -7,6 +7,7 @@ import 'dart:ffi';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path_provider/path_provider.dart';
 
 import 'app_installer.dart';
@@ -51,13 +52,27 @@ class UpdateService {
     this.repoOwner = 'fangzi2006',
     this.repoName = 'QustSchedule',
     HttpClient? httpClient,
+    @visibleForTesting Duration? probeTimeoutOverride,
+    @visibleForTesting Duration? apiTimeoutOverride,
+    @visibleForTesting Duration? downloadConnectTimeoutOverride,
+    @visibleForTesting Duration? downloadIdleTimeoutOverride,
   }) : _ownsClient = httpClient == null,
-       _client = httpClient ?? HttpClient();
+       _client = httpClient ?? HttpClient(),
+       _probeTimeout = probeTimeoutOverride ?? probeTimeout,
+       _apiTimeout = apiTimeoutOverride ?? apiTimeout,
+       _downloadConnectTimeout =
+           downloadConnectTimeoutOverride ?? downloadConnectTimeout,
+       _downloadIdleTimeout =
+           downloadIdleTimeoutOverride ?? downloadIdleTimeout;
 
   final String repoOwner;
   final String repoName;
   final bool _ownsClient;
   final HttpClient _client;
+  final Duration _probeTimeout;
+  final Duration _apiTimeout;
+  final Duration _downloadConnectTimeout;
+  final Duration _downloadIdleTimeout;
 
   /// 释放底层网络连接资源（仅销毁内部自建的 HttpClient）。
   void dispose() {
@@ -256,13 +271,13 @@ class UpdateService {
     try {
       final request = await _client
           .getUrl(Uri.parse(targetUrl))
-          .timeout(probeTimeout);
+          .timeout(_probeTimeout);
       request.headers.set('User-Agent', 'QustSchedule-App');
-      final response = await request.close().timeout(probeTimeout);
+      final response = await request.close().timeout(_probeTimeout);
       stopwatch.stop();
       latency = stopwatch.elapsedMilliseconds;
       isUsable = (response.statusCode >= 200 && response.statusCode < 400);
-      await response.drain<void>();
+      await response.drain<void>().timeout(_probeTimeout);
     } catch (_) {
       return ProxyTestResult(
         proxyUrl: cleanProxy,
@@ -345,15 +360,15 @@ class UpdateService {
       try {
         final request = await _client
             .getUrl(Uri.parse(targetUrl))
-            .timeout(apiTimeout);
+            .timeout(_apiTimeout);
         request.headers.set('User-Agent', 'QustSchedule-App');
         request.headers.set('Accept', 'application/vnd.github.v3+json');
 
-        final response = await request.close().timeout(apiTimeout);
+        final response = await request.close().timeout(_apiTimeout);
         final responseBody = await response
             .transform(utf8.decoder)
             .join()
-            .timeout(apiTimeout);
+            .timeout(_apiTimeout);
 
         if (response.statusCode == 403) {
           hadRateLimit = true;
@@ -521,30 +536,45 @@ class UpdateService {
       if (cancelToken?.isCancelled == true) return null;
       final url = buildProxiedUrl(sumAsset.downloadUrl, candidate);
       HttpClientRequest? activeReq;
+      final cancelSignal = Completer<void>();
       void onCancelled() {
         try {
           activeReq?.abort();
         } catch (_) {}
+        if (!cancelSignal.isCompleted) {
+          cancelSignal.complete();
+        }
       }
 
       cancelToken?.addListener(onCancelled);
       try {
-        final req = await _client.getUrl(Uri.parse(url)).timeout(apiTimeout);
+        final req = await _raceWithCancel(
+          _client.getUrl(Uri.parse(url)).timeout(_apiTimeout),
+          cancelSignal,
+          onLateValue: _abortLateRequest,
+        );
         activeReq = req;
         if (cancelToken?.isCancelled == true) {
-          req.abort();
+          _abortLateRequest(req);
           return null;
         }
         req.headers.set('User-Agent', browserUserAgent);
-        final res = await req.close().timeout(apiTimeout);
+        final res = await _raceWithCancel(
+          req.close().timeout(_apiTimeout),
+          cancelSignal,
+          onLateValue: _cancelLateResponse,
+        );
         if (res.statusCode != HttpStatus.ok) {
-          await res.drain<void>().timeout(apiTimeout);
+          await _raceWithCancel(
+            res.drain<void>().timeout(_apiTimeout),
+            cancelSignal,
+          );
           continue;
         }
-        final body = await res
-            .transform(utf8.decoder)
-            .join()
-            .timeout(apiTimeout);
+        final body = await _raceWithCancel(
+          res.transform(utf8.decoder).join().timeout(_apiTimeout),
+          cancelSignal,
+        );
         final digest = parseSha256Sums(body)[targetAsset.name];
         if (digest != null && digest.isNotEmpty) {
           return digest;
@@ -623,11 +653,32 @@ class UpdateService {
 
       final downloadUrl = buildProxiedUrl(asset.downloadUrl, candidate);
 
+      HttpClientRequest? activeProbeReq;
+      final probeCancelSignal = Completer<void>();
+      void onProbeCancelled() {
+        try {
+          activeProbeReq?.abort();
+        } catch (_) {}
+        if (!probeCancelSignal.isCompleted) {
+          probeCancelSignal.complete();
+        }
+      }
+
+      cancelToken?.addListener(onProbeCancelled);
       try {
         // 先发送 Range 探测请求：检查服务端是否支持 206 Partial Content，并读取精准文件总长
-        final probeReq = await _client
-            .getUrl(Uri.parse(downloadUrl))
-            .timeout(downloadConnectTimeout);
+        final probeReq = await _raceWithCancel(
+          _client
+              .getUrl(Uri.parse(downloadUrl))
+              .timeout(_downloadConnectTimeout),
+          probeCancelSignal,
+          onLateValue: _abortLateRequest,
+        );
+        activeProbeReq = probeReq;
+        if (cancelToken?.isCancelled == true) {
+          _abortLateRequest(probeReq);
+          throw Exception('下载已取消');
+        }
 
         probeReq.headers.set('User-Agent', browserUserAgent);
         probeReq.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
@@ -635,7 +686,11 @@ class UpdateService {
         probeReq.headers.set(HttpHeaders.acceptHeader, '*/*');
         probeReq.headers.set(HttpHeaders.connectionHeader, 'keep-alive');
 
-        final probeRes = await probeReq.close().timeout(downloadConnectTimeout);
+        final probeRes = await _raceWithCancel(
+          probeReq.close().timeout(_downloadConnectTimeout),
+          probeCancelSignal,
+          onLateValue: _cancelLateResponse,
+        );
 
         if (probeRes.statusCode == HttpStatus.partialContent) {
           // 服务端支持 Range (206)
@@ -647,7 +702,10 @@ class UpdateService {
               totalBytes = parsedTotal;
             }
           }
-          await probeRes.drain<void>().timeout(downloadConnectTimeout);
+          await _raceWithCancel(
+            probeRes.drain<void>().timeout(_downloadConnectTimeout),
+            probeCancelSignal,
+          );
 
           if (totalBytes >= minChunkingBytes) {
             try {
@@ -694,7 +752,10 @@ class UpdateService {
             cancelToken: cancelToken,
           );
         } else {
-          await probeRes.drain<void>().timeout(downloadConnectTimeout);
+          await _raceWithCancel(
+            probeRes.drain<void>().timeout(_downloadConnectTimeout),
+            probeCancelSignal,
+          );
           lastError = HttpException(
             'HTTP ${probeRes.statusCode}',
             uri: Uri.parse(downloadUrl),
@@ -714,9 +775,16 @@ class UpdateService {
 
         return file;
       } catch (e) {
-        if (cancelToken?.isCancelled == true) rethrow;
+        if (cancelToken?.isCancelled == true) {
+          try {
+            if (file.existsSync()) await file.delete();
+          } catch (_) {}
+          rethrow;
+        }
         lastError = e;
         continue;
+      } finally {
+        cancelToken?.removeListener(onProbeCancelled);
       }
     }
 
@@ -830,21 +898,56 @@ class UpdateService {
           if (part.existsSync()) await part.delete();
         } catch (_) {}
       }
+      try {
+        if (targetFile.existsSync()) await targetFile.delete();
+      } catch (_) {}
       rethrow;
     } finally {
       cancelToken?.removeListener(propagateCancel);
     }
   }
 
-  Future<T> _raceWithCancel<T>(Future<T> future, Completer<void> cancelSignal) {
+  void _abortLateRequest(HttpClientRequest request) {
+    try {
+      request.abort();
+    } catch (_) {}
+  }
+
+  void _cancelLateResponse(HttpClientResponse response) {
+    try {
+      response
+          .listen((_) {}, onError: (Object _) {}, cancelOnError: true)
+          .cancel();
+    } catch (_) {}
+  }
+
+  Future<T> _raceWithCancel<T>(
+    Future<T> future,
+    Completer<void> cancelSignal, {
+    void Function(T value)? onLateValue,
+  }) {
     if (cancelSignal.isCompleted) {
-      future.ignore();
+      if (onLateValue != null) {
+        future.then((value) {
+          try {
+            onLateValue(value);
+          } catch (_) {}
+        }, onError: (Object _) {});
+      } else {
+        future.ignore();
+      }
       return Future<T>.error(Exception('下载已取消'));
     }
     final out = Completer<T>();
     future.then(
       (value) {
-        if (!out.isCompleted) out.complete(value);
+        if (!out.isCompleted) {
+          out.complete(value);
+        } else if (onLateValue != null) {
+          try {
+            onLateValue(value);
+          } catch (_) {}
+        }
       },
       onError: (Object error, StackTrace st) {
         if (!out.isCompleted) out.completeError(error, st);
@@ -889,14 +992,13 @@ class UpdateService {
     cancelToken?.addListener(onCancelled);
     try {
       final request = await _raceWithCancel(
-        _client.getUrl(Uri.parse(downloadUrl)).timeout(downloadConnectTimeout),
+        _client.getUrl(Uri.parse(downloadUrl)).timeout(_downloadConnectTimeout),
         cancelSignal,
+        onLateValue: _abortLateRequest,
       );
       activeReq = request;
       if (cancelToken?.isCancelled == true) {
-        try {
-          request.abort();
-        } catch (_) {}
+        _abortLateRequest(request);
         throw Exception('下载已取消');
       }
 
@@ -907,12 +1009,16 @@ class UpdateService {
       request.headers.set(HttpHeaders.connectionHeader, 'keep-alive');
 
       final response = await _raceWithCancel(
-        request.close().timeout(downloadConnectTimeout),
+        request.close().timeout(_downloadConnectTimeout),
         cancelSignal,
+        onLateValue: _cancelLateResponse,
       );
 
       if (response.statusCode != HttpStatus.partialContent) {
-        await response.drain<void>().timeout(downloadConnectTimeout);
+        await _raceWithCancel(
+          response.drain<void>().timeout(_downloadConnectTimeout),
+          cancelSignal,
+        );
         throw HttpException(
           'Chunk $workerIndex HTTP ${response.statusCode}',
           uri: Uri.parse(downloadUrl),
@@ -937,7 +1043,7 @@ class UpdateService {
 
       void resetIdleTimer() {
         idleTimer?.cancel();
-        idleTimer = Timer(downloadIdleTimeout, () {
+        idleTimer = Timer(_downloadIdleTimeout, () {
           failStream(
             TimeoutException('Chunk $workerIndex stream idle timeout'),
           );
@@ -1013,28 +1119,62 @@ class UpdateService {
     required void Function(DownloadProgress progress) onProgress,
     CancelToken? cancelToken,
   }) async {
-    final singleReq = await _client
-        .getUrl(Uri.parse(downloadUrl))
-        .timeout(downloadConnectTimeout);
-    singleReq.headers.set('User-Agent', browserUserAgent);
-    singleReq.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
-    singleReq.headers.set(HttpHeaders.acceptHeader, '*/*');
-    singleReq.headers.set(HttpHeaders.connectionHeader, 'keep-alive');
-    final singleRes = await singleReq.close().timeout(downloadConnectTimeout);
-    if (singleRes.statusCode != HttpStatus.ok) {
-      await singleRes.drain<void>();
-      throw HttpException(
-        'HTTP ${singleRes.statusCode}',
-        uri: Uri.parse(downloadUrl),
-      );
+    if (cancelToken?.isCancelled == true) {
+      throw Exception('下载已取消');
     }
-    await _downloadSingleStream(
-      response: singleRes,
-      targetFile: targetFile,
-      totalBytes: totalBytes,
-      onProgress: onProgress,
-      cancelToken: cancelToken,
-    );
+
+    HttpClientRequest? activeReq;
+    final cancelSignal = Completer<void>();
+    void onCancelled() {
+      try {
+        activeReq?.abort();
+      } catch (_) {}
+      if (!cancelSignal.isCompleted) {
+        cancelSignal.complete();
+      }
+    }
+
+    cancelToken?.addListener(onCancelled);
+    try {
+      final singleReq = await _raceWithCancel(
+        _client.getUrl(Uri.parse(downloadUrl)).timeout(_downloadConnectTimeout),
+        cancelSignal,
+        onLateValue: _abortLateRequest,
+      );
+      activeReq = singleReq;
+      if (cancelToken?.isCancelled == true) {
+        _abortLateRequest(singleReq);
+        throw Exception('下载已取消');
+      }
+      singleReq.headers.set('User-Agent', browserUserAgent);
+      singleReq.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+      singleReq.headers.set(HttpHeaders.acceptHeader, '*/*');
+      singleReq.headers.set(HttpHeaders.connectionHeader, 'keep-alive');
+      final singleRes = await _raceWithCancel(
+        singleReq.close().timeout(_downloadConnectTimeout),
+        cancelSignal,
+        onLateValue: _cancelLateResponse,
+      );
+      if (singleRes.statusCode != HttpStatus.ok) {
+        await _raceWithCancel(
+          singleRes.drain<void>().timeout(_downloadConnectTimeout),
+          cancelSignal,
+        );
+        throw HttpException(
+          'HTTP ${singleRes.statusCode}',
+          uri: Uri.parse(downloadUrl),
+        );
+      }
+      await _downloadSingleStream(
+        response: singleRes,
+        targetFile: targetFile,
+        totalBytes: totalBytes,
+        onProgress: onProgress,
+        cancelToken: cancelToken,
+      );
+    } finally {
+      cancelToken?.removeListener(onCancelled);
+    }
   }
 
   /// 单线程直通下载流处理（带零额外网络握手与平滑限频更新）。
@@ -1045,51 +1185,121 @@ class UpdateService {
     required void Function(DownloadProgress progress) onProgress,
     CancelToken? cancelToken,
   }) async {
+    if (cancelToken?.isCancelled == true) {
+      _cancelLateResponse(response);
+      throw Exception('下载已取消');
+    }
+
     final sink = targetFile.openWrite();
     var receivedBytes = 0;
     var lastTime = DateTime.now();
     var lastBytes = 0;
     var currentSpeed = 0.0;
 
-    try {
-      await for (final chunk in response.timeout(downloadIdleTimeout)) {
-        if (cancelToken?.isCancelled == true) {
-          throw Exception('下载已取消');
-        }
-        sink.add(chunk);
-        receivedBytes += chunk.length;
+    StreamSubscription<List<int>>? subscription;
+    Timer? idleTimer;
+    final streamDone = Completer<void>();
+    final cancelSignal = Completer<void>();
+    var streamFailed = false;
 
-        final now = DateTime.now();
-        final elapsedMs = now.difference(lastTime).inMilliseconds;
-        if (elapsedMs >= 350 || receivedBytes == totalBytes) {
-          if (elapsedMs > 0) {
-            final instantSpeed =
-                (receivedBytes - lastBytes) / (elapsedMs / 1000.0);
-            currentSpeed = currentSpeed == 0.0
-                ? instantSpeed
-                : 0.7 * instantSpeed + 0.3 * currentSpeed;
+    void failStream(Object error, [StackTrace? st]) {
+      streamFailed = true;
+      idleTimer?.cancel();
+      if (!streamDone.isCompleted) {
+        streamDone.completeError(error, st);
+      }
+    }
+
+    void resetIdleTimer() {
+      idleTimer?.cancel();
+      idleTimer = Timer(_downloadIdleTimeout, () {
+        failStream(TimeoutException('Download stream idle timeout'));
+      });
+    }
+
+    void onCancelled() {
+      if (!cancelSignal.isCompleted) {
+        cancelSignal.complete();
+      }
+    }
+
+    cancelToken?.addListener(onCancelled);
+    var shouldDeleteTarget = false;
+
+    try {
+      resetIdleTimer();
+      subscription = response.listen(
+        (chunk) {
+          if (streamFailed || cancelToken?.isCancelled == true) {
+            if (cancelToken?.isCancelled == true) {
+              failStream(Exception('下载已取消'));
+            }
+            return;
           }
-          lastTime = now;
-          lastBytes = receivedBytes;
-          onProgress(
-            DownloadProgress(
-              receivedBytes: receivedBytes,
-              totalBytes: totalBytes,
-              speedBytesPerSec: currentSpeed,
-            ),
-          );
-        }
-      }
+          resetIdleTimer();
+          sink.add(chunk);
+          receivedBytes += chunk.length;
+
+          final now = DateTime.now();
+          final elapsedMs = now.difference(lastTime).inMilliseconds;
+          if (elapsedMs >= 350 || receivedBytes == totalBytes) {
+            if (elapsedMs > 0) {
+              final instantSpeed =
+                  (receivedBytes - lastBytes) / (elapsedMs / 1000.0);
+              currentSpeed = currentSpeed == 0.0
+                  ? instantSpeed
+                  : 0.7 * instantSpeed + 0.3 * currentSpeed;
+            }
+            lastTime = now;
+            lastBytes = receivedBytes;
+            onProgress(
+              DownloadProgress(
+                receivedBytes: receivedBytes,
+                totalBytes: totalBytes,
+                speedBytesPerSec: currentSpeed,
+              ),
+            );
+          }
+        },
+        onError: (Object error, StackTrace st) {
+          failStream(error, st);
+        },
+        onDone: () {
+          idleTimer?.cancel();
+          if (!streamDone.isCompleted) {
+            if (totalBytes > 0 && receivedBytes < totalBytes) {
+              streamDone.completeError(
+                HttpException(
+                  '下载流传输未完成: 实际接收 $receivedBytes 字节，预期 $totalBytes 字节',
+                ),
+              );
+            } else {
+              streamDone.complete();
+            }
+          }
+        },
+        cancelOnError: true,
+      );
+
+      await _raceWithCancel(streamDone.future, cancelSignal);
       await sink.flush();
-      if (totalBytes > 0 && receivedBytes < totalBytes) {
-        throw HttpException(
-          '下载流传输未完成: 实际接收 $receivedBytes 字节，预期 $totalBytes 字节',
-        );
-      }
+    } catch (_) {
+      shouldDeleteTarget = true;
+      rethrow;
     } finally {
+      cancelToken?.removeListener(onCancelled);
+      idleTimer?.cancel();
+      try {
+        await subscription?.cancel();
+      } catch (_) {}
       try {
         await sink.close();
       } catch (_) {}
+      if (shouldDeleteTarget) {
+        try {
+          if (targetFile.existsSync()) await targetFile.delete();
+        } catch (_) {}
+      }
     }
   }
 

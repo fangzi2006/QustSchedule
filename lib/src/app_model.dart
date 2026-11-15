@@ -141,6 +141,7 @@ class AppModel extends ChangeNotifier {
 
   bool _suppressStageHints = false;
   bool _reloginStageActive = false;
+  int _authEpoch = 0;
   bool _disposed = false;
 
   AppStatus _status = AppStatus.booting;
@@ -633,6 +634,10 @@ class AppModel extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   Future<void> signIn(String username, String password) async {
+    _authEpoch++;
+    scheduleState.scheduleLoad = null;
+    _reloginStageActive = false;
+    session.setCaptcha(null);
     session.username = username;
     _setStatus(AppStatus.signingIn);
     hints.showHint('登录中…');
@@ -654,6 +659,7 @@ class AppModel extends ChangeNotifier {
   Future<void> submitCaptcha(String code) async {
     if (session.captcha == null) return;
     if (session.hasPendingReloginCaptcha) {
+      final epoch = _authEpoch;
       final pending = scheduleState.scheduleLoad;
       final reloginFlight = session.service.reloginFlight;
       session.completePendingCaptcha(code);
@@ -670,8 +676,12 @@ class AppModel extends ChangeNotifier {
       if (reloginFlight != null) {
         try {
           await reloginFlight;
-          if (_disposed) return;
+          if (_disposed || epoch != _authEpoch) return;
+          _reloginStageActive = false;
           session.setCaptcha(null);
+          if (!hints.isAcademicUpdateHint && hints.globalHint == '正在重新登录…') {
+            hints.clearGlobalHint();
+          }
           if (_status == AppStatus.signingIn) {
             _setStatus(
               scheduleState.schedule != null
@@ -681,7 +691,7 @@ class AppModel extends ChangeNotifier {
           }
           unawaited(session.syncIdentityQuietly());
         } on AcademicError catch (error) {
-          if (_disposed) return;
+          if (_disposed || epoch != _authEpoch) return;
           _reloginStageActive = false;
           session.setCaptcha(null);
           hints.clearGlobalHint();
@@ -692,7 +702,7 @@ class AppModel extends ChangeNotifier {
             _fail(error);
           }
         } catch (error) {
-          if (_disposed) return;
+          if (_disposed || epoch != _authEpoch) return;
           _reloginStageActive = false;
           session.setCaptcha(null);
           hints.clearGlobalHint();
@@ -704,7 +714,14 @@ class AppModel extends ChangeNotifier {
           }
         }
       } else {
+        _reloginStageActive = false;
         session.setCaptcha(null);
+        if (!hints.isAcademicUpdateHint && hints.globalHint == '正在重新登录…') {
+          hints.clearGlobalHint();
+        }
+        if (scheduleState.scheduleLoad == null) {
+          scheduleState.setRefreshing(false);
+        }
         if (_status == AppStatus.signingIn) {
           _setStatus(
             scheduleState.schedule != null
@@ -889,12 +906,15 @@ class AppModel extends ChangeNotifier {
   }
 
   Future<void> signOut() async {
+    _authEpoch++;
+    _reloginStageActive = false;
+    scheduleState.scheduleLoad = null;
+    scheduleState.setRefreshing(false);
+    hints.clearHint();
+    academic.resetOnSignOut();
     await session.signOutReset();
     if (_disposed) return;
-    _reloginStageActive = false;
-    hints.clearHint();
     scheduleState.resetOnSignOut();
-    academic.resetOnSignOut();
     prefs.notifyPrefs();
     _setStatus(AppStatus.needLogin, message: '已退出登录');
   }
@@ -1002,7 +1022,8 @@ class AppModel extends ChangeNotifier {
 
   void _handleAcademicNetworkFinished() {
     if (_disposed) return;
-    if (scheduleState.scheduleLoad == null) {
+    if (scheduleState.scheduleLoad == null &&
+        session.service.reloginFlight == null) {
       scheduleState.setRefreshing(false);
       if (_reloginStageActive || hints.globalHint == '正在重新登录…') {
         _reloginStageActive = false;

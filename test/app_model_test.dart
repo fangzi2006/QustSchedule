@@ -1632,6 +1632,257 @@ void main() {
         expect(prefs2.courseTextScale, 0.92);
       },
     );
+
+    test('signOut 打断在途课表重登验证码时，状态立即切至 needLogin 且不经过 failed、不写脏课表', () async {
+      final backend = FakeBackend();
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
+      addTearDown(model.dispose);
+      await rig.credentials.save(
+        '${model.service.baseUrl.toLowerCase()}|20240001',
+        const Credentials('20240001', 'pw'),
+      );
+      model.service.accountHint = '20240001';
+      model.session.username = '20240001';
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+      var scheduleCalls = 0;
+      backend.fetchBehavior = (call, termId) async {
+        scheduleCalls++;
+        if (scheduleCalls == 1) {
+          throw const AcademicError(ErrorCode.sessionExpired, '会话过期');
+        }
+        return sampleSchedule('2026-2027-2');
+      };
+      backend.loginBehavior = (call, credentials) async => const CaptchaState(
+        continuationId: 'relogin-signout-race',
+        imageBase64: 'iVBORw0KGgo=',
+        mimeType: 'image/png',
+      );
+
+      final seenStatuses = <AppStatus>[model.status];
+      model.routeNotifier.addListener(() {
+        seenStatuses.add(model.status);
+      });
+
+      final load = model.refresh();
+      await waitUntil(() => model.status == AppStatus.needCaptcha);
+
+      await model.signOut();
+      await load;
+
+      expect(seenStatuses, isNot(contains(AppStatus.failed)));
+      expect(model.status, AppStatus.needLogin);
+      expect(model.username, isEmpty);
+      expect(model.schedule, isNull);
+      expect(model.captcha, isNull);
+      expect(model.refreshing, isFalse);
+      expect(model.scheduleState.scheduleLoad, isNull);
+    });
+
+    test('cancelCaptcha 后立即手动 signIn，在途 _loadSchedule 失败不得覆盖手动登录', () async {
+      final backend = FakeBackend();
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
+      addTearDown(model.dispose);
+      await rig.credentials.save(
+        '${model.service.baseUrl.toLowerCase()}|20240001',
+        const Credentials('20240001', 'pw'),
+      );
+      model.service.accountHint = '20240001';
+      model.session.username = '20240001';
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+      final loginGate = Completer<void>();
+      var scheduleCalls = 0;
+      backend.fetchBehavior = (call, termId) async {
+        scheduleCalls++;
+        if (scheduleCalls == 1) {
+          throw const AcademicError(ErrorCode.sessionExpired, '会话过期');
+        }
+        return sampleSchedule('2026-2027-2');
+      };
+      backend.loginBehavior = (call, credentials) async {
+        if (call == 1) {
+          return const CaptchaState(
+            continuationId: 'relogin-cancel-race',
+            imageBase64: 'iVBORw0KGgo=',
+            mimeType: 'image/png',
+          );
+        }
+        await loginGate.future;
+        backend.cookies = snapshotOf(_baseUrl, value: 'manual-ok');
+        return AuthenticatedState(
+          studentId: credentials.username,
+          studentName: '新账号',
+        );
+      };
+
+      final seenStatuses = <AppStatus>[model.status];
+      model.routeNotifier.addListener(() {
+        seenStatuses.add(model.status);
+      });
+
+      final load = model.refresh();
+      await waitUntil(() => model.status == AppStatus.needCaptcha);
+
+      // 同步连发 cancelCaptcha + 手动 signIn，确保晚到异常不得踩成 failed
+      model.cancelCaptcha();
+      final manualSignIn = model.signIn('20240002', 'pw2');
+      expect(model.status, AppStatus.signingIn);
+      expect(model.captcha, isNull);
+
+      await load;
+      expect(model.status, AppStatus.signingIn);
+      expect(seenStatuses, isNot(contains(AppStatus.failed)));
+
+      loginGate.complete();
+      await manualSignIn;
+      expect(model.status, AppStatus.ready);
+      expect(model.username, '20240002');
+      expect(model.errorCode, isEmpty);
+    });
+
+    test('AcademicController 在途请求被 resetOnSignOut 取消后不得污染磁盘缓存', () async {
+      final examsGate = Completer<void>();
+      final oldExamCache = InMemoryExamCache();
+      final oldGradesCache = InMemoryGradesCache();
+      final backend = FakeBackend()
+        ..examsBehavior = ((_, _) async {
+          await examsGate.future;
+          return const <ExamItem>[ExamItem(courseName: '旧校未隔离考试')];
+        })
+        ..gradesBehavior = (_, _) async => sampleGrades('2026-2027-1');
+
+      final model = AppModel(
+        service: ScheduleService(
+          credentials: InMemoryCredentialStore(),
+          cookieStorage: FakeSessionRepository(),
+          backendFactory: (_) => backend,
+          baseUrl: _baseUrl,
+        ),
+        preferences: Preferences.inMemory(),
+        examCache: oldExamCache,
+        gradesCache: oldGradesCache,
+        schoolBaseUrl: _baseUrl,
+      );
+      addTearDown(model.dispose);
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+      final inFlight = model.loadAcademicData(
+        termId: '2026-2027-1',
+        forceRefresh: true,
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      await model.changeSchool(
+        'https://jw2.example.edu.cn/jwglxt',
+        relogin: false,
+      );
+
+      examsGate.complete();
+      await inFlight;
+
+      expect(await oldExamCache.load('2026-2027-1'), isNull);
+      expect(await oldGradesCache.load('2026-2027-1'), isNull);
+    });
+
+    test('在途网络重登学业请求被缓存命中切学期打断后，收尾仍复位 refreshing 与 globalHint', () async {
+      final loginGate = Completer<void>();
+      final examCache = InMemoryExamCache();
+      final gradesCache = InMemoryGradesCache();
+      await examCache.save('2026-2027-2', const <ExamItem>[
+        ExamItem(courseName: '第二学期缓存考试'),
+      ]);
+      await gradesCache.save('2026-2027-2', sampleGrades('2026-2027-2'));
+
+      final backend = FakeBackend();
+      var examCalls = 0;
+      backend.examsBehavior = (call, termId) async {
+        examCalls++;
+        if (examCalls == 1) {
+          throw const AcademicError(ErrorCode.sessionExpired, '会话过期');
+        }
+        return sampleExams(termId ?? '2026-2027-1');
+      };
+      backend.gradesBehavior = (call, termId) async =>
+          sampleGrades(termId ?? '2026-2027-1');
+      backend.loginBehavior = (call, credentials) async {
+        await loginGate.future;
+        backend.cookies = snapshotOf(_baseUrl, value: 'relogin-ok');
+        return const AuthenticatedState(
+          studentId: '20240001',
+          studentName: '测试学生',
+        );
+      };
+
+      final credentials = InMemoryCredentialStore();
+      await credentials.save(
+        '${_baseUrl.toLowerCase()}|20240001',
+        const Credentials('20240001', 'pw'),
+      );
+      final service = ScheduleService(
+        credentials: credentials,
+        cookieStorage: FakeSessionRepository(),
+        backendFactory: (_) => backend,
+        baseUrl: _baseUrl,
+      )..accountHint = '20240001';
+
+      final model = AppModel(
+        service: service,
+        preferences: Preferences.inMemory(),
+        examCache: examCache,
+        gradesCache: gradesCache,
+        schoolBaseUrl: _baseUrl,
+      );
+      addTearDown(model.dispose);
+      model.session.username = '20240001';
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+      final load1 = model.loadAcademicData(
+        termId: '2026-2027-1',
+        forceRefresh: true,
+        showHint: true,
+      );
+      await waitUntil(() => model.globalHint == '正在重新登录…');
+      expect(model.refreshing, isTrue);
+
+      await model.loadAcademicData(termId: '2026-2027-2', forceRefresh: false);
+      expect(model.exams.single.courseName, '第二学期缓存考试');
+
+      loginGate.complete();
+      await load1;
+
+      expect(model.refreshing, isFalse);
+      expect(model.globalHint, isEmpty);
+      expect(model.exams.single.courseName, '第二学期缓存考试');
+    });
+
+    test(
+      'PreferencesController.flushAppearance 并发遇 rebindOpened 时不得写入新绑定实例',
+      () async {
+        final prefs1 = Preferences.inMemory();
+        final prefs2 = Preferences.inMemory();
+        final defaultCellHeight = prefs2.cellHeight;
+        final defaultTextScale = prefs2.courseTextScale;
+
+        final rig = buildRig(preferences: prefs1);
+        final model = rig.model;
+        addTearDown(model.dispose);
+        model.hydrateForTest(schedule: sampleSchedule());
+
+        model.setCellHeight(84.0);
+        model.setCourseTextScale(1.32);
+        final flushing = model.flushAppearance();
+        model.prefs.rebindOpened(prefs2);
+        await flushing;
+
+        expect(prefs1.cellHeight, 84.0);
+        expect(prefs1.courseTextScale, 1.32);
+        expect(prefs2.cellHeight, defaultCellHeight);
+        expect(prefs2.courseTextScale, defaultTextScale);
+      },
+    );
   });
 }
 

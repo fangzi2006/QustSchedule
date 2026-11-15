@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -8,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/pages/about_page.dart';
 import 'package:qustschedule/pages/home_shell.dart';
+import 'package:qustschedule/pages/timetable_edit_page.dart';
 import 'package:qustschedule/pages/update_dialog.dart';
 import 'package:qustschedule/pages/update_proxy_page.dart';
 import 'package:qustschedule/src/app_model.dart';
@@ -1047,6 +1049,338 @@ void main() {
           .where((e) => e.path.contains('.part'))
           .toList();
       expect(leftoverParts, isEmpty);
+    });
+
+    test('checkForUpdatesWithFallback 在 200 响应体读取挂起时触发 .join().timeout 并回退下一节点', () async {
+      final prevOverrides = HttpOverrides.current;
+      HttpOverrides.global = null;
+      addTearDown(() => HttpOverrides.global = prevOverrides);
+
+      final openResponses = <HttpResponse>[];
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() async {
+        for (final res in openResponses) {
+          try {
+            await res.close();
+          } catch (_) {}
+        }
+        await server.close(force: true);
+      });
+
+      final releaseJson = jsonEncode(<String, Object?>{
+        'tag_name': 'v9.9.9',
+        'name': 'v9.9.9',
+        'body': 'update',
+        'assets': <Map<String, Object?>>[
+          <String, Object?>{
+            'name': 'QustSchedule-windows-x64.zip',
+            'browser_download_url':
+                'http://${server.address.address}:${server.port}/good/pkg.zip',
+            'size': 128,
+            'content_type': 'application/zip',
+          },
+        ],
+        'html_url': 'https://github.com/fangzi2006/QustSchedule',
+      });
+
+      var attempts = 0;
+      server.listen((req) async {
+        attempts++;
+        if (req.uri.path.startsWith('/hang/')) {
+          req.response.statusCode = HttpStatus.ok;
+          req.response.write('{"tag_name":');
+          await req.response.flush();
+          openResponses.add(req.response);
+          return;
+        }
+        req.response.statusCode = HttpStatus.ok;
+        req.response.write(releaseJson);
+        await req.response.close();
+      });
+
+      final baseRoot = 'http://${server.address.address}:${server.port}';
+      final service = UpdateService(
+        apiTimeoutOverride: const Duration(milliseconds: 120),
+      );
+      addTearDown(service.dispose);
+
+      // 注意 checkForUpdatesWithFallback 内部会把 api.github.com 拼到 proxy 后
+      final result = await service.checkForUpdatesWithFallback(
+        currentVersion: '1.0.0',
+        selectedProxy: '$baseRoot/hang',
+        backupProxies: <String>['$baseRoot/good'],
+      );
+
+      expect(attempts, 2);
+      expect(result.status, UpdateStatus.hasUpdate);
+      expect(result.release?.version, '9.9.9');
+    });
+
+    test(
+      'fetchExpectedSha256 在 drain/join 超时时回退，且支持 CancelToken 立即中止挂起响应',
+      () async {
+        final prevOverrides = HttpOverrides.current;
+        HttpOverrides.global = null;
+        addTearDown(() => HttpOverrides.global = prevOverrides);
+
+        final openResponses = <HttpResponse>[];
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() async {
+          for (final res in openResponses) {
+            try {
+              await res.close();
+            } catch (_) {}
+          }
+          await server.close(force: true);
+        });
+
+        final validSha = List<String>.filled(64, 'b').join();
+        final bodyStarted = Completer<void>();
+        server.listen((req) async {
+          final path = req.uri.path;
+          if (path.startsWith('/drain_hang/')) {
+            req.response.statusCode = HttpStatus.serviceUnavailable;
+            req.response.write('busy');
+            await req.response.flush();
+            openResponses.add(req.response);
+            return;
+          }
+          if (path.startsWith('/join_hang/')) {
+            req.response.statusCode = HttpStatus.ok;
+            req.response.write('dead');
+            await req.response.flush();
+            if (!bodyStarted.isCompleted) bodyStarted.complete();
+            openResponses.add(req.response);
+            return;
+          }
+          req.response.statusCode = HttpStatus.ok;
+          req.response.write('$validSha  QustSchedule.apk\n');
+          await req.response.close();
+        });
+
+        final baseRoot = 'http://${server.address.address}:${server.port}';
+        final service = UpdateService(
+          apiTimeoutOverride: const Duration(milliseconds: 120),
+        );
+        addTearDown(service.dispose);
+
+        const asset = ReleaseAsset(
+          name: 'QustSchedule.apk',
+          downloadUrl: 'https://example.com/QustSchedule.apk',
+          size: 100,
+          contentType: 'application/vnd.android.package-archive',
+        );
+        const release = ReleaseInfo(
+          tagName: 'v2.0.0',
+          version: '2.0.0',
+          name: 'v2.0.0',
+          body: '',
+          publishedAt: null,
+          assets: <ReleaseAsset>[
+            asset,
+            ReleaseAsset(
+              name: 'SHA256SUMS',
+              downloadUrl: 'https://example.com/SHA256SUMS',
+              size: 64,
+              contentType: 'text/plain',
+            ),
+          ],
+          htmlUrl: '',
+        );
+
+        // 1. 非 200 drain 超时 + 200 join 超时均能自动回退至健康节点
+        final resolved = await service.fetchExpectedSha256(
+          release: release,
+          targetAsset: asset,
+          selectedProxy: '$baseRoot/drain_hang',
+          backupProxies: <String>['$baseRoot/join_hang', '$baseRoot/ok'],
+        );
+        expect(resolved, validSha);
+
+        // 2. CancelToken 可立即打断挂起的 200 流，无需等待长超时
+        final slowService = UpdateService(
+          apiTimeoutOverride: const Duration(seconds: 10),
+        );
+        addTearDown(slowService.dispose);
+        final token = CancelToken();
+        final sw = Stopwatch()..start();
+        final cancelledFuture = slowService.fetchExpectedSha256(
+          release: release,
+          targetAsset: asset,
+          selectedProxy: '$baseRoot/join_hang',
+          cancelToken: token,
+        );
+        await bodyStarted.future.timeout(const Duration(seconds: 2));
+        token.cancel();
+        expect(await cancelledFuture, isNull);
+        expect(sw.elapsedMilliseconds, lessThan(2000));
+      },
+    );
+
+    test(
+      'downloadAssetWithFallback 在 probeRes.drain 超时后回退，单流挂起被取消立即退出并删碎片',
+      () async {
+        final prevOverrides = HttpOverrides.current;
+        HttpOverrides.global = null;
+        addTearDown(() => HttpOverrides.global = prevOverrides);
+
+        final tempDir = Directory.systemTemp.createTempSync(
+          'qust_probe_cancel_',
+        );
+        addTearDown(() {
+          if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+        });
+
+        final openResponses = <HttpResponse>[];
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() async {
+          for (final res in openResponses) {
+            try {
+              await res.close();
+            } catch (_) {}
+          }
+          await server.close(force: true);
+        });
+
+        final payload = Uint8List.fromList(
+          List<int>.generate(256, (i) => i & 0xff),
+        );
+        final streamStarted = Completer<void>();
+
+        server.listen((req) async {
+          final path = req.uri.path;
+          if (path.startsWith('/probe_drain_hang/')) {
+            req.response.statusCode = HttpStatus.partialContent;
+            req.response.headers.set(
+              HttpHeaders.contentRangeHeader,
+              'bytes 0-0/${payload.length}',
+            );
+            req.response.add(<int>[0]);
+            await req.response.flush();
+            openResponses.add(req.response);
+            return;
+          }
+          if (path.startsWith('/stream_hang/')) {
+            req.response.statusCode = HttpStatus.ok;
+            req.response.headers.contentLength = 4096;
+            req.response.add(Uint8List(64));
+            await req.response.flush();
+            if (!streamStarted.isCompleted) streamStarted.complete();
+            openResponses.add(req.response);
+            return;
+          }
+          req.response.statusCode = HttpStatus.ok;
+          req.response.headers.contentLength = payload.length;
+          req.response.add(payload);
+          await req.response.close();
+        });
+
+        final baseRoot = 'http://${server.address.address}:${server.port}';
+
+        // 1. probeRes.drain().timeout(...) 触发后正确回退到健康节点下载
+        final timeoutService = UpdateService(
+          downloadConnectTimeoutOverride: const Duration(milliseconds: 120),
+        );
+        addTearDown(timeoutService.dispose);
+        final downloaded = await timeoutService.downloadAssetWithFallback(
+          asset: const ReleaseAsset(
+            name: 'QustSchedule_probe.zip',
+            downloadUrl: 'https://example.com/pkg.zip',
+            size: 256,
+            contentType: 'application/zip',
+          ),
+          selectedProxy: '$baseRoot/probe_drain_hang',
+          backupProxies: <String>['$baseRoot/ok'],
+          targetDirectory: tempDir,
+          onProgress: (_) {},
+        );
+        expect(downloaded.existsSync(), isTrue);
+        expect(downloaded.readAsBytesSync(), orderedEquals(payload));
+
+        // 2. 单流读取挂起时 CancelToken 立即中止（无需等 idle timeout），并清理部分文件
+        final idleService = UpdateService(
+          downloadIdleTimeoutOverride: const Duration(seconds: 20),
+        );
+        addTearDown(idleService.dispose);
+        final token = CancelToken();
+        final sw = Stopwatch()..start();
+        final cancelFuture = idleService.downloadAssetWithFallback(
+          asset: const ReleaseAsset(
+            name: 'QustSchedule_single_cancel.zip',
+            downloadUrl: 'https://example.com/pkg.zip',
+            size: 4096,
+            contentType: 'application/zip',
+          ),
+          selectedProxy: '$baseRoot/stream_hang',
+          cancelToken: token,
+          targetDirectory: tempDir,
+          onProgress: (_) {},
+        );
+        await streamStarted.future.timeout(const Duration(seconds: 2));
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        token.cancel();
+        await expectLater(cancelFuture, throwsException);
+        expect(sw.elapsedMilliseconds, lessThan(2000));
+        expect(
+          File('${tempDir.path}/QustSchedule_single_cancel.zip').existsSync(),
+          isFalse,
+        );
+      },
+    );
+
+    testWidgets('UpdateProxyPage 与 TimetableEditPage 弹窗期间页面卸载不触发 setState 异常', (
+      tester,
+    ) async {
+      final model = AppModel(preferences: Preferences.inMemory());
+      addTearDown(model.dispose);
+      await model.addCustomUpdateProxy('https://custom-proxy.example');
+
+      final navKey = GlobalKey<NavigatorState>();
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navKey,
+          home: const Scaffold(body: SizedBox.shrink()),
+        ),
+      );
+
+      // 1. UpdateProxyPage._removeProxy 弹窗期间卸载页面后点删除
+      final proxyRoute = MaterialPageRoute<void>(
+        builder: (_) => UpdateProxyPage(model: model),
+      );
+      navKey.currentState!.push(proxyRoute);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('删除'));
+      await tester.pumpAndSettle();
+      expect(find.text('删除代理'), findsOneWidget);
+
+      navKey.currentState!.removeRoute(proxyRoute);
+      await tester.pump();
+      await tester.tap(find.text('删除'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(model.customUpdateProxies, isEmpty);
+
+      // 2. TimetableEditPage 弹出时间轮期间卸载页面后点确定
+      final editRoute = MaterialPageRoute<void>(
+        builder: (_) => TimetableEditPage(
+          model: model,
+          timetableId: model.timetables.first.id,
+        ),
+      );
+      navKey.currentState!.push(editRoute);
+      await tester.pumpAndSettle();
+
+      await tester.ensureVisible(find.text('第 1 节'));
+      await tester.tap(find.text('第 1 节'));
+      await tester.pumpAndSettle();
+      expect(find.text('确定'), findsOneWidget);
+
+      navKey.currentState!.removeRoute(editRoute);
+      await tester.pump();
+      await tester.tap(find.text('确定'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
     });
   });
 }
