@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:zf_academic/zf_academic.dart';
 
 import '../theme/course_palette.dart';
+import 'app_bottom_sheet.dart';
 
 /// 周日 → 周六的短标签（1-based 索引用）。
 const List<String> kDayLabels = <String>['一', '二', '三', '四', '五', '六', '日'];
@@ -33,10 +34,8 @@ String compressWeeks(List<int> weeks) {
 }
 
 void showEntryDetails(BuildContext context, ScheduleEntry entry, int week) {
-  showModalBottomSheet<void>(
+  showAppModalBottomSheet<void>(
     context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
     builder: (context) => _CourseDetailSheet(entry: entry, week: week),
   );
 }
@@ -66,78 +65,69 @@ class _CourseDetailSheet extends StatelessWidget {
       ('课程 ID', entry.id),
     ];
 
-    return SafeArea(
-      top: false,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(context).height * 0.8,
-        ),
-        child: SelectionArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                SelectionContainer.disabled(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: color.background,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: color.border),
-                    ),
-                    child: Row(
-                      children: <Widget>[
-                        Expanded(
-                          child: Text(
-                            entry.name,
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              color: color.foreground,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          '第 ${entry.startPeriod}-${entry.endPeriod} 节',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: color.foreground,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+    return SelectionArea(
+      child: ScrollableBottomSheetFrame(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            SelectionContainer.disabled(
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
                 ),
-                const SizedBox(height: 16),
-                for (final (label, value) in rows)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        SizedBox(
-                          width: 68,
-                          child: SelectionContainer.disabled(
-                            child: Text(
-                              label,
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.hintColor,
-                              ),
-                            ),
+                decoration: BoxDecoration(
+                  color: color.background,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: color.border),
+                ),
+                child: Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        entry.name,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          color: color.foreground,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '第 ${entry.startPeriod}-${entry.endPeriod} 节',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: color.foreground,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            for (final (label, value) in rows)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    SizedBox(
+                      width: 68,
+                      child: SelectionContainer.disabled(
+                        child: Text(
+                          label,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.hintColor,
                           ),
                         ),
-                        Expanded(
-                          child: Text(value, style: theme.textTheme.bodyMedium),
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
-              ],
-            ),
-          ),
+                    Expanded(
+                      child: Text(value, style: theme.textTheme.bodyMedium),
+                    ),
+                  ],
+                ),
+              ),
+          ],
         ),
       ),
     );

@@ -18,7 +18,16 @@ import 'package:flutter/material.dart';
 
 import '../src/term_calendar.dart';
 import '../src/timetable.dart';
+import 'app_bottom_sheet.dart';
 import 'tactile_button.dart';
+
+Future<T?> _showWheelSheet<T>(BuildContext context, WidgetBuilder builder) {
+  return showAppModalBottomSheet<T>(
+    context: context,
+    isScrollControlled: false,
+    builder: builder,
+  );
+}
 
 /// 弹出时间轮，返回从 00:00 起的分钟数；取消返回 null。
 Future<int?> showTimeWheel(
@@ -26,10 +35,9 @@ Future<int?> showTimeWheel(
   required int initialMinutes,
   String title = '选择时间',
 }) {
-  return showModalBottomSheet<int>(
-    context: context,
-    showDragHandle: true,
-    builder: (context) => _TimeWheelSheet(
+  return _showWheelSheet<int>(
+    context,
+    (context) => _TimeWheelSheet(
       title: title,
       initialMinutes: snapToFiveMinutes(initialMinutes),
     ),
@@ -46,10 +54,9 @@ Future<({int start, int end})?> showTimeRangeWheel(
   required int endMinutes,
   String title = '上课时间',
 }) {
-  return showModalBottomSheet<({int start, int end})>(
-    context: context,
-    showDragHandle: true,
-    builder: (context) => _TimeRangeSheet(
+  return _showWheelSheet<({int start, int end})>(
+    context,
+    (context) => _TimeRangeSheet(
       title: title,
       startMinutes: snapToFiveMinutes(startMinutes),
       endMinutes: snapToFiveMinutes(endMinutes),
@@ -65,10 +72,9 @@ Future<int?> showDurationWheel(
   int minMinutes = 5,
   int maxMinutes = 180,
 }) {
-  return showModalBottomSheet<int>(
-    context: context,
-    showDragHandle: true,
-    builder: (context) => _DurationWheelSheet(
+  return _showWheelSheet<int>(
+    context,
+    (context) => _DurationWheelSheet(
       title: title,
       initialMinutes: initialMinutes,
       minMinutes: minMinutes,
@@ -86,10 +92,9 @@ Future<({int month, int day})?> showMonthDayWheel(
   required int day,
   String title = '选择日期',
 }) {
-  return showModalBottomSheet<({int month, int day})>(
-    context: context,
-    showDragHandle: true,
-    builder: (context) => _MonthDaySheet(title: title, month: month, day: day),
+  return _showWheelSheet<({int month, int day})>(
+    context,
+    (context) => _MonthDaySheet(title: title, month: month, day: day),
   );
 }
 
@@ -101,10 +106,9 @@ Future<({int after, int minutes})?> showBigBreakWheel(
   required int minutes,
   String title = '大课间',
 }) {
-  return showModalBottomSheet<({int after, int minutes})>(
-    context: context,
-    showDragHandle: true,
-    builder: (context) => _BigBreakSheet(
+  return _showWheelSheet<({int after, int minutes})>(
+    context,
+    (context) => _BigBreakSheet(
       title: title,
       maxAfter: maxAfter,
       after: after,
@@ -122,10 +126,9 @@ Future<Map<PeriodGroup, int>?> showSectionCountWheel(
   BuildContext context, {
   required Map<PeriodGroup, int> counts,
 }) {
-  return showModalBottomSheet<Map<PeriodGroup, int>>(
-    context: context,
-    showDragHandle: true,
-    builder: (context) => _SectionCountSheet(counts: counts),
+  return _showWheelSheet<Map<PeriodGroup, int>>(
+    context,
+    (context) => _SectionCountSheet(counts: counts),
   );
 }
 
@@ -138,10 +141,9 @@ Future<int?> showWeekCalibrationWheel(
   required int currentWeek,
   int maxWeek = 30,
 }) {
-  return showModalBottomSheet<int>(
-    context: context,
-    showDragHandle: true,
-    builder: (context) => _CalibrateSheet(week: currentWeek, max: maxWeek),
+  return _showWheelSheet<int>(
+    context,
+    (context) => _CalibrateSheet(week: currentWeek, max: maxWeek),
   );
 }
 

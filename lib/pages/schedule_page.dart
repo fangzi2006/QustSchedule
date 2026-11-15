@@ -28,6 +28,7 @@ import '../src/reschedule.dart';
 import '../src/term_calendar.dart';
 import '../src/updater/update_flow_controller.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_bottom_sheet.dart';
 import '../widgets/app_menu.dart';
 import '../widgets/course_detail_sheet.dart';
 import '../widgets/course_tile.dart';
@@ -1141,10 +1142,8 @@ void showDayConflicts(
   int day,
   List<RescheduleConflict> conflicts,
 ) {
-  showModalBottomSheet<void>(
+  showAppModalBottomSheet<void>(
     context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
     builder: (_) => _DayConflictSheet(day: day, conflicts: conflicts),
   );
 }
@@ -1158,46 +1157,34 @@ class _DayConflictSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return SafeArea(
-      top: false,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(context).size.height * 0.8,
-        ),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
+    return ScrollableBottomSheetFrame(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Row(
             children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Icon(
-                    Icons.warning_amber_rounded,
-                    size: 20,
-                    color: AppColors.of(context).conflictDot,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    '周${kDayLabels[day - 1]} · 调课冲突',
-                    style: theme.textTheme.titleMedium,
-                  ),
-                ],
+              Icon(
+                Icons.warning_amber_rounded,
+                size: 20,
+                color: AppColors.of(context).conflictDot,
               ),
-              const SizedBox(height: 6),
+              const SizedBox(width: 8),
               Text(
-                '调课与原课时间冲突，已优先显示调课；'
-                '下面这些课本周不显示。',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.hintColor,
-                ),
+                '周${kDayLabels[day - 1]} · 调课冲突',
+                style: theme.textTheme.titleMedium,
               ),
-              const SizedBox(height: 12),
-              for (final conflict in conflicts)
-                _ConflictCard(conflict: conflict),
             ],
           ),
-        ),
+          const SizedBox(height: 6),
+          Text(
+            '调课与原课时间冲突，已优先显示调课；'
+            '下面这些课本周不显示。',
+            style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
+          ),
+          const SizedBox(height: 12),
+          for (final conflict in conflicts) _ConflictCard(conflict: conflict),
+        ],
       ),
     );
   }

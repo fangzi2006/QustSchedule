@@ -12,14 +12,13 @@ import 'package:flutter/services.dart';
 
 import '../src/app_model.dart';
 import '../src/preferences_repository.dart';
+import '../widgets/app_bottom_sheet.dart';
 import '../widgets/tactile_button.dart';
 
 /// 弹出外观面板。
 Future<void> showAppearanceSheet(BuildContext context, AppModel model) {
-  return showModalBottomSheet<void>(
+  return showAppModalBottomSheet<void>(
     context: context,
-    showDragHandle: true,
-    isScrollControlled: true,
     // 遮罩很淡：面板的目的就是"边拖边看课表"，压暗了还预览什么。
     barrierColor: Colors.black.withValues(alpha: 0.06),
     builder: (_) => _AppearanceSheet(model: model),

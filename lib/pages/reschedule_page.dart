@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import '../src/app_model.dart';
 import '../src/reschedule.dart' show RescheduleRule;
 import '../src/timetable.dart' show formatMonthDay;
+import '../widgets/app_bottom_sheet.dart';
 import '../widgets/tactile_button.dart';
 import '../widgets/time_wheel_picker.dart' show showMonthDayWheel;
 
@@ -125,10 +126,8 @@ class ReschedulePage extends StatelessWidget {
   }
 
   void _showAddSheet(BuildContext context, {RescheduleRule? initial}) {
-    showModalBottomSheet<void>(
+    showAppModalBottomSheet<void>(
       context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
       builder: (_) => _AddRescheduleSheet(model: model, initialRule: initial),
     );
   }
@@ -223,7 +222,7 @@ class _AddRescheduleSheetState extends State<_AddRescheduleSheet> {
         20,
         0,
         20,
-        MediaQuery.of(context).viewInsets.bottom + 24,
+        MediaQuery.viewInsetsOf(context).bottom + 24,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
