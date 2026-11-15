@@ -18,6 +18,7 @@ import 'package:flutter/gestures.dart'
         kTouchSlop;
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart' show SpringDescription, SpringSimulation;
+import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
 
 import 'app_menu.dart' show activeAppMenuMorph, activeTactileDragStart;
 
@@ -178,15 +179,32 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     super.deactivate();
   }
 
+  bool _morphSyncScheduled = false;
+
+  static const double _kMorphFadeEnd = 0.32;
+  static const double _kMorphPressEnd = 0.14;
+
   void _onGlobalMenuMorphChanged() {
     if (!mounted || !_elementActive) return;
     final (morphTarget, morphT) = activeAppMenuMorph.value;
     if (morphTarget == null && _morphProgress.value == 0.0) return;
     final selfRo = context.findRenderObject();
-    final next = (morphTarget != null && identical(morphTarget, selfRo))
-        ? morphT
+    final rawNext = (morphTarget != null && identical(morphTarget, selfRo))
+        ? morphT.clamp(0.0, 1.0)
         : 0.0;
+    final next = rawNext >= _kMorphFadeEnd ? _kMorphFadeEnd : rawNext;
     if (_morphProgress.value != next) {
+      if (SchedulerBinding.instance.schedulerPhase ==
+          SchedulerPhase.persistentCallbacks) {
+        if (!_morphSyncScheduled) {
+          _morphSyncScheduled = true;
+          SchedulerBinding.instance.addPostFrameCallback((_) {
+            _morphSyncScheduled = false;
+            _onGlobalMenuMorphChanged();
+          });
+        }
+        return;
+      }
       _morphProgress.value = next;
     }
   }
@@ -407,16 +425,17 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
         final drag = _dragOffset.value;
 
         var morphOpacity = 1.0;
-        var morphScale = 1.0;
+        var morphT = 0.0;
         if (hasMenuTrigger) {
-          final morphT = _morphProgress.value;
+          morphT = _morphProgress.value.clamp(0.0, 1.0);
           if (morphT > 0.0) {
-            final fadePhase = (morphT * 2.8).clamp(0.0, 1.0);
+            final u = (morphT / _kMorphFadeEnd).clamp(0.0, 1.0);
+            final fadePhase = u * u * (3.0 - 2.0 * u);
             morphOpacity = 1.0 - fadePhase;
-            morphScale = 1.0 - 0.12 * fadePhase;
           }
         }
-        // 按下改为按控件尺寸自适应的明显放大反馈，取消旧版下沉缩小与变暗阴影效果。
+        // 按下改为按控件尺寸自适应的明显放大反馈，取消旧版下沉缩小与变暗阴影效果；
+        // 菜单形变展开时保留原始轮廓与尺寸原地淡出融入菜单，不产生缩小残影。
         final buttonBox = context.findRenderObject();
         final extent = buttonBox is RenderBox && buttonBox.hasSize
             ? buttonBox.size.longestSide
@@ -425,7 +444,10 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
           0.095,
           0.26,
         );
-        final scale = (1.0 + pressAmplitude * p) * morphScale;
+        final effectiveP = (hasMenuTrigger && morphT > 0.0)
+            ? p * (1.0 - (morphT / _kMorphPressEnd).clamp(0.0, 1.0))
+            : p;
+        final scale = 1.0 + pressAmplitude * effectiveP;
 
         Widget body = child!;
         if (widget.clipContent) {

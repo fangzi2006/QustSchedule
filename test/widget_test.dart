@@ -39,6 +39,8 @@ import 'package:qustschedule/src/timetable.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPicker;
 import 'package:flutter/foundation.dart'
     show TargetPlatform, debugDefaultTargetPlatformOverride;
+import 'package:flutter/gestures.dart'
+    show PointerDeviceKind, PointerScrollEvent, kSecondaryButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter/services.dart' show SystemChannels;
@@ -1576,10 +1578,13 @@ void main() {
       await tester.pump(const Duration(milliseconds: 370));
 
       final label = find.text('校准当前周次');
-      final fade = tester.widget<FadeTransition>(
-        find.ancestor(of: label, matching: find.byType(FadeTransition)).first,
+      final morphBox = tester.renderObject<RenderMenuMorphBox>(
+        find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
       );
-      expect(fade.opacity.value, 1, reason: '370ms 内内容与双弹簧展开必须落定');
+      expect(morphBox.contentOpacity, 1, reason: '370ms 内内容与双弹簧展开必须落定');
+      expect(morphBox.shellOpacity, 1);
+      expect(morphBox.isSettled, isTrue);
+      expect(morphBox.morphRadius, closeTo(20.0, 0.01));
 
       await tester.pumpAndSettle();
       final card = find
@@ -1645,6 +1650,313 @@ void main() {
       await tester.tapAt(const Offset(20, 200));
       await tester.pumpAndSettle();
       expect(find.text('校准当前周次'), findsNothing);
+    });
+
+    testWidgets('展开中途（60ms / 20ms）打断关闭时菜单卡片与触发按钮均平滑反向收起，不凭空消失', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+      await tester.pumpAndSettle();
+
+      final triggerFinder = find.byIcon(Icons.more_horiz_rounded);
+
+      RenderMenuMorphBox menuMorphBox() =>
+          tester.renderObject<RenderMenuMorphBox>(
+            find.byElementPredicate(
+              (e) => e.renderObject is RenderMenuMorphBox,
+            ),
+          );
+
+      double shellOpacity() => menuMorphBox().shellOpacity;
+
+      double cardScale() => menuMorphBox().contentScale;
+
+      double triggerOpacity() => tester
+          .widget<FadeTransition>(
+            find
+                .ancestor(
+                  of: triggerFinder,
+                  matching: find.byType(FadeTransition),
+                )
+                .first,
+          )
+          .opacity
+          .value;
+
+      // 1. 60ms 中途打断：卡片已展开约六成，点外部打断后应经历连续收缩过程，不能在 2-3 帧内凭空消失。
+      await tester.tap(triggerFinder);
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 60));
+
+      final scaleAt60 = cardScale();
+      final triggerAt60 = triggerOpacity();
+      expect(scaleAt60, greaterThan(0.60));
+      expect(scaleAt60, lessThan(0.95));
+      expect(shellOpacity(), closeTo(1.0, 0.01));
+      expect(triggerAt60, lessThan(0.30));
+
+      await tester.tapAt(const Offset(20, 200));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(find.text('校准当前周次'), findsOneWidget);
+      expect(shellOpacity(), greaterThan(0.90));
+
+      await tester.pump(const Duration(milliseconds: 48)); // 累计 64ms 收起
+      expect(
+        find.text('校准当前周次'),
+        findsOneWidget,
+        reason: '60ms 中途打断后 64ms 时菜单应仍在平滑缩回，不能提前销毁',
+      );
+      final scaleDuringClose = cardScale();
+      final triggerDuringClose = triggerOpacity();
+      expect(scaleDuringClose, lessThan(scaleAt60 - 0.10));
+      expect(triggerDuringClose, greaterThan(triggerAt60));
+
+      await tester.pump(const Duration(milliseconds: 48)); // 累计 112ms 收起
+      expect(find.text('校准当前周次'), findsOneWidget);
+      expect(cardScale(), lessThan(scaleDuringClose));
+      expect(shellOpacity(), lessThan(0.95));
+      expect(shellOpacity(), greaterThan(0.05));
+      expect(triggerOpacity(), greaterThan(triggerDuringClose));
+
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(triggerOpacity(), 1.0);
+
+      // 2. 极早期（20ms，外壳仍在淡入途中）打断：不透明度不能首帧骤降，应平稳回落收起。
+      await tester.tap(triggerFinder);
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 20));
+
+      final opacityAt20 = shellOpacity();
+      final triggerAt20 = triggerOpacity();
+      expect(opacityAt20, greaterThan(0.65));
+
+      await tester.tapAt(const Offset(20, 200));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(find.text('校准当前周次'), findsOneWidget);
+      expect(
+        shellOpacity(),
+        greaterThan(opacityAt20 * 0.75),
+        reason: '极早期打断反转首帧不应因曲线跳变瞬间跌落透明',
+      );
+      expect(triggerOpacity(), greaterThanOrEqualTo(triggerAt20));
+
+      await tester.pump(const Duration(milliseconds: 48));
+      expect(find.text('校准当前周次'), findsOneWidget);
+      expect(shellOpacity(), greaterThan(0.10));
+
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(triggerOpacity(), 1.0);
+
+      // 3. 50ms 中途分别由系统返回键与 Dock 切页打断，同样平滑执行关闭动画且按钮恢复。
+      await tester.tap(triggerFinder);
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      final rootNavigator = Navigator.of(
+        tester.element(find.byType(HomeShell)),
+      );
+      await rootNavigator.maybePop();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 56));
+      expect(find.text('校准当前周次'), findsOneWidget, reason: '返回键打断应平滑收起菜单');
+      expect(find.byType(HomeShell), findsOneWidget);
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(triggerOpacity(), 1.0);
+
+      // 4. 50ms 中途直接点击 Dock 切页，既切页又平滑收起菜单。
+      await tester.tap(triggerFinder);
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      await tester.tap(
+        find.descendant(
+          of: find.byType(FloatingDock),
+          matching: find.text('设置'),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 56));
+      expect(find.text('校准当前周次'), findsOneWidget, reason: 'Dock 打断期间菜单平滑收起');
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(find.byType(SettingsPage), findsOneWidget);
+
+      // 切回课表页并在首帧测量阶段立即关闭，不抛异常且可再次正常打开。
+      await tester.tap(
+        find.descendant(
+          of: find.byType(FloatingDock),
+          matching: find.text('课表'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(triggerFinder);
+      await tester.pump();
+      await tester.tapAt(const Offset(20, 200));
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(triggerOpacity(), 1.0);
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(triggerFinder);
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+      await tester.tapAt(const Offset(20, 200));
+      await tester.pumpAndSettle();
+
+      // 5. 极早期首可见帧（16ms）打断、关闭途中重开再打断，均应平滑过渡而非凭空消失。
+      await tester.tap(triggerFinder);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 16));
+      final opacityAt16 = shellOpacity();
+      final triggerAt16 = triggerOpacity();
+      expect(opacityAt16, greaterThan(0.50));
+      expect(triggerAt16, lessThan(0.95));
+
+      await tester.tapAt(const Offset(20, 200));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(
+        find.text('校准当前周次'),
+        findsOneWidget,
+        reason: '16ms 首可见帧打断后 16ms 仍应处于平滑收起动画中',
+      );
+      expect(shellOpacity(), greaterThan(opacityAt16 * 0.60));
+      expect(triggerOpacity(), greaterThanOrEqualTo(triggerAt16));
+
+      await tester.pump(const Duration(milliseconds: 48));
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      // 在上一轮关闭尚未完全结束时再次点击触发按钮重开，然后 40ms 再次打断。
+      await tester.tap(triggerFinder);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 40));
+      await tester.tapAt(const Offset(20, 200));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 48));
+      expect(find.text('校准当前周次'), findsOneWidget);
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(triggerOpacity(), 1.0);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('长按拖出与可滚动周次长菜单及拖动 Dock 在展开中途打断时均平滑收起且无状态卡死', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(
+        schedule: Schedule(
+          termId: '2026-2027-1',
+          maxWeeks: 20,
+          entries: sparseSchedule().entries,
+        ),
+        week: 1,
+      );
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+      await tester.pumpAndSettle();
+
+      final moreTrigger = find.byIcon(Icons.more_horiz_rounded);
+      final weekTrigger = find.text('第 1 周');
+
+      double triggerOpacityOf(Finder finder) => tester
+          .widget<FadeTransition>(
+            find
+                .ancestor(of: finder, matching: find.byType(FadeTransition))
+                .first,
+          )
+          .opacity
+          .value;
+
+      // 1. 长按交接展开途中（手指仍按在菜单外保持橡皮筋偏移）被返回键打断：
+      //    应平滑收起菜单与橡皮筋偏移，松手后无残留或异常。
+      final holdPos = tester.getCenter(moreTrigger);
+      final dragOpen = await tester.startGesture(holdPos);
+      await tester.pump(const Duration(milliseconds: 220));
+      await tester.pump(const Duration(milliseconds: 30));
+      await dragOpen.moveTo(const Offset(24, 240));
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      final rootNavigator = Navigator.of(
+        tester.element(find.byType(HomeShell)),
+      );
+      await rootNavigator.maybePop();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 48));
+      expect(find.text('校准当前周次'), findsOneWidget, reason: '长按拖出中途打断应平滑收起');
+      await dragOpen.up();
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(triggerOpacityOf(moreTrigger), 1.0);
+      expect(tester.takeException(), isNull);
+
+      // 2. 下拉交接打开后若指针在菜单 State 挂载首帧前立即抬起（dragPointer 提前结束），
+      //    不应卡死 _activePointer 导致外部点击无法关闭。
+      final quickRelease = await tester.startGesture(holdPos);
+      await quickRelease.moveBy(const Offset(0, 18));
+      await quickRelease.up();
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+      await tester.tapAt(const Offset(20, 200));
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(triggerOpacityOf(moreTrigger), 1.0);
+
+      // 3. 可滚动 20 周长菜单在 50ms 展开中途点外部打断，平滑收起且周次触发按钮恢复。
+      await tester.tap(weekTrigger);
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(find.text('第 2 周'), findsOneWidget);
+      final weekTriggerAt50 = triggerOpacityOf(weekTrigger);
+      expect(weekTriggerAt50, lessThan(0.50));
+
+      await tester.tapAt(const Offset(20, 200));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 48));
+      expect(find.text('第 2 周'), findsOneWidget, reason: '可滚动长菜单中途打断应平滑收起');
+      expect(triggerOpacityOf(weekTrigger), greaterThan(weekTriggerAt50));
+      await tester.pumpAndSettle();
+      expect(find.text('第 2 周'), findsNothing);
+      expect(triggerOpacityOf(weekTrigger), 1.0);
+
+      // 4. 50ms 展开中途直接拖动 FloatingDock 切页：切页成立且菜单在动画过程中平滑收起。
+      final dock = find.byType(FloatingDock);
+      final dockSchedule = tester.getCenter(
+        find.descendant(of: dock, matching: find.text('课表')),
+      );
+      final dockSettings = tester.getCenter(
+        find.descendant(of: dock, matching: find.text('设置')),
+      );
+      await tester.tap(moreTrigger);
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final dockDrag = await tester.startGesture(dockSchedule);
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(find.text('校准当前周次'), findsOneWidget);
+      await dockDrag.moveTo(dockSettings);
+      await tester.pump(const Duration(milliseconds: 32));
+      expect(
+        find.text('校准当前周次'),
+        findsOneWidget,
+        reason: '拖动 Dock 打断菜单展开中途时菜单应继续平滑收起',
+      );
+      await dockDrag.up();
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(find.byType(SettingsPage), findsOneWidget);
+      expect(triggerOpacityOf(moreTrigger), 1.0);
     });
 
     testWidgets('短菜单按住上下滑动预览，松手时选中当前悬停项', (tester) async {
@@ -1782,7 +2094,9 @@ void main() {
       );
     });
 
-    testWidgets('菜单打开后直接拖动 Dock 栏，无需先点空白关闭即可一指切页并同步收起菜单', (tester) async {
+    testWidgets('菜单打开后直接拖动或点击 Dock 栏，无需先点空白关闭即可切页并同步收起菜单（含展开中途打断）', (
+      tester,
+    ) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(HomeShell(model: model)));
@@ -1796,19 +2110,39 @@ void main() {
       final schedulePos = tester.getCenter(
         find.descendant(of: dock, matching: find.text('课表')),
       );
+      final academicPos = tester.getCenter(
+        find.descendant(of: dock, matching: find.text('学业')),
+      );
       final settingsPos = tester.getCenter(
         find.descendant(of: dock, matching: find.text('设置')),
       );
 
+      // 1. 拖动 Dock：一指切页并同步关闭菜单。
       final gesture = await tester.startGesture(schedulePos);
       await gesture.moveTo(settingsPos);
       await tester.pump();
       await gesture.up();
       await tester.pumpAndSettle();
 
-      expect(find.text('校准当前周次'), findsNothing, reason: '外部触控后菜单同步关闭');
+      expect(find.text('校准当前周次'), findsNothing, reason: '操作 Dock 后菜单同步关闭');
       expect(shellPagePosition(tester), 2, reason: '同一手势直接透传 Dock 并切换页面');
       expect(find.byType(SettingsPage), findsOneWidget);
+
+      // 2. 切回课表页并在菜单展开动画中途（60ms）直接点击 Dock 栏「学业」，同样放行切页并关闭菜单。
+      await tester.tapAt(schedulePos);
+      await tester.pumpAndSettle();
+      expect(shellPagePosition(tester), 0);
+
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 60));
+
+      await tester.tapAt(academicPos);
+      await tester.pumpAndSettle();
+
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(shellPagePosition(tester), 1);
+      expect(find.byType(AcademicPage), findsOneWidget);
     });
 
     testWidgets('打开菜单时顶栏不会冒出多余的返回按钮', (tester) async {
@@ -1877,44 +2211,361 @@ void main() {
       expect(find.byType(SchoolAddressPage), findsOneWidget);
     });
 
-    testWidgets('打开右上角菜单后直接点击课程卡片，同步收起菜单并弹出课程详情（含展开中途打断）', (tester) async {
+    testWidgets('打开右上角菜单后点击课程卡片或其它外部区域仅关闭菜单不穿透触发，再次点击才可打开详情', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
       await tester.pumpAndSettle();
 
-      // 1. 菜单完全展开后直接点课程卡片：一指透传关闭菜单并直接打开详情弹窗。
+      // 1. 菜单完全展开后点击课程卡片：只关闭菜单，不弹出详情弹窗。
+      final courseCenter = tester.getCenter(find.byType(CourseBlock).first);
       await tester.tap(find.byIcon(Icons.more_horiz_rounded));
       await tester.pumpAndSettle();
       expect(find.text('校准当前周次'), findsOneWidget);
 
-      await tester.tap(find.byType(CourseBlock).first);
+      await tester.tapAt(courseCenter);
       await tester.pumpAndSettle();
 
       expect(find.text('校准当前周次'), findsNothing);
+      expect(find.byType(BottomSheet), findsNothing);
+
+      // 菜单已关闭后再次点击课程卡片，正常弹出详情弹窗。
+      await tester.tap(find.byType(CourseBlock).first);
+      await tester.pumpAndSettle();
       expect(find.byType(BottomSheet), findsOneWidget);
-      expect(find.text('周次'), findsOneWidget);
-      expect(find.text('1-2 周'), findsWidgets);
-      expect(find.text('张老师'), findsNWidgets(2));
-      expect(find.text('课程 ID'), findsOneWidget);
       expect(find.text('early'), findsOneWidget);
 
       Navigator.of(tester.element(find.byType(BottomSheet))).pop();
       await tester.pumpAndSettle();
       expect(find.byType(BottomSheet), findsNothing);
 
-      // 2. 菜单展开动画中途直接点课程卡片打断，也应顺畅收起并弹出详情。
+      // 2. 菜单展开动画中途（60ms）点击课程卡片：同样只收起菜单，不触发详情。
       await tester.tap(find.byIcon(Icons.more_horiz_rounded));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 60));
 
-      await tester.tap(find.byType(CourseBlock).first);
+      await tester.tapAt(courseCenter);
       await tester.pumpAndSettle();
 
       expect(find.text('校准当前周次'), findsNothing);
-      expect(find.byType(BottomSheet), findsOneWidget);
-      expect(find.text('early'), findsOneWidget);
+      expect(find.byType(BottomSheet), findsNothing);
+
+      // 3. 菜单打开时在课表区域横向滑动翻周或点击顶栏其它按钮：只关闭菜单，不翻周、不触发按钮。
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      await tester.flingFrom(
+        tester.getCenter(find.byType(PageView).first),
+        const Offset(-300, 0),
+        800,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(model.week, 1, reason: '外部横向滑动只关闭菜单，不能翻周');
+
+      final nextWeekCenter = tester.getCenter(
+        find.byIcon(Icons.chevron_right_rounded),
+      );
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      await tester.tapAt(nextWeekCenter);
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(model.week, 1, reason: '外部点击顶栏翻周按钮只关闭菜单，不触发翻周');
       expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('菜单展开初期点击视觉卡片外、目标占位框内的区域仅关闭菜单，不误触未展开到的菜单项', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+      await tester.pumpAndSettle();
+
+      // 先打开一次完整菜单获取终态卡片矩形。
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+      final fullCard = find
+          .ancestor(of: find.text('调课'), matching: find.byType(Material))
+          .last;
+      final fullCardRect = tester.getRect(fullCard);
+      await tester.tapAt(const Offset(20, 200));
+      await tester.pumpAndSettle();
+      expect(find.text('调课'), findsNothing);
+
+      // 再次打开并在 20ms 展开初期点击终态卡片左下角（此时视觉卡片尚未展开到此）。
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 20));
+
+      final morphedCardRect = tester.getRect(
+        find
+            .ancestor(of: find.text('调课'), matching: find.byType(Material))
+            .last,
+      );
+      final probePoint = Offset(
+        fullCardRect.left + 12,
+        fullCardRect.bottom - 12,
+      );
+      expect(fullCardRect.contains(probePoint), isTrue);
+      expect(morphedCardRect.contains(probePoint), isFalse);
+
+      await tester.tapAt(probePoint);
+      await tester.pumpAndSettle();
+
+      expect(find.text('调课'), findsNothing, reason: '点视觉卡片外区域应关闭菜单');
+      expect(
+        find.byType(ReschedulePage),
+        findsNothing,
+        reason: '未展开到的视觉区域不应误触菜单项',
+      );
+    });
+
+    testWidgets('二级页面展开菜单时点击底层 Dock 坐标位置仍拦截，不误切后台 HomeShell 页面', (
+      tester,
+    ) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+      await tester.pumpAndSettle();
+
+      final dockSettingsPos = tester.getCenter(
+        find.descendant(
+          of: find.byType(FloatingDock),
+          matching: find.text('设置'),
+        ),
+      );
+
+      // 从课表三点菜单进入二级页「作息时间表」。
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('作息时间表'));
+      await tester.pumpAndSettle();
+      expect(find.byType(TimetableListPage), findsOneWidget);
+
+      // 在二级页展开卡片「更多」菜单，然后点击原本 HomeShell Dock 所在的屏幕坐标。
+      await tester.tap(find.byIcon(Icons.more_vert_rounded).first);
+      await tester.pumpAndSettle();
+      expect(find.text('至少保留一张'), findsOneWidget);
+
+      await tester.tapAt(dockSettingsPos);
+      await tester.pumpAndSettle();
+
+      expect(find.text('至少保留一张'), findsNothing, reason: '二级页点外部应关闭菜单');
+      expect(find.byType(TimetableListPage), findsOneWidget);
+      expect(find.byType(TimetableEditPage), findsNothing);
+
+      // 再验证在二级页展开菜单时点击卡片标题区，同样只关菜单不穿透跳转编辑页。
+      await tester.tap(find.byIcon(Icons.more_vert_rounded).first);
+      await tester.pumpAndSettle();
+      expect(find.text('至少保留一张'), findsOneWidget);
+
+      await tester.tapAt(
+        tester.getCenter(find.text(model.activeTimetable!.name).first),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('至少保留一张'), findsNothing);
+      expect(find.byType(TimetableEditPage), findsNothing);
+
+      // 返回 HomeShell 后，后台页面仍停留在课表页，未受二级页点击 Dock 坐标影响。
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(shellPagePosition(tester), 0, reason: '后台 HomeShell 的 Dock 不应被穿透');
+    });
+
+    testWidgets('桌面端悬停、滚轮与右键交互：菜单外拦截悬停与滚动，Dock 悬停与点击仍保持最高优先级', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+      await tester.pumpAndSettle();
+
+      // 定位课表纵向滚动容器，记录初始滚动偏移。
+      final scheduleScroll = tester.state<ScrollableState>(
+        find.descendant(
+          of: find.byType(SchedulePage),
+          matching: find.byWidgetPredicate(
+            (w) => w is Scrollable && w.axisDirection == AxisDirection.down,
+          ),
+        ),
+      );
+      final initialScrollOffset = scheduleScroll.position.pixels;
+
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      final mouse = await tester.createGesture(
+        kind: PointerDeviceKind.mouse,
+        pointer: 41,
+      );
+      addTearDown(mouse.removePointer);
+      await mouse.addPointer(location: Offset.zero);
+      await tester.pump();
+
+      // 1. 在菜单外课表区域发送鼠标滚轮：应被选择性遮罩拦截，底层课表不滚动且菜单保持打开。
+      final gridCenter = tester.getCenter(find.byType(PageView).first);
+      await mouse.moveTo(gridCenter);
+      await tester.pump();
+      await tester.sendEventToBinding(
+        PointerScrollEvent(
+          position: gridCenter,
+          scrollDelta: const Offset(0, 180),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(scheduleScroll.position.pixels, initialScrollOffset);
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      // 2. 鼠标悬停到 Dock 栏：遮罩放行悬停事件，Dock 响应微鼓起且菜单保持打开。
+      double dockScale() => tester
+          .widgetList<Transform>(
+            find.descendant(
+              of: find.byType(FloatingDock),
+              matching: find.byType(Transform),
+            ),
+          )
+          .last
+          .transform
+          .getMaxScaleOnAxis();
+      final dockScaleBefore = dockScale();
+
+      final dockSettingsPos = tester.getCenter(
+        find.descendant(
+          of: find.byType(FloatingDock),
+          matching: find.text('设置'),
+        ),
+      );
+      await mouse.moveTo(dockSettingsPos);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 120));
+      expect(dockScale(), greaterThan(dockScaleBefore));
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      // 3. 在菜单卡片内右键点击：不关闭菜单；在非 Dock 外部右键点击：关闭菜单且不触发课程详情。
+      final secondaryMouse = TestPointer(42, PointerDeviceKind.mouse);
+      await tester.sendEventToBinding(
+        secondaryMouse.down(
+          tester.getCenter(find.text('校准当前周次')),
+          buttons: kSecondaryButton,
+        ),
+      );
+      await tester.sendEventToBinding(secondaryMouse.up());
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      await tester.sendEventToBinding(
+        secondaryMouse.down(
+          tester.getCenter(find.byType(CourseBlock).first),
+          buttons: kSecondaryButton,
+        ),
+      );
+      await tester.sendEventToBinding(secondaryMouse.up());
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(find.byType(BottomSheet), findsNothing);
+
+      // 4. 再次打开菜单后直接鼠标左键点击 Dock「设置」：切页并同步关闭菜单。
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      await mouse.down(dockSettingsPos);
+      await tester.pump();
+      await mouse.up();
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(shellPagePosition(tester), 2);
+    });
+
+    testWidgets('Dock 边缘橡皮筋拖动与非不透明浮层路由下菜单遮罩边界行为正确', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+      await tester.pumpAndSettle();
+
+      // 1. 在首页面打开菜单后，从 Dock 左侧向外拖动触发边缘橡皮筋：菜单收起且无异常。
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      final dockSchedulePos = tester.getCenter(
+        find.descendant(
+          of: find.byType(FloatingDock),
+          matching: find.text('课表'),
+        ),
+      );
+      final dockSettingsPos = tester.getCenter(
+        find.descendant(
+          of: find.byType(FloatingDock),
+          matching: find.text('设置'),
+        ),
+      );
+      final edgeDrag = await tester.startGesture(dockSchedulePos);
+      await edgeDrag.moveBy(const Offset(-90, 0));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 180));
+      await tester.pump();
+      expect(find.text('校准当前周次'), findsNothing);
+      final dockOffset = tester
+          .widgetList<Transform>(
+            find.descendant(
+              of: find.byType(FloatingDock),
+              matching: find.byType(Transform),
+            ),
+          )
+          .first
+          .transform
+          .getTranslation();
+      expect(dockOffset.x, lessThan(-1.0));
+      await edgeDrag.up();
+      await tester.pumpAndSettle();
+      expect(shellPagePosition(tester), 0);
+
+      // 2. 推入一个非不透明路由（opaque: false）并在其上展开菜单，点击底层 Dock 坐标仍被拦截。
+      final nav = Navigator.of(tester.element(find.byType(HomeShell)));
+      nav.push<void>(
+        PageRouteBuilder<void>(
+          opaque: false,
+          pageBuilder: (_, _, _) => Scaffold(
+            backgroundColor: Colors.transparent,
+            appBar: AppBar(
+              actions: <Widget>[
+                TactileSurfaceButton(
+                  minSize: const Size(36, 36),
+                  onMenuOpen: (ctx, ptr) {
+                    showAppMenu<String>(
+                      context: ctx,
+                      dragPointer: ptr,
+                      items: const <AppMenuItem<String>>[
+                        AppMenuItem<String>(value: 'x', label: '浮层菜单项'),
+                      ],
+                      onSelected: (_) {},
+                    );
+                  },
+                  child: const SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: Icon(Icons.more_vert_rounded),
+                  ),
+                ),
+              ],
+            ),
+            body: const SizedBox.expand(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.more_vert_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('浮层菜单项'), findsOneWidget);
+
+      await tester.tapAt(dockSettingsPos);
+      await tester.pumpAndSettle();
+      expect(find.text('浮层菜单项'), findsNothing);
+      expect(shellPagePosition(tester), 0, reason: '非不透明顶层路由下也不应穿透到底层 Dock');
     });
   });
 
@@ -4791,7 +5442,7 @@ void main() {
       await tester.pumpWidget(wrap(SchedulePage(model: model)));
       await tester.pumpAndSettle();
 
-      // 短菜单：测量后无 IntrinsicWidth，静态 elevation = 8，且不启用 Clip.antiAlias。
+      // 短菜单：测量后无 IntrinsicWidth，由 RenderMenuMorphBox 绘制柔和阴影且落定后不裁剪。
       await tester.tap(find.byIcon(Icons.more_horiz_rounded));
       await tester.pumpAndSettle();
       expect(
@@ -4806,10 +5457,17 @@ void main() {
             .ancestor(of: find.text('校准当前周次'), matching: find.byType(Material))
             .first,
       );
-      expect(shortCard.elevation, 8);
+      expect(shortCard.elevation, 0);
       expect(shortCard.clipBehavior, Clip.none);
+      final shortMorphBox = tester.renderObject<RenderMenuMorphBox>(
+        find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
+      );
+      expect(shortMorphBox.isSettled, isTrue);
+      expect(shortMorphBox.isClipping, isFalse);
+      expect(shortMorphBox.shadowAlpha, greaterThan(0));
+      expect(shortMorphBox.shadowBlurRadius, greaterThan(8));
 
-      // 关掉短菜单后再打开可滚动 20 周长菜单：测量后同样无 IntrinsicWidth，滚动列表保留抗锯齿裁剪。
+      // 关掉短菜单后再打开可滚动 20 周长菜单：测量后同样无 IntrinsicWidth，滚动列表保留容器抗锯齿裁剪。
       await tester.tapAt(const Offset(12, 12));
       await tester.pumpAndSettle();
       await tester.tap(find.text('第 1 周'));
@@ -4826,8 +5484,13 @@ void main() {
             .ancestor(of: find.text('第 2 周'), matching: find.byType(Material))
             .first,
       );
-      expect(longCard.elevation, 8);
-      expect(longCard.clipBehavior, Clip.antiAlias);
+      expect(longCard.elevation, 0);
+      final longMorphBox = tester.renderObject<RenderMenuMorphBox>(
+        find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
+      );
+      expect(longMorphBox.isSettled, isTrue);
+      expect(longMorphBox.isClipping, isTrue);
+      expect(longMorphBox.shadowAlpha, greaterThan(0));
     });
 
     testWidgets('HomeShell 按目标按需懒加载：直达设置页时不提前构建学业页', (tester) async {
@@ -5639,21 +6302,10 @@ void main() {
       expect(find.text('选项甲'), findsOneWidget);
 
       (double scale, Offset translation) menuTransformState() {
-        final transforms = tester.widgetList<Transform>(
-          find.ancestor(of: find.text('选项甲'), matching: find.byType(Transform)),
+        final box = tester.renderObject<RenderMenuMorphBox>(
+          find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
         );
-        var maxScale = 1.0;
-        var maxOffset = Offset.zero;
-        for (final t in transforms) {
-          final s = t.transform.getMaxScaleOnAxis();
-          if (s > maxScale) maxScale = s;
-          final tr = t.transform.getTranslation();
-          final offset = Offset(tr.x, tr.y);
-          if (offset.distance > maxOffset.distance) {
-            maxOffset = offset;
-          }
-        }
-        return (maxScale, maxOffset);
+        return (box.contentScale, box.currentRubberOffset);
       }
 
       expect(menuTransformState().$1, closeTo(1.0, 0.005));
@@ -5726,15 +6378,10 @@ void main() {
       );
       expect(menuRect.top, closeTo(triggerRect.top, 1.0));
 
-      final menuTransforms = tester
-          .widgetList<Transform>(
-            find.ancestor(
-              of: find.text('第 2 周'),
-              matching: find.byType(Transform),
-            ),
-          )
-          .where((t) => t.alignment == Alignment.topCenter);
-      expect(menuTransforms, isNotEmpty);
+      final morphBox = tester.renderObject<RenderMenuMorphBox>(
+        find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
+      );
+      expect(morphBox.alignment, Alignment.topCenter);
     });
 
     testWidgets('星期长菜单紧凑窄宽、文字左对齐且仅在按住条目时展示选择胶囊，当前周次保留对勾常态', (tester) async {
@@ -5853,6 +6500,216 @@ void main() {
       if (afterScrollDec != null) {
         expect(afterScrollDec.color, Colors.transparent);
       }
+    });
+
+    testWidgets('圆形与宽胶囊触发器开合容器变形共享物理逻辑且无缩小残影', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(
+        schedule: Schedule(
+          termId: '2026-2027-1',
+          maxWeeks: 20,
+          entries: sparseSchedule().entries,
+        ),
+        week: 1,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: SchedulePage(model: model),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // 1. 圆形 36x36 触发器：从 36x36 圆角 18 灵动变形展开至 20 圆角卡片，收起平滑归位，按钮不缩小。
+      final circleIcon = find.byIcon(Icons.more_horiz_rounded);
+      final circleTriggerFinder = find.ancestor(
+        of: circleIcon,
+        matching: find.byType(TactileSurfaceButton),
+      );
+      final circleTriggerRect = tester.getRect(circleTriggerFinder);
+
+      await tester.tap(circleIcon);
+      await tester.pump();
+      await tester.pump(); // overlay 插入首帧
+
+      final circleMorphBox = tester.renderObject<RenderMenuMorphBox>(
+        find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
+      );
+      expect(circleMorphBox.morphRadius, closeTo(18.0, 0.3));
+      expect(circleMorphBox.contentScale, greaterThanOrEqualTo(0.60));
+
+      double minTriggerScale = 2.0;
+      void recordTriggerScale() {
+        final transforms = tester.widgetList<Transform>(
+          find.descendant(
+            of: circleTriggerFinder,
+            matching: find.byType(Transform),
+          ),
+        );
+        for (final t in transforms) {
+          final sx = t.transform.storage[0];
+          if (sx < minTriggerScale) minTriggerScale = sx;
+        }
+      }
+
+      await tester.pump(const Duration(milliseconds: 36));
+      recordTriggerScale();
+      final midOpenRect = circleMorphBox.morphRect;
+      expect(midOpenRect.width, greaterThan(circleTriggerRect.width));
+      expect(midOpenRect.height, greaterThan(circleTriggerRect.height));
+      expect(circleMorphBox.morphRadius, greaterThan(18.0));
+      expect(circleMorphBox.morphRadius, lessThanOrEqualTo(20.01));
+
+      await tester.pumpAndSettle();
+      final settledRect = circleMorphBox.morphRect;
+      expect(settledRect.height, greaterThan(midOpenRect.height));
+      expect(circleMorphBox.morphRadius, closeTo(20.0, 0.01));
+      expect(circleMorphBox.isSettled, isTrue);
+
+      // 收起：沿同一套容器变形逻辑回到 36x36 触发器轮廓。
+      await tester.tapAt(const Offset(16, 200));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 56));
+      recordTriggerScale();
+      final midCloseRect = circleMorphBox.morphRect;
+      expect(midCloseRect.width, lessThan(settledRect.width));
+      expect(midCloseRect.height, lessThan(settledRect.height));
+      expect(circleMorphBox.morphRadius, lessThan(20.0));
+      expect(circleMorphBox.morphRadius, greaterThanOrEqualTo(18.0));
+      expect(
+        minTriggerScale,
+        greaterThanOrEqualTo(1.0 - 1e-6),
+        reason: '融合交接期间 TactileSurfaceButton 不得产生缩小残影',
+      );
+
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+
+      // 2. 宽胶囊（第 1 周）触发器：居中向上下变形，水平宽度从按钮宽收拢至菜单宽并平滑归位。
+      final weekTrigger = find.ancestor(
+        of: find.text('第 1 周'),
+        matching: find.byType(TactileSurfaceButton),
+      );
+      final weekTriggerRect = tester.getRect(weekTrigger);
+
+      await tester.tap(find.text('第 1 周'));
+      await tester.pump();
+      await tester.pump();
+      final weekMorphBox = tester.renderObject<RenderMenuMorphBox>(
+        find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
+      );
+      expect(weekMorphBox.alignment, Alignment.topCenter);
+      expect(weekMorphBox.morphRadius, closeTo(18.0, 0.3));
+
+      await tester.pump(const Duration(milliseconds: 40));
+      final weekMidOpenRect = weekMorphBox.morphRect;
+      expect(weekMidOpenRect.height, greaterThan(weekTriggerRect.height));
+      expect(weekMorphBox.contentScale, greaterThanOrEqualTo(0.60));
+
+      await tester.pumpAndSettle();
+      final weekSettledRect = weekMorphBox.morphRect;
+      expect(weekMorphBox.isSettled, isTrue);
+
+      await tester.tapAt(const Offset(16, 200));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 48));
+      final weekMidCloseRect = weekMorphBox.morphRect;
+      expect(weekMidCloseRect.height, lessThan(weekSettledRect.height));
+      expect(weekMorphBox.morphRadius, lessThan(20.0));
+
+      await tester.pumpAndSettle();
+      expect(find.text('第 2 周'), findsNothing);
+    });
+
+    testWidgets('展开中途直接点击视觉缩放后的菜单项仍精准命中该项，且收起中途同按钮重开连续接管速度与几何', (tester) async {
+      String? picked;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: Scaffold(
+            appBar: AppBar(
+              actions: <Widget>[
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: TactileSurfaceButton(
+                    minSize: const Size(36, 36),
+                    onMenuOpen: (anchorCtx, dragPointer) {
+                      showAppMenu<String>(
+                        context: anchorCtx,
+                        dragPointer: dragPointer,
+                        items: const <AppMenuItem<String>>[
+                          AppMenuItem<String>(value: 'a', label: '选项甲'),
+                          AppMenuItem<String>(value: 'b', label: '选项乙'),
+                          AppMenuItem<String>(value: 'c', label: '选项丙'),
+                          AppMenuItem<String>(value: 'd', label: '选项丁'),
+                        ],
+                        onSelected: (v) => picked = v,
+                      );
+                    },
+                    child: const SizedBox(
+                      width: 36,
+                      height: 36,
+                      child: Icon(Icons.more_horiz_rounded),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            body: const SizedBox.expand(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final triggerFinder = find.byIcon(Icons.more_horiz_rounded);
+
+      // 1. 展开中途（52ms，contentScale < 1.0）直接点击第 3 项「选项丙」的视觉中心：
+      //    命中结果必须精确为 'c'，不能因未反算缩放而误选上方条目 'b'。
+      await tester.tap(triggerFinder);
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 52));
+      final morphOpen = tester.renderObject<RenderMenuMorphBox>(
+        find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
+      );
+      expect(morphOpen.contentScale, lessThan(0.95));
+      await tester.tapAt(tester.getCenter(find.text('选项丙')));
+      await tester.pumpAndSettle();
+      expect(picked, 'c', reason: '展开形变中途点击缩放后的菜单项必须命中视觉对应项');
+
+      // 2. 展开落定后点外部收起，在收起中途（48ms）再次点击同一触发器重开：
+      //    容器尺寸与缩放应从当前收起进度平滑延续折返，不闪退也不跌回 36x36 起点。
+      picked = null;
+      await tester.tap(triggerFinder);
+      await tester.pumpAndSettle();
+
+      await tester.tapAt(const Offset(16, 220));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 48));
+      final closingMorph = tester.renderObject<RenderMenuMorphBox>(
+        find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
+      );
+      final heightBeforeReopen = closingMorph.morphRect.height;
+      expect(heightBeforeReopen, greaterThan(50.0));
+
+      await tester.tap(triggerFinder);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 16));
+      final reopenedMorph = tester.renderObject<RenderMenuMorphBox>(
+        find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
+      );
+      expect(
+        reopenedMorph.morphRect.height,
+        greaterThan(heightBeforeReopen * 0.65),
+        reason: '收起中途同按钮重开必须延续当前几何与速度惯性，不得跳回按钮起点',
+      );
+      await tester.pumpAndSettle();
+      expect(reopenedMorph.isSettled, isTrue);
+
+      await tester.tap(find.text('选项乙'));
+      await tester.pumpAndSettle();
+      expect(picked, 'b');
+      expect(tester.takeException(), isNull);
     });
   });
 }

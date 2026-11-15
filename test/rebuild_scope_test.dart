@@ -10,10 +10,12 @@ import 'package:qustschedule/main.dart' show pageForStatus;
 import 'package:qustschedule/pages/academic_page.dart';
 import 'package:qustschedule/pages/home_shell.dart';
 import 'package:qustschedule/pages/schedule_page.dart';
+import 'package:qustschedule/pages/settings_page.dart';
 import 'package:qustschedule/src/app_model.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
 import 'package:qustschedule/src/schedule_service.dart';
 import 'package:qustschedule/widgets/course_tile.dart';
+import 'package:qustschedule/widgets/floating_dock.dart';
 import 'package:qustschedule/widgets/status_popup.dart';
 import 'package:qustschedule/widgets/tactile_button.dart';
 import 'package:zf_academic/zf_academic_io.dart';
@@ -299,10 +301,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('校准当前周次'), findsOneWidget);
 
-    // 3. 菜单打开时直接点击课表页课程卡片：菜单收起动画帧内不重建菜单条目、周次按钮、课表页或课程块，且详情顺利弹出。
+    // 3. 菜单打开时直接点击课表页课程卡片：仅关闭菜单且拦截穿透（不弹出详情），
+    //    收起动画帧内不重建菜单条目、周次按钮、课表页或课程块。
     final courseBlock = find.byType(CourseBlock).first;
-    final closeAndDetailCapture = await captureFrames(() async {
-      await tester.tap(courseBlock);
+    final courseCenter = tester.getCenter(courseBlock);
+    final closeOnlyCapture = await captureFrames(() async {
+      await tester.tapAt(courseCenter);
       for (var i = 0; i < 14; i++) {
         await tester.pump(const Duration(milliseconds: 16));
       }
@@ -310,27 +314,31 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('校准当前周次'), findsNothing);
-    expect(find.byType(BottomSheet), findsOneWidget);
-    expect(closeAndDetailCapture.weekTriggerRebuilds, 0);
-    expect(closeAndDetailCapture.types.contains(HomeShell), isFalse);
-    expect(closeAndDetailCapture.types.contains(SchedulePage), isFalse);
-    expect(closeAndDetailCapture.types.contains(CourseBlock), isFalse);
-    expect(closeAndDetailCapture.rebuiltTexts.contains('校准当前周次'), isFalse);
-    expect(closeAndDetailCapture.rebuiltTexts.contains('作息时间表'), isFalse);
-    expect(closeAndDetailCapture.rebuiltTexts.contains('教务地址'), isFalse);
-    expect(closeAndDetailCapture.rebuiltTexts.contains('外观'), isFalse);
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(closeOnlyCapture.weekTriggerRebuilds, 0);
+    expect(closeOnlyCapture.types.contains(HomeShell), isFalse);
+    expect(closeOnlyCapture.types.contains(SchedulePage), isFalse);
+    expect(closeOnlyCapture.types.contains(CourseBlock), isFalse);
+    expect(closeOnlyCapture.rebuiltTexts.contains('校准当前周次'), isFalse);
+    expect(closeOnlyCapture.rebuiltTexts.contains('作息时间表'), isFalse);
+    expect(closeOnlyCapture.rebuiltTexts.contains('教务地址'), isFalse);
+    expect(closeOnlyCapture.rebuiltTexts.contains('外观'), isFalse);
 
+    // 菜单关闭后再次点击课程卡片，正常弹出详情弹窗。
+    await tester.tap(courseBlock);
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsOneWidget);
     Navigator.of(tester.element(find.byType(BottomSheet))).pop();
     await tester.pumpAndSettle();
     expect(find.byType(BottomSheet), findsNothing);
 
-    // 4. 菜单展开动画中途（60ms）直接点击课程卡片：同样不重建无关周次按钮、菜单条目、课表页或课程块。
+    // 4. 菜单展开动画中途（60ms）直接点击课程卡片：同样只收起菜单不穿透详情，且不重建无关控件。
     await tester.tap(find.byIcon(Icons.more_horiz_rounded));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 60));
 
     final midOpenTapCapture = await captureFrames(() async {
-      await tester.tap(find.byType(CourseBlock).first);
+      await tester.tapAt(courseCenter);
       for (var i = 0; i < 14; i++) {
         await tester.pump(const Duration(milliseconds: 16));
       }
@@ -338,12 +346,38 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('校准当前周次'), findsNothing);
-    expect(find.byType(BottomSheet), findsOneWidget);
+    expect(find.byType(BottomSheet), findsNothing);
     expect(midOpenTapCapture.weekTriggerRebuilds, 0);
     expect(midOpenTapCapture.types.contains(HomeShell), isFalse);
     expect(midOpenTapCapture.types.contains(SchedulePage), isFalse);
     expect(midOpenTapCapture.types.contains(CourseBlock), isFalse);
     expect(midOpenTapCapture.rebuiltTexts.contains('校准当前周次'), isFalse);
     expect(midOpenTapCapture.rebuiltTexts.contains('外观'), isFalse);
+
+    // 5. 菜单打开时直接点击底部 Dock 栏：最高优先级直达切页并同步收起菜单，不波及周次按钮或课程块。
+    await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+    await tester.pumpAndSettle();
+    expect(find.text('校准当前周次'), findsOneWidget);
+
+    final dockTapCapture = await captureFrames(() async {
+      await tester.tap(
+        find.descendant(
+          of: find.byType(FloatingDock),
+          matching: find.text('设置'),
+        ),
+      );
+      for (var i = 0; i < 14; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+    });
+    await tester.pumpAndSettle();
+
+    expect(find.text('校准当前周次'), findsNothing);
+    expect(find.byType(SettingsPage), findsOneWidget);
+    expect(dockTapCapture.weekTriggerRebuilds, 0);
+    expect(dockTapCapture.types.contains(SchedulePage), isFalse);
+    expect(dockTapCapture.types.contains(CourseBlock), isFalse);
+    expect(dockTapCapture.rebuiltTexts.contains('校准当前周次'), isFalse);
+    expect(dockTapCapture.rebuiltTexts.contains('外观'), isFalse);
   });
 }
