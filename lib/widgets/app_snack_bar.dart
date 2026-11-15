@@ -146,6 +146,7 @@ class _AppSnackBarPill extends StatelessWidget {
             )..layout();
             // 按钮左右内边距 + 与正文的间隔
             reservedActionWidth = actionPainter.width + 26;
+            actionPainter.dispose();
           }
 
           final maxTextWidth = math.max(
@@ -164,6 +165,7 @@ class _AppSnackBarPill extends StatelessWidget {
             textScaler: textScaler,
           )..layout(maxWidth: maxTextWidth);
           final radius = messagePainter.didExceedMaxLines ? 20.0 : 999.0;
+          messagePainter.dispose();
 
           return ConstrainedBox(
             constraints: BoxConstraints(maxWidth: maxPillWidth),

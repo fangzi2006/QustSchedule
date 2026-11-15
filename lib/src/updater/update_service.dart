@@ -17,8 +17,33 @@ import '../app_version.dart';
 /// 下载取消令牌。
 class CancelToken {
   bool _cancelled = false;
+  final List<void Function()> _listeners = <void Function()>[];
+
   bool get isCancelled => _cancelled;
-  void cancel() => _cancelled = true;
+
+  void cancel() {
+    if (_cancelled) return;
+    _cancelled = true;
+    final snapshot = List<void Function()>.of(_listeners);
+    _listeners.clear();
+    for (final listener in snapshot) {
+      try {
+        listener();
+      } catch (_) {}
+    }
+  }
+
+  void addListener(void Function() listener) {
+    if (_cancelled) {
+      listener();
+      return;
+    }
+    _listeners.add(listener);
+  }
+
+  void removeListener(void Function() listener) {
+    _listeners.remove(listener);
+  }
 }
 
 class UpdateService {
@@ -325,7 +350,10 @@ class UpdateService {
         request.headers.set('Accept', 'application/vnd.github.v3+json');
 
         final response = await request.close().timeout(apiTimeout);
-        final responseBody = await response.transform(utf8.decoder).join();
+        final responseBody = await response
+            .transform(utf8.decoder)
+            .join()
+            .timeout(apiTimeout);
 
         if (response.statusCode == 403) {
           hadRateLimit = true;
@@ -476,7 +504,9 @@ class UpdateService {
     required ReleaseAsset targetAsset,
     String selectedProxy = '',
     List<String> backupProxies = const <String>[],
+    CancelToken? cancelToken,
   }) async {
+    if (cancelToken?.isCancelled == true) return null;
     ReleaseAsset? sumAsset;
     for (final asset in release.assets) {
       if (asset.name.toUpperCase() == 'SHA256SUMS') {
@@ -488,22 +518,42 @@ class UpdateService {
 
     final candidates = _buildCandidates(selectedProxy, backupProxies);
     for (final candidate in candidates) {
+      if (cancelToken?.isCancelled == true) return null;
       final url = buildProxiedUrl(sumAsset.downloadUrl, candidate);
+      HttpClientRequest? activeReq;
+      void onCancelled() {
+        try {
+          activeReq?.abort();
+        } catch (_) {}
+      }
+
+      cancelToken?.addListener(onCancelled);
       try {
         final req = await _client.getUrl(Uri.parse(url)).timeout(apiTimeout);
+        activeReq = req;
+        if (cancelToken?.isCancelled == true) {
+          req.abort();
+          return null;
+        }
         req.headers.set('User-Agent', browserUserAgent);
         final res = await req.close().timeout(apiTimeout);
         if (res.statusCode != HttpStatus.ok) {
-          await res.drain<void>();
+          await res.drain<void>().timeout(apiTimeout);
           continue;
         }
-        final body = await res.transform(utf8.decoder).join();
+        final body = await res
+            .transform(utf8.decoder)
+            .join()
+            .timeout(apiTimeout);
         final digest = parseSha256Sums(body)[targetAsset.name];
         if (digest != null && digest.isNotEmpty) {
           return digest;
         }
       } catch (_) {
+        if (cancelToken?.isCancelled == true) return null;
         continue;
+      } finally {
+        cancelToken?.removeListener(onCancelled);
       }
     }
     return null;
@@ -518,10 +568,11 @@ class UpdateService {
     void Function(String proxyUrl)? onProxySwitched,
     CancelToken? cancelToken,
     String? expectedSha256,
+    Directory? targetDirectory,
   }) async {
     final candidates = _buildCandidates(selectedProxy, backupProxies);
 
-    final tempDir = await getTemporaryDirectory();
+    final tempDir = targetDirectory ?? await getTemporaryDirectory();
     final file = File('${tempDir.path}/${asset.name}');
 
     // 1. 本地完整性嗅探与复用：若本地已存在同名且大小完全匹配的文件，直接跳过网络下载（0秒秒进安装）
@@ -596,7 +647,7 @@ class UpdateService {
               totalBytes = parsedTotal;
             }
           }
-          await probeRes.drain<void>();
+          await probeRes.drain<void>().timeout(downloadConnectTimeout);
 
           if (totalBytes >= minChunkingBytes) {
             try {
@@ -643,7 +694,7 @@ class UpdateService {
             cancelToken: cancelToken,
           );
         } else {
-          await probeRes.drain<void>();
+          await probeRes.drain<void>().timeout(downloadConnectTimeout);
           lastError = HttpException(
             'HTTP ${probeRes.statusCode}',
             uri: Uri.parse(downloadUrl),
@@ -714,6 +765,10 @@ class UpdateService {
       }
     }
 
+    final chunkCancel = CancelToken();
+    void propagateCancel() => chunkCancel.cancel();
+    cancelToken?.addListener(propagateCancel);
+
     final futures = <Future<void>>[];
     final partFiles = <File>[];
 
@@ -736,15 +791,18 @@ class UpdateService {
             workerReceived[i] = receivedInChunk;
             reportProgress();
           },
-          cancelToken: cancelToken,
-        ),
+          cancelToken: chunkCancel,
+        ).catchError((Object e, StackTrace st) {
+          chunkCancel.cancel();
+          Error.throwWithStackTrace(e, st);
+        }),
       );
     }
 
     try {
-      await Future.wait(futures);
+      await Future.wait(futures, eagerError: true);
 
-      if (cancelToken?.isCancelled == true) {
+      if (cancelToken?.isCancelled == true || chunkCancel.isCancelled) {
         throw Exception('下载已取消');
       }
 
@@ -764,14 +822,38 @@ class UpdateService {
         } catch (_) {}
       }
     } catch (e) {
-      // 发生异常或取消时清理碎片
+      // 发生异常或取消时先通知其余分片取消，待所有文件句柄关闭后再清理碎片。
+      chunkCancel.cancel();
+      await Future.wait(futures.map((f) => f.catchError((Object _) {})));
       for (final part in partFiles) {
         try {
           if (part.existsSync()) await part.delete();
         } catch (_) {}
       }
       rethrow;
+    } finally {
+      cancelToken?.removeListener(propagateCancel);
     }
+  }
+
+  Future<T> _raceWithCancel<T>(Future<T> future, Completer<void> cancelSignal) {
+    if (cancelSignal.isCompleted) {
+      future.ignore();
+      return Future<T>.error(Exception('下载已取消'));
+    }
+    final out = Completer<T>();
+    future.then(
+      (value) {
+        if (!out.isCompleted) out.complete(value);
+      },
+      onError: (Object error, StackTrace st) {
+        if (!out.isCompleted) out.completeError(error, st);
+      },
+    );
+    cancelSignal.future.then((_) {
+      if (!out.isCompleted) out.completeError(Exception('下载已取消'));
+    });
+    return out.future;
   }
 
   /// 单个切片的工作线程下载流。
@@ -784,62 +866,142 @@ class UpdateService {
     required void Function(int receivedInChunk) onBytes,
     CancelToken? cancelToken,
   }) async {
+    if (cancelToken?.isCancelled == true) {
+      throw Exception('下载已取消');
+    }
     if (partFile.existsSync()) {
       try {
         await partFile.delete();
       } catch (_) {}
     }
 
-    final request = await _client
-        .getUrl(Uri.parse(downloadUrl))
-        .timeout(downloadConnectTimeout);
-
-    request.headers.set('User-Agent', browserUserAgent);
-    request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
-    request.headers.set(HttpHeaders.rangeHeader, 'bytes=$start-$end');
-    request.headers.set(HttpHeaders.acceptHeader, '*/*');
-    request.headers.set(HttpHeaders.connectionHeader, 'keep-alive');
-
-    final response = await request.close().timeout(downloadConnectTimeout);
-
-    if (response.statusCode != HttpStatus.partialContent) {
-      await response.drain<void>();
-      throw HttpException(
-        'Chunk $workerIndex HTTP ${response.statusCode}',
-        uri: Uri.parse(downloadUrl),
-      );
+    HttpClientRequest? activeReq;
+    final cancelSignal = Completer<void>();
+    void onCancelled() {
+      try {
+        activeReq?.abort();
+      } catch (_) {}
+      if (!cancelSignal.isCompleted) {
+        cancelSignal.complete();
+      }
     }
 
-    final expectedBytes = end - start + 1;
-    final sink = partFile.openWrite();
-    var received = 0;
-
+    cancelToken?.addListener(onCancelled);
     try {
-      await for (final chunk in response.timeout(downloadIdleTimeout)) {
-        if (cancelToken?.isCancelled == true) {
-          throw Exception('下载已取消');
-        }
-        if (received + chunk.length > expectedBytes) {
-          throw HttpException(
-            'Chunk $workerIndex 超出预期长度: 预期 $expectedBytes 字节',
-            uri: Uri.parse(downloadUrl),
-          );
-        }
-        sink.add(chunk);
-        received += chunk.length;
-        onBytes(received);
+      final request = await _raceWithCancel(
+        _client.getUrl(Uri.parse(downloadUrl)).timeout(downloadConnectTimeout),
+        cancelSignal,
+      );
+      activeReq = request;
+      if (cancelToken?.isCancelled == true) {
+        try {
+          request.abort();
+        } catch (_) {}
+        throw Exception('下载已取消');
       }
-      await sink.flush();
-      if (received != expectedBytes) {
+
+      request.headers.set('User-Agent', browserUserAgent);
+      request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+      request.headers.set(HttpHeaders.rangeHeader, 'bytes=$start-$end');
+      request.headers.set(HttpHeaders.acceptHeader, '*/*');
+      request.headers.set(HttpHeaders.connectionHeader, 'keep-alive');
+
+      final response = await _raceWithCancel(
+        request.close().timeout(downloadConnectTimeout),
+        cancelSignal,
+      );
+
+      if (response.statusCode != HttpStatus.partialContent) {
+        await response.drain<void>().timeout(downloadConnectTimeout);
         throw HttpException(
-          'Chunk $workerIndex 传输未完成: 接收 $received 字节，预期 $expectedBytes 字节',
+          'Chunk $workerIndex HTTP ${response.statusCode}',
           uri: Uri.parse(downloadUrl),
         );
       }
-    } finally {
+
+      final expectedBytes = end - start + 1;
+      final sink = partFile.openWrite();
+      var received = 0;
+      StreamSubscription<List<int>>? subscription;
+      Timer? idleTimer;
+      final streamDone = Completer<void>();
+      var streamFailed = false;
+
+      void failStream(Object error, [StackTrace? st]) {
+        streamFailed = true;
+        idleTimer?.cancel();
+        if (!streamDone.isCompleted) {
+          streamDone.completeError(error, st);
+        }
+      }
+
+      void resetIdleTimer() {
+        idleTimer?.cancel();
+        idleTimer = Timer(downloadIdleTimeout, () {
+          failStream(
+            TimeoutException('Chunk $workerIndex stream idle timeout'),
+          );
+        });
+      }
+
       try {
-        await sink.close();
-      } catch (_) {}
+        resetIdleTimer();
+        subscription = response.listen(
+          (chunk) {
+            if (streamFailed || cancelToken?.isCancelled == true) {
+              if (cancelToken?.isCancelled == true) {
+                failStream(Exception('下载已取消'));
+              }
+              return;
+            }
+            resetIdleTimer();
+            if (received + chunk.length > expectedBytes) {
+              failStream(
+                HttpException(
+                  'Chunk $workerIndex 超出预期长度: 预期 $expectedBytes 字节',
+                  uri: Uri.parse(downloadUrl),
+                ),
+              );
+              return;
+            }
+            sink.add(chunk);
+            received += chunk.length;
+            onBytes(received);
+          },
+          onError: (Object error, StackTrace st) {
+            failStream(error, st);
+          },
+          onDone: () {
+            idleTimer?.cancel();
+            if (!streamDone.isCompleted) {
+              if (received != expectedBytes) {
+                streamDone.completeError(
+                  HttpException(
+                    'Chunk $workerIndex 传输未完成: 接收 $received 字节，预期 $expectedBytes 字节',
+                    uri: Uri.parse(downloadUrl),
+                  ),
+                );
+              } else {
+                streamDone.complete();
+              }
+            }
+          },
+          cancelOnError: true,
+        );
+
+        await _raceWithCancel(streamDone.future, cancelSignal);
+        await sink.flush();
+      } finally {
+        idleTimer?.cancel();
+        try {
+          await subscription?.cancel();
+        } catch (_) {}
+        try {
+          await sink.close();
+        } catch (_) {}
+      }
+    } finally {
+      cancelToken?.removeListener(onCancelled);
     }
   }
 

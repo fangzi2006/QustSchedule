@@ -1170,6 +1170,489 @@ void main() {
       expect(model.week, 5);
     });
   });
+
+  group('第一批稳定性与竞态回归', () {
+    Future<void> waitUntil(
+      bool Function() predicate, {
+      int maxTurns = 50,
+    }) async {
+      for (var i = 0; i < maxTurns && !predicate(); i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+
+    test('手动登录遇验证码时正确提交验证码并支持重试与取消', () async {
+      final submittedCodes = <String>[];
+      final backend = FakeBackend(
+        loginBehavior: (call, credentials) async => const CaptchaState(
+          continuationId: 'manual-1',
+          imageBase64: 'iVBORw0KGgo=',
+          mimeType: 'image/png',
+        ),
+        submitBehavior: (call, code) async {
+          submittedCodes.add(code);
+          if (code == 'wrong') {
+            return const CaptchaState(
+              continuationId: 'manual-2',
+              imageBase64: 'iVBORw0KGgo=',
+              mimeType: 'image/png',
+            );
+          }
+          return const AuthenticatedState(
+            studentId: '20240001',
+            studentName: '测试学生',
+          );
+        },
+      );
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
+      addTearDown(model.dispose);
+
+      await model.signIn('20240001', 'pw');
+      expect(model.status, AppStatus.needCaptcha);
+      expect(model.captcha?.continuationId, 'manual-1');
+      expect(model.session.hasPendingReloginCaptcha, isFalse);
+
+      // 错误验证码会触发真实 submitCaptcha 且停留在 needCaptcha 等待新验证码
+      await model.submitCaptcha('wrong');
+      expect(backend.submitCount, 1);
+      expect(submittedCodes, <String>['wrong']);
+      expect(model.status, AppStatus.needCaptcha);
+      expect(model.captcha?.continuationId, 'manual-2');
+      expect(model.session.hasPendingReloginCaptcha, isFalse);
+
+      // 正确验证码成功登录并拉取课表
+      await model.submitCaptcha('good');
+      expect(backend.submitCount, 2);
+      expect(submittedCodes, <String>['wrong', 'good']);
+      expect(model.status, AppStatus.ready);
+      expect(model.captcha, isNull);
+      expect(model.schedule, isNotNull);
+
+      // 再次手动登录遇验证码时取消应退回 needLogin 且清掉验证码状态
+      await model.signOut();
+      await model.signIn('20240001', 'pw');
+      expect(model.status, AppStatus.needCaptcha);
+      model.cancelCaptcha();
+      expect(model.status, AppStatus.needLogin);
+      expect(model.captcha, isNull);
+    });
+
+    test('课表自动重登验证码竞态：取消不覆盖 needLogin，静默刷新失败退回 failed，成功不重复写盘', () async {
+      final backend = FakeBackend();
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
+      addTearDown(model.dispose);
+      await rig.credentials.save(
+        '${model.service.baseUrl.toLowerCase()}|20240001',
+        const Credentials('20240001', 'pw'),
+      );
+      model.service.accountHint = '20240001';
+      model.session.username = '20240001';
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+      // 1. 静默刷新遇会话过期 -> 自动重登触发验证码 -> 用户取消 -> 状态应保持 needLogin
+      var fetchCall = 0;
+      backend.fetchBehavior = (call, termId) async {
+        fetchCall++;
+        if (fetchCall == 1) {
+          throw const AcademicError(ErrorCode.sessionExpired, '会话失效');
+        }
+        return sampleSchedule('2026-2027-1');
+      };
+      backend.loginBehavior = (call, credentials) async => const CaptchaState(
+        continuationId: 'relogin-cancel',
+        imageBase64: 'iVBORw0KGgo=',
+        mimeType: 'image/png',
+      );
+
+      final cancelLoad = model.refresh();
+      await waitUntil(() => model.status == AppStatus.needCaptcha);
+      expect(model.status, AppStatus.needCaptcha);
+      expect(model.session.hasPendingReloginCaptcha, isTrue);
+
+      model.cancelCaptcha();
+      expect(model.status, AppStatus.needLogin);
+      expect(model.session.hasPendingReloginCaptcha, isFalse);
+
+      await cancelLoad;
+      expect(model.status, AppStatus.needLogin);
+      expect(model.refreshing, isFalse);
+      expect(model.scheduleState.scheduleLoad, isNull);
+      expect(model.globalHint, isEmpty);
+      expect(model.scheduleHint, isEmpty);
+
+      // 2. 静默刷新重登验证码提交失败时，不能卡在 AppStatus.signingIn
+      model.service.resetBreaker();
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+      fetchCall = 0;
+      backend.submitBehavior = (call, code) async => const CaptchaState(
+        continuationId: 'retry',
+        imageBase64: 'iVBORw0KGgo=',
+        mimeType: 'image/png',
+      );
+      final failRefresh = model.refresh();
+      await waitUntil(() => model.status == AppStatus.needCaptcha);
+      expect(model.status, AppStatus.needCaptcha);
+
+      await model.submitCaptcha('bad');
+      await failRefresh;
+      expect(model.status, AppStatus.failed);
+      expect(model.captcha, isNull);
+      expect(model.refreshing, isFalse);
+      expect(model.scheduleState.scheduleLoad, isNull);
+
+      // 3. 静默刷新重登验证码提交成功后只做一次收尾，状态回到 ready
+      model.service.resetBreaker();
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+      fetchCall = 0;
+      backend.submitBehavior = (call, code) async {
+        backend.cookies = snapshotOf(_baseUrl, value: 'recovered');
+        return const AuthenticatedState(
+          studentId: '20240001',
+          studentName: '测试学生',
+        );
+      };
+      final okRefresh = model.refresh();
+      await waitUntil(() => model.status == AppStatus.needCaptcha);
+      expect(model.status, AppStatus.needCaptcha);
+
+      await model.submitCaptcha('ok');
+      await okRefresh;
+      expect(model.status, AppStatus.ready);
+      expect(model.captcha, isNull);
+      expect(model.refreshing, isFalse);
+      expect(model.scheduleState.scheduleLoad, isNull);
+      expect(model.globalHint, isEmpty);
+    });
+
+    test('非课表（学业）请求自动重登：静默重登与验证码重登收尾均正确复位刷新状态与全局提示', () async {
+      final examCache = InMemoryExamCache();
+      final backend = FakeBackend();
+      final rig = buildRig(backend: backend);
+      // 用带可观察缓存的 rig 测全局更新提示保留
+      final customModel = AppModel(
+        service: ScheduleService(
+          credentials: rig.credentials,
+          cookieStorage: FakeSessionRepository(),
+          backendFactory: (_) => backend,
+          baseUrl: _baseUrl,
+        ),
+        preferences: Preferences.inMemory(),
+        examCache: examCache,
+        gradesCache: InMemoryGradesCache(),
+        schoolBaseUrl: _baseUrl,
+      );
+      addTearDown(customModel.dispose);
+      await rig.credentials.save(
+        '${customModel.service.baseUrl.toLowerCase()}|20240001',
+        const Credentials('20240001', 'pw'),
+      );
+      customModel.service.accountHint = '20240001';
+      customModel.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+      // 1. 静默重登（无验证码）且无新增学业变动：结束后 refreshing 与 globalHint 必须清零
+      var examCalls = 0;
+      backend.examsBehavior = (call, termId) async {
+        examCalls++;
+        if (examCalls == 1) {
+          throw const AcademicError(ErrorCode.sessionExpired, '会话失效');
+        }
+        return sampleExams();
+      };
+      await customModel.loadAcademicData(
+        termId: '2026-2027-1',
+        forceRefresh: true,
+        showHint: true,
+      );
+      expect(backend.loginCount, 1);
+      expect(customModel.refreshing, isFalse);
+      expect(customModel.globalHint, isEmpty);
+      expect(customModel.academicHint, '已更新');
+
+      // 2. 学业请求重登遇验证码（此时 scheduleLoad == null）：提交验证码不得卡在 signingIn
+      examCalls = 0;
+      backend.loginBehavior = (call, credentials) async => const CaptchaState(
+        continuationId: 'acad-cap',
+        imageBase64: 'iVBORw0KGgo=',
+        mimeType: 'image/png',
+      );
+      backend.submitBehavior = (call, code) async {
+        backend.cookies = snapshotOf(_baseUrl, value: 'acad-ok');
+        return const AuthenticatedState(
+          studentId: '20240001',
+          studentName: '测试学生',
+        );
+      };
+      // 修改考试返回数据以验证 globalHint 不会误伤新建的「考试安排有更新」提示
+      backend.examsBehavior = (call, termId) async {
+        examCalls++;
+        if (examCalls == 1) {
+          throw const AcademicError(ErrorCode.sessionExpired, '会话失效');
+        }
+        return const <ExamItem>[ExamItem(courseName: '新考试科目')];
+      };
+
+      final acadFuture = customModel.loadAcademicData(
+        termId: '2026-2027-1',
+        forceRefresh: true,
+        showHint: true,
+      );
+      await waitUntil(() => customModel.status == AppStatus.needCaptcha);
+      expect(customModel.status, AppStatus.needCaptcha);
+      expect(customModel.scheduleState.scheduleLoad, isNull);
+      expect(customModel.session.hasPendingReloginCaptcha, isTrue);
+
+      await customModel.submitCaptcha('1234');
+      await acadFuture;
+      expect(customModel.status, AppStatus.ready);
+      expect(customModel.captcha, isNull);
+      expect(customModel.refreshing, isFalse);
+      expect(customModel.globalHint, '考试安排有更新');
+      expect(customModel.isAcademicUpdateHint, isTrue);
+
+      // 3. 学业请求重登验证码被用户取消时，切到 needLogin 且不残留错误学业气泡
+      customModel.service.resetBreaker();
+      examCalls = 0;
+      final cancelAcadFuture = customModel.loadAcademicData(
+        termId: '2026-2027-1',
+        forceRefresh: true,
+        showHint: true,
+      );
+      await waitUntil(() => customModel.status == AppStatus.needCaptcha);
+      expect(customModel.status, AppStatus.needCaptcha);
+
+      customModel.cancelCaptcha();
+      await cancelAcadFuture;
+      expect(customModel.status, AppStatus.needLogin);
+      expect(customModel.refreshing, isFalse);
+      expect(customModel.globalHint, isEmpty);
+      expect(customModel.academicHint, isEmpty);
+    });
+
+    test('AcademicController 登出与切校时取消在途请求与静默同步，切校回滚保留原数据', () async {
+      final examsGate = Completer<void>();
+      final gradesGate = Completer<void>();
+      final backend = FakeBackend();
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
+      addTearDown(model.dispose);
+      await rig.credentials.save(
+        '${model.service.baseUrl.toLowerCase()}|20240001',
+        const Credentials('20240001', 'pw'),
+      );
+      model.service.accountHint = '20240001';
+      model.session.username = '20240001';
+      model.hydrateForTest(
+        schedule: sampleSchedule('2026-2027-1'),
+        exams: sampleExams('2026-2027-1'),
+        grades: sampleGrades('2026-2027-1'),
+      );
+
+      // 1. 切换学校失败回滚时，原校学业数据仍完整保留
+      backend.loginBehavior = (call, credentials) async =>
+          throw const AcademicError(ErrorCode.networkRetryable, '切换失败');
+      await model.changeSchool(
+        'https://jw2.example.edu.cn/jwglxt',
+        relogin: true,
+      );
+      expect(model.status, AppStatus.failed);
+      expect(model.exams, isNotEmpty);
+      expect(model.grades, isNotEmpty);
+      model.dismissError();
+      expect(model.status, AppStatus.ready);
+
+      // 2. 在途 loadAcademicData 期间切校（relogin: false），旧请求晚到不得回填残留状态
+      backend.loginBehavior = null;
+      backend.examsBehavior = (_, _) async {
+        await examsGate.future;
+        return sampleExams('2026-2027-1');
+      };
+      backend.gradesBehavior = (_, _) async {
+        await gradesGate.future;
+        return sampleGrades('2026-2027-1');
+      };
+
+      final inFlight = model.loadAcademicData(
+        termId: '2026-2027-1',
+        forceRefresh: true,
+        showHint: true,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(model.academicLoading, isTrue);
+
+      await model.changeSchool(
+        'https://jw2.example.edu.cn/jwglxt',
+        relogin: false,
+      );
+      expect(model.academicLoading, isFalse);
+      expect(model.academicHint, isEmpty);
+      expect(model.exams, isEmpty);
+      expect(model.grades, isEmpty);
+
+      examsGate.complete();
+      gradesGate.complete();
+      await inFlight;
+      expect(model.exams, isEmpty);
+      expect(model.grades, isEmpty);
+      expect(model.academicLoading, isFalse);
+      expect(model.academicHint, isEmpty);
+
+      // 3. 在途静默同步 syncQuietly 期间切校（relogin: true）后，旧同步晚到不得触发旧校更新气泡
+      final quietExamsGate = Completer<void>();
+      final oldExamCache = InMemoryExamCache();
+      await oldExamCache.save('2026-2027-1', const <ExamItem>[
+        ExamItem(courseName: '旧校考试'),
+      ]);
+      final quietModel = AppModel(
+        service: ScheduleService(
+          credentials: rig.credentials,
+          cookieStorage: FakeSessionRepository(),
+          backendFactory: (_) => backend,
+          baseUrl: _baseUrl,
+        ),
+        preferences: Preferences.inMemory(),
+        examCache: oldExamCache,
+        gradesCache: InMemoryGradesCache(),
+        schoolBaseUrl: _baseUrl,
+      );
+      addTearDown(quietModel.dispose);
+      await rig.credentials.save(
+        '${quietModel.service.baseUrl.toLowerCase()}|20240001',
+        const Credentials('20240001', 'pw'),
+      );
+      quietModel.service.accountHint = '20240001';
+      quietModel.session.username = '20240001';
+      quietModel.hydrateForTest(
+        schedule: sampleSchedule('2026-2027-1'),
+        exams: const <ExamItem>[ExamItem(courseName: '旧校考试')],
+      );
+
+      var quietMode = true;
+      backend.examsBehavior = (_, _) async {
+        if (quietMode) {
+          await quietExamsGate.future;
+          return const <ExamItem>[ExamItem(courseName: '旧校新考试')];
+        }
+        return const <ExamItem>[];
+      };
+      backend.gradesBehavior = (_, _) async => const <GradeItem>[];
+
+      await quietModel.syncSilently();
+      final quietSync = quietModel.academicSyncForTest;
+      expect(quietSync, isNotNull);
+
+      quietMode = false;
+      await quietModel.changeSchool(
+        'https://jw3.example.edu.cn/jwglxt',
+        relogin: true,
+      );
+      expect(quietModel.exams, isEmpty);
+
+      quietExamsGate.complete();
+      await quietSync;
+      expect(quietModel.exams, isEmpty);
+      expect(quietModel.globalHint, isEmpty);
+    });
+
+    test('AcademicController 单次加载仅读取一次本地缓存（含未命中与未评教分支）', () async {
+      final countingExam = _CountingExamCache();
+      final countingGrades = _CountingGradesCache();
+      await countingGrades.save('2026-2027-1', sampleGrades());
+
+      final backend = FakeBackend()
+        ..examsBehavior = ((_, _) async => sampleExams())
+        ..gradesBehavior = (_, _) async =>
+            throw const AcademicError(ErrorCode.notEvaluated, '未完成教学评价');
+
+      final model = AppModel(
+        service: ScheduleService(
+          credentials: InMemoryCredentialStore(),
+          cookieStorage: FakeSessionRepository(),
+          backendFactory: (_) => backend,
+          baseUrl: _baseUrl,
+        ),
+        preferences: Preferences.inMemory(),
+        examCache: countingExam,
+        gradesCache: countingGrades,
+        schoolBaseUrl: _baseUrl,
+      );
+      addTearDown(model.dispose);
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+      // 1. forceRefresh 且后端返回 notEvaluated：
+      // Controller 仅读 examCache 1 次、gradesCache 1 次（service.fetchGrades 内部另有 1 次读取保持既有行为，总计 <= 2）
+      await model.loadAcademicData(termId: '2026-2027-1', forceRefresh: true);
+      expect(countingExam.loadCalls, 1);
+      expect(countingGrades.loadCalls, 2);
+      expect(model.isNotEvaluated, isTrue);
+      expect(model.grades, isNotEmpty);
+
+      // 2. forceRefresh=false 命中缓存：各自只再读 1 次
+      countingExam.loadCalls = 0;
+      countingGrades.loadCalls = 0;
+      await model.loadAcademicData(termId: '2026-2027-1', forceRefresh: false);
+      expect(countingExam.loadCalls, 1);
+      expect(countingGrades.loadCalls, 1);
+    });
+
+    test(
+      'PreferencesController.flushAppearance 与 rebindOpened 重置外观草稿并取消防抖定时器',
+      () async {
+        final prefs1 = Preferences.inMemory();
+        final rig = buildRig(preferences: prefs1);
+        final model = rig.model;
+        addTearDown(model.dispose);
+        model.hydrateForTest(schedule: sampleSchedule());
+
+        // 1. flushAppearance 落盘后清空草稿
+        model.setCellHeight(74.0);
+        model.setCourseTextScale(1.18);
+        await model.flushAppearance();
+        expect(prefs1.cellHeight, 74.0);
+        expect(prefs1.courseTextScale, 1.18);
+
+        final prefsReboundAfterFlush = Preferences.inMemory();
+        model.prefs.rebindOpened(prefsReboundAfterFlush);
+        expect(model.cellHeight, prefsReboundAfterFlush.cellHeight);
+        expect(model.courseTextScale, prefsReboundAfterFlush.courseTextScale);
+
+        // 2. 未触发防抖时调用 rebindOpened：必须取消定时器并丢弃旧草稿，不得污染新 Preferences
+        model.setCellHeight(82.0);
+        model.setCourseTextScale(1.25);
+        final prefs2 = Preferences.inMemory();
+        await prefs2.setCellHeight(56.0);
+        await prefs2.setCourseTextScale(0.92);
+        model.prefs.rebindOpened(prefs2);
+
+        expect(model.cellHeight, 56.0);
+        expect(model.courseTextScale, 0.92);
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        expect(prefs2.cellHeight, 56.0);
+        expect(prefs2.courseTextScale, 0.92);
+      },
+    );
+  });
+}
+
+class _CountingExamCache extends InMemoryExamCache {
+  int loadCalls = 0;
+
+  @override
+  Future<CachedTermExams?> load(String termId) {
+    loadCalls++;
+    return super.load(termId);
+  }
+}
+
+class _CountingGradesCache extends InMemoryGradesCache {
+  int loadCalls = 0;
+
+  @override
+  Future<CachedTermGrades?> load(String termId) {
+    loadCalls++;
+    return super.load(termId);
+  }
 }
 
 class _MockUpdateService extends UpdateService {

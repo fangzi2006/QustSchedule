@@ -261,6 +261,7 @@ class UpdateFlowController extends ChangeNotifier {
           targetAsset: asset,
           selectedProxy: _selectedProxy,
           backupProxies: _backupProxies,
+          cancelToken: token,
         );
         if (_disposed || token.isCancelled || _cancelToken != token) return;
       }

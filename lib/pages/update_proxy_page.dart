@@ -109,6 +109,7 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
         await widget.model.setSelectedUpdateProxy(defaultUpdateProxyUrl);
       }
       await widget.model.removeCustomUpdateProxy(url);
+      if (!mounted) return;
       setState(() {
         _testResults.remove(url);
       });

@@ -97,6 +97,7 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
   }
 
   void _edit(Timetable next) {
+    if (!mounted) return;
     setState(() {
       _draft = next;
       _dirty = true;
@@ -343,6 +344,7 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
       context: context,
       builder: (context) => _RenameDialog(initial: draft.name),
     );
+    if (!mounted) return;
     final trimmed = name?.trim() ?? '';
     if (trimmed.isEmpty) return;
     _edit(draft.copyWith(name: trimmed));
@@ -358,7 +360,7 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
       day: draft.effectiveFrom.day,
       title: '从哪天开始使用',
     );
-    if (picked == null) return;
+    if (!mounted || picked == null) return;
     _edit(
       draft.copyWith(
         effectiveFrom: effectiveDateFor(month: picked.month, day: picked.day),
@@ -415,7 +417,8 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
       minMinutes: min,
       maxMinutes: max,
     );
-    if (value != null) apply(value);
+    if (!mounted || value == null) return;
+    apply(value);
   }
 
   Future<void> _pickClock({
@@ -428,7 +431,8 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
       initialMinutes: current,
       title: title,
     );
-    if (value != null) apply(value);
+    if (!mounted || value == null) return;
+    apply(value);
   }
 
   /// 大课间：一次弹窗同时设「第几节后」与「休息多久」。
@@ -443,7 +447,7 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
       minutes: existing?.minutes ?? 20,
       title: '${group.label}大课间',
     );
-    if (picked == null) return;
+    if (!mounted || picked == null) return;
     setState(() {
       final bigBreaks = Map<PeriodGroup, BigBreak>.from(_quick.bigBreaks);
       bigBreaks[group] = BigBreak(
@@ -515,12 +519,13 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
         ],
       ),
     );
-    if (confirmed != true) return;
+    if (!mounted || confirmed != true) return;
     final draft = _draft;
     if (draft == null) return;
 
     // 面板参数记住（下次回填）。
     await model.saveQuickSetup(_quick);
+    if (!mounted) return;
     _edit(draft.copyWith(sections: sections));
     _toast('已应用 ${sections.length} 节，别忘了点右上角保存');
   }
@@ -547,7 +552,7 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
         ],
       ),
     );
-    if (confirmed != true) return;
+    if (!mounted || confirmed != true) return;
     await model.deleteTimetable(draft.id);
     if (mounted) {
       setState(() => _dirty = false);
@@ -600,7 +605,7 @@ class _SectionList extends StatelessWidget {
       endMinutes: section.endMinutes,
       title: '第 ${section.period} 节',
     );
-    if (picked == null) return;
+    if (!context.mounted || picked == null) return;
     onChange(section, start: picked.start, end: picked.end);
   }
 }

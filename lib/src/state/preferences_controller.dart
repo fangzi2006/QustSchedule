@@ -74,6 +74,10 @@ class PreferencesController {
   }
 
   void rebindOpened(Preferences loaded) {
+    _appearanceTimer?.cancel();
+    _appearanceTimer = null;
+    _cellHeightDraft = null;
+    _courseTextScaleDraft = null;
     _preferences = loaded;
     attachStorageMonitor();
     if (_preferences.didResetFromCorruption) {
@@ -307,12 +311,16 @@ class PreferencesController {
   Future<void> flushAppearance() async {
     _appearanceTimer?.cancel();
     _appearanceTimer = null;
-    if (_cellHeightDraft == null && _courseTextScaleDraft == null) return;
-    if (_cellHeightDraft != null) {
-      await _preferences.setCellHeight(_cellHeightDraft!);
+    final height = _cellHeightDraft;
+    final textScale = _courseTextScaleDraft;
+    if (height == null && textScale == null) return;
+    _cellHeightDraft = null;
+    _courseTextScaleDraft = null;
+    if (height != null) {
+      await _preferences.setCellHeight(height);
     }
-    if (_courseTextScaleDraft != null) {
-      await _preferences.setCourseTextScale(_courseTextScaleDraft!);
+    if (textScale != null) {
+      await _preferences.setCourseTextScale(textScale);
     }
   }
 

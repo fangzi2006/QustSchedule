@@ -100,15 +100,22 @@ class _AppShellState extends State<_AppShell> {
         message.isEmpty) {
       return;
     }
-    _lastStorageNoticeEvent = event;
     if (_storageNoticeScheduled) return;
     _storageNoticeScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _storageNoticeScheduled = false;
-      if (!mounted) return;
+      if (!mounted || _model.status == AppStatus.booting) return;
+      final latestEvent = _model.storageNoticeEvent;
+      final latestMessage = _model.storageNoticeMessage;
+      if (latestEvent == _lastStorageNoticeEvent ||
+          latestMessage == null ||
+          latestMessage.isEmpty) {
+        return;
+      }
+      _lastStorageNoticeEvent = latestEvent;
       showAppSnackBar(
         context,
-        message: message,
+        message: latestMessage,
         type: AppSnackBarType.error,
         aboveDock: _model.status == AppStatus.ready,
         duration: const Duration(seconds: 4),

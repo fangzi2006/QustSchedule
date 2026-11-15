@@ -1,5 +1,8 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -866,6 +869,186 @@ void main() {
       expect(staging.existsSync(), isFalse);
     });
   });
+
+  group('并发分片取消、句柄关闭与流超时回归', () {
+    test('任一分片异常时立即取消其余挂起分片、关闭句柄清理 .part 并安全回退单流下载', () async {
+      final prevOverrides = HttpOverrides.current;
+      HttpOverrides.global = null;
+      addTearDown(() => HttpOverrides.global = prevOverrides);
+
+      const totalSize = UpdateService.minChunkingBytes;
+      final payload = Uint8List.fromList(
+        List<int>.generate(totalSize, (i) => i & 0xff),
+      );
+      final expectedSha = sha256.convert(payload).toString();
+
+      final tempDir = Directory.systemTemp.createTempSync('qust_chunk_fb_');
+      final openStalledResponses = <HttpResponse>[];
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() async {
+        for (final res in openStalledResponses) {
+          try {
+            await res.close();
+          } catch (_) {}
+        }
+        await server.close(force: true);
+        if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+      });
+
+      var rangeRequestCount = 0;
+      var singleStreamCount = 0;
+      server.listen((req) async {
+        final range = req.headers.value(HttpHeaders.rangeHeader);
+        if (range == 'bytes=0-0') {
+          req.response.statusCode = HttpStatus.partialContent;
+          req.response.headers.set(
+            HttpHeaders.contentRangeHeader,
+            'bytes 0-0/$totalSize',
+          );
+          req.response.add(<int>[payload[0]]);
+          await req.response.close();
+          return;
+        }
+        if (range != null) {
+          final index = rangeRequestCount++;
+          if (index == 0) {
+            // 第一个分片写入少量数据后返回 500 失败（或连接失败），触发快速失败
+            req.response.statusCode = HttpStatus.internalServerError;
+            await req.response.close();
+            return;
+          }
+          // 其余分片返回 206 并写入少量分片数据后挂起不关闭，模拟慢连接阻塞
+          req.response.statusCode = HttpStatus.partialContent;
+          req.response.headers.set(
+            HttpHeaders.contentRangeHeader,
+            'bytes 0-1/$totalSize',
+          );
+          req.response.add(<int>[1, 2, 3]);
+          await req.response.flush();
+          openStalledResponses.add(req.response);
+          return;
+        }
+
+        // 回退到单线程全量下载
+        singleStreamCount++;
+        req.response.statusCode = HttpStatus.ok;
+        req.response.headers.contentLength = totalSize;
+        req.response.add(payload);
+        await req.response.close();
+      });
+
+      final service = UpdateService();
+      addTearDown(service.dispose);
+      final asset = ReleaseAsset(
+        name: 'QustSchedule_test.apk',
+        downloadUrl: 'http://${server.address.address}:${server.port}/pkg.apk',
+        size: totalSize,
+        contentType: 'application/vnd.android.package-archive',
+      );
+
+      final sw = Stopwatch()..start();
+      final out = await service.downloadAssetWithFallback(
+        asset: asset,
+        selectedProxy: '',
+        expectedSha256: expectedSha,
+        targetDirectory: tempDir,
+        onProgress: (_) {},
+      );
+      sw.stop();
+
+      expect(sw.elapsed, lessThan(const Duration(seconds: 5)));
+      expect(singleStreamCount, 1);
+      expect(await out.readAsBytes(), payload);
+      final leftoverParts = tempDir
+          .listSync()
+          .where((e) => e.path.contains('.part'))
+          .toList();
+      expect(leftoverParts, isEmpty);
+    });
+
+    test('外部取消并发分片下载时立即终止所有挂起分片并清理 .part 文件', () async {
+      final prevOverrides = HttpOverrides.current;
+      HttpOverrides.global = null;
+      addTearDown(() => HttpOverrides.global = prevOverrides);
+
+      const totalSize = UpdateService.minChunkingBytes;
+      final tempDir = Directory.systemTemp.createTempSync('qust_chunk_cancel_');
+      final openStalledResponses = <HttpResponse>[];
+      final chunkStarted = Completer<void>();
+      var chunkWorkers = 0;
+      var fallbackSingleCount = 0;
+
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() async {
+        for (final res in openStalledResponses) {
+          try {
+            await res.close();
+          } catch (_) {}
+        }
+        await server.close(force: true);
+        if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+      });
+
+      server.listen((req) async {
+        final range = req.headers.value(HttpHeaders.rangeHeader);
+        if (range == 'bytes=0-0') {
+          req.response.statusCode = HttpStatus.partialContent;
+          req.response.headers.set(
+            HttpHeaders.contentRangeHeader,
+            'bytes 0-0/$totalSize',
+          );
+          req.response.add(<int>[0]);
+          await req.response.close();
+          return;
+        }
+        if (range != null) {
+          chunkWorkers++;
+          req.response.statusCode = HttpStatus.partialContent;
+          req.response.add(List<int>.filled(64, 7));
+          await req.response.flush();
+          openStalledResponses.add(req.response);
+          if (chunkWorkers == UpdateService.maxConcurrentChunks &&
+              !chunkStarted.isCompleted) {
+            chunkStarted.complete();
+          }
+          return;
+        }
+        fallbackSingleCount++;
+        req.response.statusCode = HttpStatus.ok;
+        await req.response.close();
+      });
+
+      final service = UpdateService();
+      addTearDown(service.dispose);
+      final token = CancelToken();
+      final asset = ReleaseAsset(
+        name: 'QustSchedule_cancel.apk',
+        downloadUrl: 'http://${server.address.address}:${server.port}/pkg.apk',
+        size: totalSize,
+        contentType: 'application/vnd.android.package-archive',
+      );
+
+      final future = service.downloadAssetWithFallback(
+        asset: asset,
+        selectedProxy: '',
+        cancelToken: token,
+        targetDirectory: tempDir,
+        onProgress: (_) {},
+      );
+
+      await chunkStarted.future.timeout(const Duration(seconds: 5));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      token.cancel();
+
+      await expectLater(future, throwsException);
+      expect(fallbackSingleCount, 0);
+      final leftoverParts = tempDir
+          .listSync()
+          .where((e) => e.path.contains('.part'))
+          .toList();
+      expect(leftoverParts, isEmpty);
+    });
+  });
 }
 
 class _MockDownloadUpdateService extends UpdateService {
@@ -883,6 +1066,7 @@ class _MockDownloadUpdateService extends UpdateService {
     required ReleaseAsset targetAsset,
     String selectedProxy = '',
     List<String> backupProxies = const <String>[],
+    CancelToken? cancelToken,
   }) async => resolvedSha256;
 
   @override
@@ -894,6 +1078,7 @@ class _MockDownloadUpdateService extends UpdateService {
     void Function(String currentProxy)? onProxySwitched,
     CancelToken? cancelToken,
     String? expectedSha256,
+    Directory? targetDirectory,
   }) {
     _completer = Completer<File>();
     _onProgress = onProgress;

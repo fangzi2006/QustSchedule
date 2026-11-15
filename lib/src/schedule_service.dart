@@ -193,6 +193,8 @@ class ScheduleService {
 
   Future<void>? _reloginFlight;
 
+  Future<void>? get reloginFlight => _reloginFlight;
+
   @visibleForTesting
   Future<void>? get reloginFlightForTest => _reloginFlight;
 

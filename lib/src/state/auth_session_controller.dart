@@ -57,7 +57,7 @@ class AuthSessionController {
     _onStateChanged();
   }
 
-  Completer<String?> _captchaCompleter = Completer<String?>();
+  Completer<String?>? _captchaCompleter;
   Future<void>? _identitySync;
   bool _disposed = false;
 
@@ -199,24 +199,35 @@ class AuthSessionController {
     CaptchaState state, {
     required VoidCallback onNeedCaptcha,
   }) async {
+    final previous = _captchaCompleter;
+    if (previous != null && !previous.isCompleted) {
+      previous.complete(null);
+    }
+    final completer = Completer<String?>();
     _captcha = state;
-    _captchaCompleter = Completer<String?>();
+    _captchaCompleter = completer;
     onNeedCaptcha();
-    return _captchaCompleter.future;
+    return completer.future;
   }
 
-  bool get hasPendingReloginCaptcha => !_captchaCompleter.isCompleted;
+  bool get hasPendingReloginCaptcha =>
+      _captchaCompleter != null && !_captchaCompleter!.isCompleted;
 
   void completePendingCaptcha(String code) {
-    if (!_captchaCompleter.isCompleted) {
-      _captchaCompleter.complete(code);
+    final completer = _captchaCompleter;
+    _captchaCompleter = null;
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(code);
     }
   }
 
   void cancelCaptcha({required VoidCallback onCanceled}) {
-    if (!_captchaCompleter.isCompleted) _captchaCompleter.complete(null);
+    final completer = _captchaCompleter;
+    _captchaCompleter = null;
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(null);
+    }
     _captcha = null;
-    _captchaCompleter = Completer<String?>();
     onCanceled();
   }
 
@@ -228,6 +239,12 @@ class AuthSessionController {
   }
 
   Future<void> signOutReset() async {
+    final completer = _captchaCompleter;
+    _captchaCompleter = null;
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(null);
+    }
+    _captcha = null;
     await service.signOut(forgetCredentials: true);
     if (_disposed) return;
     await _prefs.raw.clearIdentityOf(_schoolBaseUrl);
@@ -271,6 +288,12 @@ class AuthSessionController {
 
   void dispose() {
     _disposed = true;
+    final completer = _captchaCompleter;
+    _captchaCompleter = null;
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(null);
+    }
+    _captcha = null;
     service.dispose();
   }
 }

@@ -25,6 +25,7 @@ class AcademicController extends ChangeNotifier {
     required this._termsSetter,
     required this._isNeedLoginReader,
     required this._suppressStageHintsSetter,
+    this._onNetworkLoadFinished,
     AcademicService? academicService,
   }) : _service = service,
        _examCache = examCache,
@@ -47,6 +48,7 @@ class AcademicController extends ChangeNotifier {
   final void Function(Terms terms) _termsSetter;
   final bool Function() _isNeedLoginReader;
   final void Function(bool suppress) _suppressStageHintsSetter;
+  final VoidCallback? _onNetworkLoadFinished;
 
   AcademicService get academicService => _academicService;
   ExamCache get examCache => _examCache;
@@ -127,10 +129,11 @@ class AcademicController extends ChangeNotifier {
   /// 恢复学期离线学业缓存（0 延迟展示）。
   Future<void> restoreCachedData(String termId) async {
     if (termId.isEmpty) return;
+    final seq = _academicLoadSeq;
     try {
       final cachedExams = await _examCache.load(termId);
       final cachedGrades = await _gradesCache.load(termId);
-      if (_disposed) return;
+      if (_disposed || seq != _academicLoadSeq || _isNeedLoginReader()) return;
       if (cachedExams != null || cachedGrades != null) {
         _exams = cachedExams?.items ?? const <ExamItem>[];
         _grades = cachedGrades?.items ?? const <GradeItem>[];
@@ -160,33 +163,38 @@ class AcademicController extends ChangeNotifier {
     }
 
     final seq = ++_academicLoadSeq;
-    if (target.isEmpty) {
-      final existingTerms = _termsReader();
-      if (existingTerms != null && existingTerms.currentId.isNotEmpty) {
-        target = existingTerms.currentId;
-        _academicTermId = target;
-      } else {
-        try {
-          final fetched = await _service.fetchTerms();
-          if (_disposed || seq != _academicLoadSeq) return;
-          _termsSetter(fetched);
-          target = fetched.currentId;
+    bool touchedNetwork = false;
+    bool networkCleanupHandled = false;
+    try {
+      if (target.isEmpty) {
+        final existingTerms = _termsReader();
+        if (existingTerms != null && existingTerms.currentId.isNotEmpty) {
+          target = existingTerms.currentId;
           _academicTermId = target;
-        } catch (_) {}
+        } else {
+          touchedNetwork = true;
+          try {
+            final fetched = await _service.fetchTerms();
+            if (_disposed || seq != _academicLoadSeq) return;
+            _termsSetter(fetched);
+            target = fetched.currentId;
+            _academicTermId = target;
+          } catch (_) {}
+        }
       }
-    }
-    if (_disposed || seq != _academicLoadSeq || target.isEmpty) return;
+      if (_disposed || seq != _academicLoadSeq || target.isEmpty) return;
 
-    final bool termChanged = target != _loadedAcademicTerm;
+      final bool termChanged = target != _loadedAcademicTerm;
 
-    if (!forceRefresh) {
-      final cachedExams = await _examCache.load(target);
-      final cachedGrades = await _gradesCache.load(target);
+      // 单次加载仅读取一次本地缓存，避免未命中或未评教时重复读盘。
+      final existingExams = await _examCache.load(target);
+      final existingGrades = await _gradesCache.load(target);
       if (_disposed || seq != _academicLoadSeq) return;
-      if (cachedExams != null || cachedGrades != null) {
-        _exams = cachedExams?.items ?? const <ExamItem>[];
-        _grades = cachedGrades?.items ?? const <GradeItem>[];
-        _isNotEvaluated = cachedGrades?.isNotEvaluated ?? false;
+
+      if (!forceRefresh && (existingExams != null || existingGrades != null)) {
+        _exams = existingExams?.items ?? const <ExamItem>[];
+        _grades = existingGrades?.items ?? const <GradeItem>[];
+        _isNotEvaluated = existingGrades?.isNotEvaluated ?? false;
         _loadedAcademicTerm = target;
         _academicError = null;
         _academicLoading = false;
@@ -194,111 +202,117 @@ class AcademicController extends ChangeNotifier {
         notifyListeners();
         return;
       }
-    }
 
-    final existingExams = await _examCache.load(target);
-    final existingGrades = await _gradesCache.load(target);
-    if (_disposed || seq != _academicLoadSeq) return;
-
-    if (termChanged) {
-      // 切换到无缓存的新学期：清空上一学期的残留数据，避免画面串台
-      _exams = const <ExamItem>[];
-      _grades = const <GradeItem>[];
-      _isNotEvaluated = false;
-      _loadedAcademicTerm = target;
-    }
-
-    final bool isDebugCleared = _academicDataClearedForDebug;
-    _academicDataClearedForDebug = false;
-
-    _loadingAcademicTerm = target;
-    _academicLoading = true;
-    _academicError = null;
-    notifyListeners();
-    if (showHint) {
-      _hints.showHint('正在更新学业数据…', scope: HintScope.academic);
-    }
-    String? changeMsg;
-
-    try {
-      Future<dynamic> safeRun(Future<dynamic> f) async {
-        try {
-          return await f;
-        } catch (e) {
-          return e;
-        }
-      }
-
-      final results = await Future.wait<dynamic>(<Future<dynamic>>[
-        safeRun(_academicService.fetchExams(target)),
-        safeRun(_academicService.fetchGrades(target)),
-      ]);
-      if (_disposed || seq != _academicLoadSeq) return;
-
-      final examRes = results[0];
-      final gradeRes = results[1];
-
-      if (examRes is List<ExamItem>) {
-        _exams = examRes;
-      } else if (examRes is AcademicError &&
-          examRes.code == ErrorCode.notOpen) {
-        // 考试安排未开放属于正常学期周期状态，保持静默，不提示错误
-      } else if (examRes != null) {
-        _academicError ??= _describeAcademicError(examRes);
-      }
-
-      if (gradeRes is List<GradeItem>) {
-        _grades = gradeRes;
+      if (termChanged) {
+        // 切换到无缓存的新学期：清空上一学期的残留数据，避免画面串台
+        _exams = const <ExamItem>[];
+        _grades = const <GradeItem>[];
         _isNotEvaluated = false;
-      } else if (gradeRes is AcademicError &&
-          gradeRes.code == ErrorCode.notEvaluated) {
-        _isNotEvaluated = true;
-        final existing = await _gradesCache.load(target);
-        if (_disposed || seq != _academicLoadSeq) return;
-        if (existing != null && existing.items.isNotEmpty) {
-          _grades = existing.items;
-        }
-      } else if (gradeRes != null) {
-        _academicError ??= _describeAcademicError(gradeRes);
+        _loadedAcademicTerm = target;
       }
 
-      changeMsg = _diffChangeMessage(
-        existingExams: existingExams?.items,
-        freshExams: examRes is List<ExamItem> ? examRes : null,
-        existingGrades: existingGrades?.items,
-        freshGrades: gradeRes is List<GradeItem> ? gradeRes : null,
-        hasOldExams: existingExams != null,
-        hasOldGrades: existingGrades != null,
-        isDebugCleared: isDebugCleared,
-      );
-    } catch (e) {
-      if (!_disposed && seq == _academicLoadSeq) {
-        _academicError ??= _describeAcademicError(e);
+      final bool isDebugCleared = _academicDataClearedForDebug;
+      _academicDataClearedForDebug = false;
+
+      _loadingAcademicTerm = target;
+      _academicLoading = true;
+      _academicError = null;
+      touchedNetwork = true;
+      notifyListeners();
+      if (showHint) {
+        _hints.showHint('正在更新学业数据…', scope: HintScope.academic);
       }
-    } finally {
-      if (!_disposed && seq == _academicLoadSeq) {
-        _academicLoading = false;
-        _loadingAcademicTerm = null;
-        notifyListeners();
-        if (_academicError != null) {
-          if (showHint) {
+      String? changeMsg;
+
+      try {
+        Future<dynamic> safeRun(Future<dynamic> f) async {
+          try {
+            return await f;
+          } catch (e) {
+            return e;
+          }
+        }
+
+        final results = await Future.wait<dynamic>(<Future<dynamic>>[
+          safeRun(_academicService.fetchExams(target)),
+          safeRun(_academicService.fetchGrades(target)),
+        ]);
+        if (_disposed || seq != _academicLoadSeq) return;
+
+        final examRes = results[0];
+        final gradeRes = results[1];
+
+        if (examRes is List<ExamItem>) {
+          _exams = examRes;
+        } else if (examRes is AcademicError &&
+            examRes.code == ErrorCode.notOpen) {
+          // 考试安排未开放属于正常学期周期状态，保持静默，不提示错误
+        } else if (examRes != null) {
+          _academicError ??= _describeAcademicError(examRes);
+        }
+
+        if (gradeRes is List<GradeItem>) {
+          _grades = gradeRes;
+          _isNotEvaluated = false;
+        } else if (gradeRes is AcademicError &&
+            gradeRes.code == ErrorCode.notEvaluated) {
+          _isNotEvaluated = true;
+          if (existingGrades != null && existingGrades.items.isNotEmpty) {
+            _grades = existingGrades.items;
+          }
+        } else if (gradeRes != null) {
+          _academicError ??= _describeAcademicError(gradeRes);
+        }
+
+        changeMsg = _diffChangeMessage(
+          existingExams: existingExams?.items,
+          freshExams: examRes is List<ExamItem> ? examRes : null,
+          existingGrades: existingGrades?.items,
+          freshGrades: gradeRes is List<GradeItem> ? gradeRes : null,
+          hasOldExams: existingExams != null,
+          hasOldGrades: existingGrades != null,
+          isDebugCleared: isDebugCleared,
+        );
+      } catch (e) {
+        if (!_disposed && seq == _academicLoadSeq) {
+          _academicError ??= _describeAcademicError(e);
+        }
+      } finally {
+        if (!_disposed && seq == _academicLoadSeq) {
+          _academicLoading = false;
+          _loadingAcademicTerm = null;
+          notifyListeners();
+          networkCleanupHandled = true;
+          _onNetworkLoadFinished?.call();
+          if (_isNeedLoginReader()) {
+            _hints.clearAcademicHint();
+          } else if (_academicError != null) {
+            if (showHint) {
+              _hints.showHint(
+                '更新失败：$_academicError',
+                error: true,
+                clearAfter: const Duration(seconds: 4),
+                scope: HintScope.academic,
+              );
+            }
+          } else if (changeMsg != null) {
+            _hints.clearAcademicHint();
+            _hints.showAcademicUpdateHint(changeMsg);
+          } else if (showHint) {
             _hints.showHint(
-              '更新失败：$_academicError',
-              error: true,
-              clearAfter: const Duration(seconds: 4),
+              '已更新',
+              clearAfter: const Duration(milliseconds: 1500),
               scope: HintScope.academic,
             );
           }
-        } else if (changeMsg != null) {
-          _hints.clearAcademicHint();
-          _hints.showAcademicUpdateHint(changeMsg);
-        } else if (showHint) {
-          _hints.showHint(
-            '已更新',
-            clearAfter: const Duration(milliseconds: 1500),
-            scope: HintScope.academic,
-          );
         }
+      }
+    } finally {
+      if (touchedNetwork &&
+          !networkCleanupHandled &&
+          !_disposed &&
+          seq == _academicLoadSeq) {
+        _onNetworkLoadFinished?.call();
       }
     }
   }
@@ -312,28 +326,36 @@ class AcademicController extends ChangeNotifier {
 
   /// 课程查询完成后异步非阻塞触发考试与成绩查询，不弹出阶段提示或错误气泡。
   Future<void> syncQuietly(String termId) {
-    final future = _runQuietSync(termId);
+    late final Future<void> future;
+    future = _runQuietSync(termId, () => _academicSync == future);
     _academicSync = future;
     return future;
   }
 
-  Future<void> _runQuietSync(String termId) async {
+  Future<void> _runQuietSync(
+    String termId,
+    bool Function() isLatestSync,
+  ) async {
+    final seq = _academicLoadSeq;
     _suppressStageHintsSetter(true);
     try {
       final existingExams = await _examCache.load(termId);
       final existingGrades = await _gradesCache.load(termId);
+      if (_disposed || seq != _academicLoadSeq || _isNeedLoginReader()) return;
+
       final bool isDebugCleared = _academicDataClearedForDebug;
       _academicDataClearedForDebug = false;
 
       await _academicService.syncCurrentTermAsync(termId: termId);
-      if (_disposed || _isNeedLoginReader()) return;
+      if (_disposed || seq != _academicLoadSeq || _isNeedLoginReader()) return;
       if (academicTermId == termId) {
         await restoreCachedData(termId);
       }
+      if (_disposed || seq != _academicLoadSeq || _isNeedLoginReader()) return;
 
       final freshExams = await _examCache.load(termId);
       final freshGrades = await _gradesCache.load(termId);
-      if (_disposed || _isNeedLoginReader()) return;
+      if (_disposed || seq != _academicLoadSeq || _isNeedLoginReader()) return;
 
       final changeMsg = _diffChangeMessage(
         existingExams: existingExams?.items,
@@ -351,7 +373,9 @@ class AcademicController extends ChangeNotifier {
     } catch (_) {
       // 绝不上抛或弹网络错误通知
     } finally {
-      _suppressStageHintsSetter(false);
+      if (_academicSync == null || isLatestSync()) {
+        _suppressStageHintsSetter(false);
+      }
     }
   }
 
@@ -369,6 +393,9 @@ class AcademicController extends ChangeNotifier {
   }
 
   void resetOnSignOut() {
+    ++_academicLoadSeq;
+    _academicLoading = false;
+    _loadingAcademicTerm = null;
     _academicTermId = '';
     _loadedAcademicTerm = '';
     _exams = const <ExamItem>[];
@@ -376,6 +403,8 @@ class AcademicController extends ChangeNotifier {
     _isNotEvaluated = false;
     _academicError = null;
     _academicSync = null;
+    _suppressStageHintsSetter(false);
+    _hints.clearAcademicHint();
     notifyListeners();
     unawaited(_examCache.clear());
     unawaited(_gradesCache.clear());

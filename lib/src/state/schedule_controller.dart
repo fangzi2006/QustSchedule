@@ -118,13 +118,9 @@ class ScheduleController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void applyCaptchaRecoveredSchedule(Schedule schedule) {
-    _schedule = schedule;
-    _termId = schedule.termId;
-    notifyListeners();
-  }
-
   void clearForSchoolReset() {
+    scheduleLoad = null;
+    refreshingNotifier.value = false;
     _schedule = null;
     _terms = null;
     _termId = '';
@@ -133,6 +129,8 @@ class ScheduleController extends ChangeNotifier {
   }
 
   void resetOnSignOut() {
+    scheduleLoad = null;
+    refreshingNotifier.value = false;
     _schedule = null;
     _terms = null;
     _termId = '';
