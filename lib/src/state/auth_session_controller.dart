@@ -39,7 +39,6 @@ class AuthSessionController {
   String _schoolBaseUrl;
   final bool _schoolFixed;
   String get schoolBaseUrl => _schoolBaseUrl;
-  bool get isSchoolFixed => _schoolFixed;
 
   String _studentName = '';
   String get studentName => _studentName;

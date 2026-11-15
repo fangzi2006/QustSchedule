@@ -470,8 +470,10 @@ class Preferences {
       final rawUntilEnd = decoded['reminderFluidUntilEnd'];
       if (rawUntilEnd is bool) reminderFluidUntilEnd = rawUntilEnd;
       // schema 12：软件更新设置。
-      final rawUpdateProxy =
-          decoded['selectedUpdateProxy'] ?? decoded['updateProxyUrl'];
+      final rawSelectedProxy = decoded['selectedUpdateProxy'];
+      final rawUpdateProxy = rawSelectedProxy is String
+          ? rawSelectedProxy
+          : decoded['updateProxyUrl'];
       if (rawUpdateProxy is String) {
         selectedUpdateProxy = rawUpdateProxy.trim();
       }

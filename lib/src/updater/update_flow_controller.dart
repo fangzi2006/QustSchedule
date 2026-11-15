@@ -335,17 +335,6 @@ class UpdateFlowController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 下载失败后返回待更新预览页。
-  void resetErrorToAvailable() {
-    if (_disposed) return;
-    if (_stage != UpdateFlowStage.error) return;
-    _errorMessage = null;
-    if (_allowAvailableFallback && release != null) {
-      _stage = UpdateFlowStage.available;
-    }
-    notifyListeners();
-  }
-
   /// 触发安装；返回是否已成功唤起安装器。
   Future<bool> executeInstall() async {
     if (_disposed || _isTriggeringInstall) return false;

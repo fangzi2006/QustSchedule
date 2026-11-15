@@ -227,11 +227,9 @@ class AppModel extends ChangeNotifier {
   Future<void> setSectionCounts(Map<PeriodGroup, int> value) =>
       prefs.setSectionCounts(value);
   List<SectionTime> get activeSections => prefs.activeSections;
-  int get timetableSectionCount => sectionCount;
   int get gridSectionCount => scheduleState.gridSectionCount;
   bool get hasSectionsBeyondTimetable =>
       scheduleState.hasSectionsBeyondTimetable;
-  String timeLabelOf(int period) => scheduleState.timeLabelOf(period);
   String startLabelOf(int period) => scheduleState.startLabelOf(period);
   String endLabelOf(int period) => scheduleState.endLabelOf(period);
   Future<void> saveTimetables(List<Timetable> tables) =>
@@ -349,7 +347,6 @@ class AppModel extends ChangeNotifier {
   );
   String get hint => hints.hint;
   bool get hintIsError => hints.hintIsError;
-  HintScope get hintScope => hints.hintScope;
   bool get isAcademicUpdateHint => hints.isAcademicUpdateHint;
 
   // ---------------------------------------------------------------------------

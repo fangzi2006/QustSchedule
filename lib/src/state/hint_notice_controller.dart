@@ -72,13 +72,6 @@ class HintNoticeController extends ChangeNotifier {
     return false;
   }
 
-  HintScope get hintScope {
-    if (_globalHint.isNotEmpty) return HintScope.global;
-    if (_scheduleHint.isNotEmpty) return HintScope.schedule;
-    if (_academicHint.isNotEmpty) return HintScope.academic;
-    return HintScope.global;
-  }
-
   void emitStorageNotice(String message) {
     if (_disposed) return;
     _storageNoticeMessage = message;

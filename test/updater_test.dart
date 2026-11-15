@@ -211,6 +211,24 @@ void main() {
         ).selectedUpdateProxy,
         equals('https://legacy-proxy.example'),
       );
+      expect(
+        Preferences.decode(
+          '{"selectedUpdateProxy": "https://new-proxy.example", "updateProxyUrl": "https://legacy-proxy.example"}',
+        ).selectedUpdateProxy,
+        equals('https://new-proxy.example'),
+      );
+      expect(
+        Preferences.decode(
+          '{"selectedUpdateProxy": "", "updateProxyUrl": "https://legacy-proxy.example"}',
+        ).selectedUpdateProxy,
+        isEmpty,
+      );
+      expect(
+        Preferences.decode(
+          '{"selectedUpdateProxy": 123, "updateProxyUrl": " https://legacy-proxy.example "}',
+        ).selectedUpdateProxy,
+        equals('https://legacy-proxy.example'),
+      );
 
       final model = AppModel(preferences: prefs);
       addTearDown(model.dispose);

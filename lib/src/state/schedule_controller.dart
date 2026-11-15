@@ -208,12 +208,6 @@ class ScheduleController extends ChangeNotifier {
     return null;
   }
 
-  String timeLabelOf(int period) {
-    final section = _sectionOf(period);
-    if (section == null) return '';
-    return '${formatClock(section.startMinutes)}–${formatClock(section.endMinutes)}';
-  }
-
   String startLabelOf(int period) {
     final section = _sectionOf(period);
     return section == null ? '' : formatClock(section.startMinutes);
