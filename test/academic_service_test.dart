@@ -48,21 +48,11 @@ void main() {
       expect(stats.averageGpa, closeTo(20.0 / 9.0, 0.0001));
     });
 
-    test('recognizes qualitative passing scores (通过, 良好, etc.)', () {
+    test('recognizes qualitative and extended passing scores vs failing', () {
       final grades = [
         const GradeItem(courseName: '形势与政策', credit: 1.0, rawScore: '通过'),
         const GradeItem(courseName: '军事理论', credit: 1.5, rawScore: '优秀'),
         const GradeItem(courseName: '毕业设计', credit: 4.0, rawScore: '中等'),
-      ];
-
-      final stats = GradeStats.calculate(grades);
-      expect(stats.totalCourses, equals(3));
-      expect(stats.passedCourses, equals(3));
-      expect(stats.passedCredits, equals(6.5));
-    });
-
-    test('recognizes extended passing scores (免修, 免考, 合格, P, p)', () {
-      final grades = [
         const GradeItem(courseName: '大学英语免修', credit: 2.0, rawScore: '免修'),
         const GradeItem(courseName: '体育免考', credit: 1.0, rawScore: '免考'),
         const GradeItem(courseName: '金工实习', credit: 1.5, rawScore: '合格'),
@@ -73,9 +63,9 @@ void main() {
       ];
 
       final stats = GradeStats.calculate(grades);
-      expect(stats.totalCourses, equals(7));
-      expect(stats.passedCourses, equals(5));
-      expect(stats.passedCredits, equals(6.0));
+      expect(stats.totalCourses, equals(10));
+      expect(stats.passedCourses, equals(8));
+      expect(stats.passedCredits, equals(12.5));
     });
   });
 
@@ -103,30 +93,27 @@ void main() {
       );
     });
 
-    test('fetchExams queries service and caches result', () async {
-      expect(await examCache.load('2026-2027-1'), isNull);
+    test(
+      'fetchExams and fetchGrades query service and cache results',
+      () async {
+        expect(await examCache.load('2026-2027-1'), isNull);
+        final exams = await academicService.fetchExams('2026-2027-1');
+        expect(exams, isNotEmpty);
+        expect(backend.examsCount, equals(1));
+        final cachedExams = await examCache.load('2026-2027-1');
+        expect(cachedExams, isNotNull);
+        expect(cachedExams!.items.length, equals(exams.length));
 
-      final exams = await academicService.fetchExams('2026-2027-1');
-      expect(exams, isNotEmpty);
-      expect(backend.examsCount, equals(1));
-
-      final cached = await examCache.load('2026-2027-1');
-      expect(cached, isNotNull);
-      expect(cached!.items.length, equals(exams.length));
-    });
-
-    test('fetchGrades queries service and caches result', () async {
-      expect(await gradesCache.load('2026-2027-1'), isNull);
-
-      final grades = await academicService.fetchGrades('2026-2027-1');
-      expect(grades, isNotEmpty);
-      expect(backend.gradesCount, equals(1));
-
-      final cached = await gradesCache.load('2026-2027-1');
-      expect(cached, isNotNull);
-      expect(cached!.items.length, equals(grades.length));
-      expect(cached.isNotEvaluated, isFalse);
-    });
+        expect(await gradesCache.load('2026-2027-1'), isNull);
+        final grades = await academicService.fetchGrades('2026-2027-1');
+        expect(grades, isNotEmpty);
+        expect(backend.gradesCount, equals(1));
+        final cachedGrades = await gradesCache.load('2026-2027-1');
+        expect(cachedGrades, isNotNull);
+        expect(cachedGrades!.items.length, equals(grades.length));
+        expect(cachedGrades.isNotEvaluated, isFalse);
+      },
+    );
 
     test(
       'fetchGrades records isNotEvaluated on notEvaluated AcademicError',

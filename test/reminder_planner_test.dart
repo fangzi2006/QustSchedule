@@ -93,72 +93,50 @@ ReminderPlan plan({
 
 void main() {
   group('提前量换算', () {
-    test('第 1-2 节 08:00 上课，提前 10 分钟 → 07:50', () {
-      final result = plan(entries: <ScheduleEntry>[entryOf()], horizonDays: 1);
-
-      expect(result.events.length, 1);
-      final event = result.events.single;
-      expect(DateTime.fromMillisecondsSinceEpoch(event.startMs).hour, 8);
-      expect(DateTime.fromMillisecondsSinceEpoch(event.startMs).minute, 0);
-      expect(DateTime.fromMillisecondsSinceEpoch(event.remindAtMs).hour, 7);
-      expect(DateTime.fromMillisecondsSinceEpoch(event.remindAtMs).minute, 50);
-      expect(event.startMs - event.remindAtMs, 10 * 60 * 1000);
-      expect(event.week, 1);
-      expect(event.teacher, '张三');
-      expect(event.location, '3教201');
-    });
-
-    test('提前量 30 分钟也按 30 分钟算', () {
-      final result = plan(
-        entries: <ScheduleEntry>[entryOf()],
+    test('按提前量（1/10/30 分钟）计算提醒时刻、endMs 及房间号裁剪', () {
+      final defResult = plan(
+        entries: <ScheduleEntry>[entryOf(location: '高密校区 M1-239')],
         horizonDays: 1,
-        lead: 30,
       );
-      final event = result.events.single;
-      expect(event.startMs - event.remindAtMs, 30 * 60 * 1000);
-      expect(result.leadMinutes, 30);
+      expect(defResult.events.length, 1);
+      final defEvent = defResult.events.single;
+      final start = DateTime.fromMillisecondsSinceEpoch(defEvent.startMs);
+      final remind = DateTime.fromMillisecondsSinceEpoch(defEvent.remindAtMs);
+      final end = DateTime.fromMillisecondsSinceEpoch(defEvent.endMs);
+      expect(start.hour, 8);
+      expect(start.minute, 0);
+      expect(remind.hour, 7);
+      expect(remind.minute, 50);
+      // 第 2 节 08:50–09:35（45 分钟一节、课间 5 分钟）
+      expect(end.hour, 9);
+      expect(end.minute, 35);
+      expect(defEvent.startMs - defEvent.remindAtMs, 10 * 60 * 1000);
+      expect(defEvent.week, 1);
+      expect(defEvent.teacher, '张三');
+      expect(defEvent.location, 'M1-239');
+
+      for (final lead in [1, 30]) {
+        final r = plan(
+          entries: <ScheduleEntry>[entryOf()],
+          horizonDays: 1,
+          lead: lead,
+        );
+        expect(r.leadMinutes, lead);
+        expect(
+          r.events.single.startMs - r.events.single.remindAtMs,
+          lead * 60 * 1000,
+        );
+      }
     });
 
     test('提前量收敛到 1~60 分钟，中间值原样保留', () {
       expect(clampReminderLead(-5), reminderMinLeadMinutes);
       expect(clampReminderLead(0), reminderMinLeadMinutes);
       expect(clampReminderLead(1), 1);
-      // 滑块可以取任意整数，不能悄悄改回默认档位。
       expect(clampReminderLead(7), 7);
       expect(clampReminderLead(43), 43);
       expect(clampReminderLead(60), reminderMaxLeadMinutes);
       expect(clampReminderLead(999), reminderMaxLeadMinutes);
-    });
-
-    test('通知里的地点与课表格子一致（只留房间号）', () {
-      final result = plan(
-        entries: <ScheduleEntry>[entryOf(location: '高密校区 M1-239')],
-        horizonDays: 1,
-      );
-      expect(result.events.single.location, 'M1-239');
-    });
-
-    test('提前量 1 分钟（滑块下界）也算得对', () {
-      final result = plan(
-        entries: <ScheduleEntry>[entryOf()],
-        horizonDays: 1,
-        lead: 1,
-      );
-      final event = result.events.single;
-      expect(event.startMs - event.remindAtMs, 60 * 1000);
-      expect(result.leadMinutes, 1);
-    });
-
-    test('节次结束时刻按 endPeriod 算', () {
-      final result = plan(
-        entries: <ScheduleEntry>[entryOf(start: 1, end: 2)],
-        horizonDays: 1,
-      );
-      final event = result.events.single;
-      // 第 2 节 08:50–09:35（QuickSetup 默认 45 分钟一节、课间 5 分钟）。
-      final end = DateTime.fromMillisecondsSinceEpoch(event.endMs);
-      expect(end.hour, 9);
-      expect(end.minute, 35);
     });
   });
 
@@ -178,8 +156,8 @@ void main() {
       afternoonStart: 13 * 60 + 30,
     );
 
-    test('6 月的课用 5 月 1 日生效的夏季作息（14:00）', () {
-      final result = planCourseReminders(
+    test('按课程当天匹配生效作息表（6 月夏季 14:00 / 10 月秋冬 13:30）', () {
+      final juneResult = planCourseReminders(
         entries: <ScheduleEntry>[entryOf(start: 5, end: 6)],
         reschedules: const <RescheduleRule>[],
         termStart: DateTime(2026, 5, 4),
@@ -190,15 +168,13 @@ void main() {
         maxWeek: 20,
         horizonDays: 1,
       );
-      final start = DateTime.fromMillisecondsSinceEpoch(
-        result.events.single.startMs,
+      final juneStart = DateTime.fromMillisecondsSinceEpoch(
+        juneResult.events.single.startMs,
       );
-      expect(start.hour, 14);
-      expect(start.minute, 0);
-    });
+      expect(juneStart.hour, 14);
+      expect(juneStart.minute, 0);
 
-    test('10 月的课用 10 月 1 日生效的秋冬作息（13:30）', () {
-      final result = planCourseReminders(
+      final octResult = planCourseReminders(
         entries: <ScheduleEntry>[entryOf(start: 5, end: 6)],
         reschedules: const <RescheduleRule>[],
         termStart: termStart,
@@ -209,11 +185,11 @@ void main() {
         maxWeek: 20,
         horizonDays: 1,
       );
-      final start = DateTime.fromMillisecondsSinceEpoch(
-        result.events.single.startMs,
+      final octStart = DateTime.fromMillisecondsSinceEpoch(
+        octResult.events.single.startMs,
       );
-      expect(start.hour, 13);
-      expect(start.minute, 30);
+      expect(octStart.hour, 13);
+      expect(octStart.minute, 30);
     });
 
     test('课表节次超出作息表 → 跳过并计数，不抛异常', () {
@@ -229,106 +205,97 @@ void main() {
   });
 
   group('周次与调课', () {
-    test('单周课只在命中周出现', () {
-      // 14 天窗口从周一起算只覆盖第 1–2 周，这里放长到 15 天才够到第 3 周。
-      final result = plan(
+    test('单周课命中、weeks 为空默认每周、超出 maxWeek 的日子不排', () {
+      // 14 天窗口从周一起算只覆盖第 1–2 周，放长到 15 天够到第 3 周
+      final singleWeek = plan(
         entries: <ScheduleEntry>[
           entryOf(weeks: <int>[3]),
         ],
         horizonDays: 15,
       );
-      expect(result.events.length, 1);
+      expect(singleWeek.events.length, 1);
       final start = DateTime.fromMillisecondsSinceEpoch(
-        result.events.single.startMs,
+        singleWeek.events.single.startMs,
       );
       expect(start, DateTime(2026, 9, 21, 8));
-      expect(result.events.single.week, 3);
+      expect(singleWeek.events.single.week, 3);
+
+      // weeks 为空视为每周都上
+      final everyWeek = plan(entries: <ScheduleEntry>[entryOf()]);
+      expect(everyWeek.events.length, 2);
+      expect(everyWeek.events.first.week, 1);
+      expect(everyWeek.events.last.week, 2);
+
+      // 超出 maxWeek 的日子不排
+      final cappedWeek = plan(entries: <ScheduleEntry>[entryOf()], maxWeek: 1);
+      expect(cappedWeek.events.length, 1);
     });
 
-    test('weeks 为空视为每周都上', () {
-      final result = plan(entries: <ScheduleEntry>[entryOf()]);
-      expect(result.events.length, 2);
-      expect(result.events.first.week, 1);
-      expect(result.events.last.week, 2);
-    });
-
-    test('超出 maxWeek 的日子不排', () {
-      final result = plan(entries: <ScheduleEntry>[entryOf()], maxWeek: 1);
-      expect(result.events.length, 1);
-    });
-
-    test('调课把周一的课挪到周二', () {
-      final result = plan(
+    test('调课把周一的课挪到周二，且周二被顶掉的原课不再提醒', () {
+      const rule = RescheduleRule(
+        id: 'r1',
+        fromMonth: 9,
+        fromDay: 7,
+        toMonth: 9,
+        toDay: 8,
+      );
+      final moved = plan(
         entries: <ScheduleEntry>[entryOf()],
-        reschedules: <RescheduleRule>[
-          const RescheduleRule(
-            id: 'r1',
-            fromMonth: 9,
-            fromDay: 7,
-            toMonth: 9,
-            toDay: 8,
-          ),
-        ],
+        reschedules: const <RescheduleRule>[rule],
         horizonDays: 2,
       );
-
-      expect(result.events.length, 1);
-      final start = DateTime.fromMillisecondsSinceEpoch(
-        result.events.single.startMs,
+      expect(moved.events.length, 1);
+      expect(
+        DateTime.fromMillisecondsSinceEpoch(moved.events.single.startMs),
+        DateTime(2026, 9, 8, 8),
       );
-      expect(start, DateTime(2026, 9, 8, 8));
-    });
 
-    test('调课顶掉的原课不再提醒', () {
-      final result = plan(
+      final overridden = plan(
         entries: <ScheduleEntry>[
           entryOf(id: 'a', day: 1, start: 1, end: 2, weeks: <int>[1]),
           entryOf(id: 'b', day: 2, start: 1, end: 2, weeks: <int>[1]),
         ],
-        reschedules: <RescheduleRule>[
-          const RescheduleRule(
-            id: 'r1',
-            fromMonth: 9,
-            fromDay: 7,
-            toMonth: 9,
-            toDay: 8,
-          ),
-        ],
+        reschedules: const <RescheduleRule>[rule],
         horizonDays: 2,
       );
-
-      // 周二原本的课被调进来的课顶掉，只留一条。
-      expect(result.events.length, 1);
-      expect(result.events.single.entryId, 'a');
-      final start = DateTime.fromMillisecondsSinceEpoch(
-        result.events.single.startMs,
+      expect(overridden.events.length, 1);
+      expect(overridden.events.single.entryId, 'a');
+      expect(
+        DateTime.fromMillisecondsSinceEpoch(overridden.events.single.startMs),
+        DateTime(2026, 9, 8, 8),
       );
-      expect(start, DateTime(2026, 9, 8, 8));
     });
   });
 
   group('过期与截断', () {
-    test('已经响过的事件不补发', () {
-      final result = plan(
+    test('已经响过或提前量把提醒时刻推到过去时均不补发', () {
+      final pastCourse = plan(
         entries: <ScheduleEntry>[entryOf()],
         horizonDays: 1,
         now: DateTime(2026, 9, 7, 9),
       );
-      expect(result.events, isEmpty);
-    });
+      expect(pastCourse.events, isEmpty);
 
-    test('提前量把时刻推到过去时同样不补发', () {
-      // 08:00 上课、提前 30 分钟 = 07:30；now 已经是 07:40。
-      final result = plan(
+      // 08:00 上课、提前 30 分钟 = 07:30；now 已经是 07:40
+      final pastLead = plan(
         entries: <ScheduleEntry>[entryOf()],
         horizonDays: 1,
         lead: 30,
         now: DateTime(2026, 9, 7, 7, 40),
       );
-      expect(result.events, isEmpty);
+      expect(pastLead.events, isEmpty);
     });
 
-    test('超过 maxEvents 截断，保留最早的那几条', () {
+    test('按 remindAtMs 升序排列，超过 maxEvents 时截断并保留最早事件', () {
+      final ordered = plan(
+        entries: <ScheduleEntry>[
+          entryOf(id: 'b', start: 3, end: 4),
+          entryOf(id: 'a', start: 1, end: 2),
+        ],
+        horizonDays: 1,
+      );
+      expect(ordered.events.map((e) => e.entryId).toList(), <String>['a', 'b']);
+
       final entries = <ScheduleEntry>[
         for (var day = 1; day <= 7; day++)
           entryOf(id: 'c$day', day: day, start: 1, end: 2),
@@ -344,17 +311,6 @@ void main() {
         result.coverageEndMs,
         result.events.map((e) => e.startMs).reduce((a, b) => a > b ? a : b),
       );
-    });
-
-    test('按 remindAtMs 升序，同一时刻按 id 稳定排序', () {
-      final result = plan(
-        entries: <ScheduleEntry>[
-          entryOf(id: 'b', start: 3, end: 4),
-          entryOf(id: 'a', start: 1, end: 2),
-        ],
-        horizonDays: 1,
-      );
-      expect(result.events.map((e) => e.entryId).toList(), <String>['a', 'b']);
     });
   });
 
@@ -396,35 +352,31 @@ void main() {
       expect(first.fingerprint, second.fingerprint);
     });
 
-    test('改提前量 → 指纹变化', () {
-      final ten = plan(entries: <ScheduleEntry>[entryOf()], lead: 10);
-      final twenty = plan(entries: <ScheduleEntry>[entryOf()], lead: 20);
-      expect(ten.fingerprint, isNot(twenty.fingerprint));
-    });
+    test('改提前量 / 改形态 / 改课表均会使指纹变化', () {
+      final base = plan(entries: <ScheduleEntry>[entryOf()], lead: 10);
+      expect(
+        base.fingerprint,
+        isNot(plan(entries: <ScheduleEntry>[entryOf()], lead: 20).fingerprint),
+      );
 
-    test('改形态 → 指纹变化（否则旧闹钟不改形态）', () {
-      final banner = plan(entries: <ScheduleEntry>[entryOf()]);
       final fluid = plan(
         entries: <ScheduleEntry>[entryOf()],
         style: ReminderStyle.fluid,
       );
-      expect(banner.style, ReminderStyle.banner);
+      expect(base.style, ReminderStyle.banner);
       expect(fluid.style, ReminderStyle.fluid);
-      expect(banner.fingerprint, isNot(fluid.fingerprint));
-    });
+      expect(base.fingerprint, isNot(fluid.fingerprint));
 
-    test('改课表 → 指纹变化', () {
-      final one = plan(entries: <ScheduleEntry>[entryOf()]);
-      final two = plan(
+      final withExtraCourse = plan(
         entries: <ScheduleEntry>[
           entryOf(),
           entryOf(id: 'c9', day: 3),
         ],
       );
-      expect(one.fingerprint, isNot(two.fingerprint));
+      expect(base.fingerprint, isNot(withExtraCourse.fingerprint));
     });
 
-    test('payload 结构：版本、提前量、事件字段齐全', () {
+    test('payload 结构：版本、提前量、事件字段齐全，无事件时为空数组', () {
       final result = plan(entries: <ScheduleEntry>[entryOf()], horizonDays: 1);
       final decoded =
           jsonDecode(result.toPayloadJson()) as Map<String, dynamic>;
@@ -447,40 +399,31 @@ void main() {
       expect(event['week'], 1);
       expect(event['remindAtMs'], isA<int>());
       expect((event['remindAtMs'] as int) < (event['startMs'] as int), isTrue);
-    });
 
-    test('没有事件时 payload 里是空数组', () {
-      final result = plan(entries: const <ScheduleEntry>[]);
-      final decoded =
-          jsonDecode(result.toPayloadJson()) as Map<String, dynamic>;
-      expect(decoded['events'], isEmpty);
-      expect(result.nextTriggerMs, isNull);
+      final emptyResult = plan(entries: const <ScheduleEntry>[]);
+      final emptyDecoded =
+          jsonDecode(emptyResult.toPayloadJson()) as Map<String, dynamic>;
+      expect(emptyDecoded['events'], isEmpty);
+      expect(emptyResult.nextTriggerMs, isNull);
     });
   });
 
   group('事件 id', () {
-    test('同一门课同一天同一起始节 → 同一个 id', () {
-      final a = reminderEventId(
-        entryId: 'c1',
-        date: DateTime(2026, 9, 7),
-        startPeriod: 1,
-      );
-      final b = reminderEventId(
-        entryId: 'c1',
-        date: DateTime(2026, 9, 7),
-        startPeriod: 1,
-      );
-      expect(a, b);
-      expect(a.startsWith('e_'), isTrue);
-      expect(a.length, 10);
-    });
-
-    test('换一天 / 换节次 / 换课程 → id 不同', () {
+    test('同课同日同起始节 id 一致；换天 / 换节次 / 换课程 id 不同', () {
       final base = reminderEventId(
         entryId: 'c1',
         date: DateTime(2026, 9, 7),
         startPeriod: 1,
       );
+      final same = reminderEventId(
+        entryId: 'c1',
+        date: DateTime(2026, 9, 7),
+        startPeriod: 1,
+      );
+      expect(base, same);
+      expect(base.startsWith('e_'), isTrue);
+      expect(base.length, 10);
+
       expect(
         reminderEventId(
           entryId: 'c1',

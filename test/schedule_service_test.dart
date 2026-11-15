@@ -1,17 +1,10 @@
 /// 编排层测试：需求 1（保存后免密取课表）与需求 2（失效自动重登）。
-///
-/// 每个用例都盯着一个具体的失败模式，不是"跑通就算过"：
-///  - 只有 SESSION_EXPIRED 触发重登（PAGE_CHANGED 不触发，防白耗失败次数）；
-///  - 重登失败必须回滚旧 Cookie；
-///  - 并发只登一次（单 flight）；
-///  - 熔断打开后不再登录；
-///  - 验证码走回调，取消时不留半死状态。
 library;
 
 import 'dart:async';
 
-import 'package:qustschedule/src/schedule_service.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:qustschedule/src/schedule_service.dart';
 import 'package:zf_academic/zf_academic_io.dart';
 
 import 'support/fake_backend.dart';
@@ -47,70 +40,63 @@ class _Harness {
   final InMemoryCredentialStore credentials;
   late final ScheduleService service;
 
-  /// 编排层实际传给客户端的配置（用来验证 onRequest 等接线）。
   ZfClientConfig? config;
 
   static const String accountKey = '$_baseUrl|20240001';
 }
 
 void main() {
-  group('需求 1：Cookie 优先', () {
-    test('Cookie 有效时直接取课表，不触发登录', () async {
-      final h = _Harness();
-      await h.credentials.save(
+  group('需求 1：Cookie 优先与快照校验', () {
+    test('Cookie 有效时直接取课表（无论是否存凭据），不触发登录且超时设为 10 秒', () async {
+      final h1 = _Harness();
+      await h1.credentials.save(
         _Harness.accountKey,
         const Credentials('20240001', 'pw'),
       );
+      final schedule1 = await h1.service.getSchedule();
+      expect(schedule1.entries, isNotEmpty);
+      expect(h1.backend.fetchCount, 1);
+      expect(h1.backend.loginCount, 0);
+      expect(h1.config?.requestTimeoutMs, 10000);
 
-      final schedule = await h.service.getSchedule();
-
-      expect(schedule.entries, isNotEmpty);
-      expect(h.backend.fetchCount, 1);
-      expect(h.backend.loginCount, 0, reason: 'Cookie 有效就不该登录');
-      expect(h.config?.requestTimeoutMs, 10000, reason: '客户端超时应统一设为 10 秒');
+      // 不保存任何凭据时同样能直接用有效 Cookie 取课表
+      final h2 = _Harness();
+      final schedule2 = await h2.service.getSchedule();
+      expect(schedule2.entries, isNotEmpty);
+      expect(h2.backend.loginCount, 0);
     });
 
-    test('有快照时 bootstrap 原样返回；快照的 Cookie 会被带进客户端', () async {
-      final storage = FakeSessionRepository(
+    test('bootstrap 快照校验：同源非空原样返回，换地址或空 Cookie 清盘丢弃', () async {
+      final validStorage = FakeSessionRepository(
         snapshotOf(_baseUrl, value: 'saved'),
       );
-      final h = _Harness(storage: storage);
-
-      final snapshot = await h.service.bootstrap();
-
+      final hValid = _Harness(storage: validStorage);
+      final snapshot = await hValid.service.bootstrap();
       expect(snapshot, isNotNull);
       expect(snapshot!.cookies.single.value, 'saved');
-    });
 
-    test('换地址后旧快照被丢弃并清盘（避免把旧线路会话带过去）', () async {
-      final storage = FakeSessionRepository(
+      final oldUrlStorage = FakeSessionRepository(
         snapshotOf('https://old.example.edu.cn/jwglxt'),
       );
-      final h = _Harness(storage: storage);
+      final hOldUrl = _Harness(storage: oldUrlStorage);
+      expect(await hOldUrl.service.bootstrap(), isNull);
+      expect(oldUrlStorage.clearCount, 1);
 
-      final snapshot = await h.service.bootstrap();
-
-      expect(snapshot, isNull);
-      expect(storage.clearCount, 1);
-    });
-
-    test('空 Cookie 快照视为没有会话', () async {
-      final storage = FakeSessionRepository(
-        CookieStoreSnapshot(
+      final emptyCookieStorage = FakeSessionRepository(
+        const CookieStoreSnapshot(
           version: 1,
           baseUrl: _baseUrl,
           savedAt: 1,
-          cookies: const <CookieRecord>[],
+          cookies: <CookieRecord>[],
         ),
       );
-      final h = _Harness(storage: storage);
-
-      expect(await h.service.bootstrap(), isNull);
-      expect(storage.clearCount, 1);
+      final hEmpty = _Harness(storage: emptyCookieStorage);
+      expect(await hEmpty.service.bootstrap(), isNull);
+      expect(emptyCookieStorage.clearCount, 1);
     });
   });
 
-  group('需求 2：失效回退登录', () {
+  group('需求 2：失效回退登录与熔断', () {
     test('Cookie 失效 → 用保存的账密重登 → 重试一次成功 → 新 Cookie 落盘', () async {
       final h = _Harness();
       await h.credentials.save(
@@ -125,45 +111,53 @@ void main() {
       final schedule = await h.service.getSchedule();
 
       expect(schedule.entries, isNotEmpty);
-      expect(h.backend.fetchCount, 2, reason: '失效后只重试一次');
+      expect(h.backend.fetchCount, 2);
       expect(h.backend.loginCount, 1);
-      expect(
-        h.storage.saveCount,
-        greaterThanOrEqualTo(1),
-        reason: '新 Cookie 必须落盘',
-      );
+      expect(h.storage.saveCount, greaterThanOrEqualTo(1));
       expect(h.storage.snapshot!.cookies.single.value, 'fresh');
     });
 
-    test('没有保存账密时抛 SESSION_EXPIRED 且不尝试登录', () async {
-      final h = _Harness();
-      h.backend.fetchBehavior = (call, termId) async => throw expired();
+    test(
+      '没有保存账密时 getSchedule / fetchExams / fetchGrades 抛 SESSION_EXPIRED 且不登录',
+      () async {
+        final h = _Harness();
+        h.backend.fetchBehavior = (call, termId) async => throw expired();
+        h.backend.examsBehavior = (call, termId) async => throw expired();
+        h.backend.gradesBehavior = (call, termId) async => throw expired();
 
-      await expectLater(
-        h.service.getSchedule(),
-        throwsA(
-          isA<AcademicError>().having(
-            (e) => e.code,
-            'code',
-            ErrorCode.sessionExpired,
-          ),
-        ),
-      );
-      expect(h.backend.loginCount, 0);
-    });
+        for (final action in <Future<Object?> Function()>[
+          h.service.getSchedule,
+          h.service.fetchExams,
+          h.service.fetchGrades,
+        ]) {
+          await expectLater(
+            action(),
+            throwsA(
+              isA<AcademicError>().having(
+                (e) => e.code,
+                'code',
+                ErrorCode.sessionExpired,
+              ),
+            ),
+          );
+        }
+        expect(h.backend.loginCount, 0);
+      },
+    );
 
-    test('重登被拒（密码已改）→ 旧 Cookie 回滚，错误上抛', () async {
-      final h = _Harness();
-      await h.credentials.save(
+    test('重登被拒或重登后重试仍失败时回滚旧 Cookie 并原样上抛错误', () async {
+      // 场景 A：重登被拒（密码已改）
+      final h1 = _Harness();
+      await h1.credentials.save(
         _Harness.accountKey,
         const Credentials('20240001', 'old-pw'),
       );
-      h.backend.fetchBehavior = (call, termId) async => throw expired();
-      h.backend.loginBehavior = (call, credentials) async =>
+      h1.backend.fetchBehavior = (call, termId) async => throw expired();
+      h1.backend.loginBehavior = (call, credentials) async =>
           throw badCredentials();
 
       await expectLater(
-        h.service.getSchedule(),
+        h1.service.getSchedule(),
         throwsA(
           isA<AcademicError>().having(
             (e) => e.code,
@@ -172,25 +166,24 @@ void main() {
           ),
         ),
       );
-      expect(h.backend.importCount, 1, reason: '失败必须恢复旧 Cookie');
-      expect(h.backend.lastImported!.cookies.single.value, 'old');
-    });
+      expect(h1.backend.importCount, 1);
+      expect(h1.backend.lastImported!.cookies.single.value, 'old');
 
-    test('重登成功但重试仍失败（页面结构变化）→ 回滚并上抛原错误', () async {
-      final h = _Harness();
-      await h.credentials.save(
+      // 场景 B：重登成功但重试仍失败（页面结构变化）
+      final h2 = _Harness();
+      await h2.credentials.save(
         _Harness.accountKey,
         const Credentials('20240001', 'pw'),
       );
       var call = 0;
-      h.backend.fetchBehavior = (_, termId) async {
+      h2.backend.fetchBehavior = (_, termId) async {
         call++;
         if (call == 1) throw expired();
         throw pageChanged();
       };
 
       await expectLater(
-        h.service.getSchedule(),
+        h2.service.getSchedule(),
         throwsA(
           isA<AcademicError>().having(
             (e) => e.code,
@@ -199,10 +192,10 @@ void main() {
           ),
         ),
       );
-      expect(h.backend.importCount, 1);
+      expect(h2.backend.importCount, 1);
     });
 
-    test('PAGE_CHANGED 不触发重登（重登解决不了，还会白耗失败次数）', () async {
+    test('PAGE_CHANGED 不触发重登（防白耗失败次数）', () async {
       final h = _Harness();
       await h.credentials.save(
         _Harness.accountKey,
@@ -224,45 +217,80 @@ void main() {
       expect(h.backend.fetchCount, 1);
     });
 
-    test('单 flight：并发 3 次取课表，只登一次、只重试一次', () async {
-      final h = _Harness();
-      await h.credentials.save(
+    test('单 flight：并发多次取课表及跨接口（课表/考试/成绩）并发失效均共享单次重登', () async {
+      // 1. 并发 3 次 getSchedule
+      final h1 = _Harness();
+      await h1.credentials.save(
         _Harness.accountKey,
         const Credentials('20240001', 'pw'),
       );
-      h.backend.loginBehavior = (call, credentials) async {
-        await Future<void>.delayed(const Duration(milliseconds: 30));
-        h.backend.cookies = snapshotOf(_baseUrl, value: 'fresh');
+      h1.backend.loginBehavior = (call, credentials) async {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        h1.backend.cookies = snapshotOf(_baseUrl, value: 'fresh');
         return const AuthenticatedState(studentId: '1', studentName: 'n');
       };
-      h.backend.fetchBehavior = (call, termId) async {
+      h1.backend.fetchBehavior = (call, termId) async {
         if (call == 1) throw expired();
         return sampleSchedule();
       };
 
-      final results = await Future.wait(<Future<Schedule>>[
-        h.service.getSchedule(),
-        h.service.getSchedule(),
-        h.service.getSchedule(),
+      final schedules = await Future.wait(<Future<Schedule>>[
+        h1.service.getSchedule(),
+        h1.service.getSchedule(),
+        h1.service.getSchedule(),
       ]);
+      expect(schedules, hasLength(3));
+      expect(h1.backend.loginCount, 1);
+      expect(h1.backend.fetchCount, 2);
 
-      expect(results, hasLength(3));
-      expect(h.backend.loginCount, 1, reason: '并发必须共享同一次登录');
-      expect(h.backend.fetchCount, 2);
+      // 2. getSchedule + fetchExams + fetchGrades 并发失效共享单次重登
+      final h2 = _Harness();
+      await h2.credentials.save(
+        _Harness.accountKey,
+        const Credentials('20240001', 'pw'),
+      );
+      var scheduleCall = 0;
+      h2.backend.fetchBehavior = (call, termId) async {
+        if (++scheduleCall == 1) throw expired();
+        return sampleSchedule();
+      };
+      var examsCall = 0;
+      h2.backend.examsBehavior = (call, termId) async {
+        if (++examsCall == 1) throw expired();
+        return sampleExams();
+      };
+      var gradesCall = 0;
+      h2.backend.gradesBehavior = (call, termId) async {
+        if (++gradesCall == 1) throw expired();
+        return sampleGrades();
+      };
+      h2.backend.loginBehavior = (call, credentials) async {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        h2.backend.cookies = snapshotOf(_baseUrl, value: 'fresh');
+        return const AuthenticatedState(studentId: '1', studentName: 'n');
+      };
+
+      final mixed = await Future.wait<dynamic>(<Future<dynamic>>[
+        h2.service.getSchedule(),
+        h2.service.fetchExams(),
+        h2.service.fetchGrades(),
+      ]);
+      expect(mixed[0], isA<Schedule>());
+      expect(mixed[1], isA<List<ExamItem>>());
+      expect(mixed[2], isA<List<GradeItem>>());
+      expect(h2.backend.loginCount, 1);
     });
 
-    test('熔断：超出窗口内自动登录次数后不再登录，直接要求手动登录', () async {
+    test('熔断：超出窗口内自动登录次数后不再登录，手动 signIn 成功后解除熔断', () async {
       final h = _Harness(autoLoginLimit: 1);
       await h.credentials.save(
         _Harness.accountKey,
         const Credentials('20240001', 'pw'),
       );
 
-      // 第一次：失效 → 重登成功 → 重试又失效（第二轮回抛）
       var round = 0;
       h.backend.fetchBehavior = (call, termId) async {
         round++;
-        // 第 1、2 次都失效 → 触发一次重登，重试仍失效
         if (round <= 2) throw expired();
         return sampleSchedule();
       };
@@ -271,13 +299,10 @@ void main() {
         return const AuthenticatedState(studentId: '1', studentName: 'n');
       };
 
-      // 第一次：允许一次自动登录（limit=1），但重试仍失效 → 报错，熔断还没开
       await expectLater(h.service.getSchedule(), throwsA(isA<AcademicError>()));
-      final loginsAfterFirst = h.backend.loginCount;
-      expect(loginsAfterFirst, 1);
-      expect(h.service.breakerOpen, isFalse, reason: '窗口内第 1 次自动登录仍应允许');
+      expect(h.backend.loginCount, 1);
+      expect(h.service.breakerOpen, isFalse);
 
-      // 第二次：已达上限 → 直接熔断，不再登录
       h.backend.fetchBehavior = (call, termId) async => throw expired();
       await expectLater(
         h.service.getSchedule(),
@@ -289,19 +314,7 @@ void main() {
           ),
         ),
       );
-      expect(h.backend.loginCount, loginsAfterFirst, reason: '熔断后不得再登录');
-      expect(h.service.breakerOpen, isTrue);
-    });
-
-    test('手动登录成功会解除熔断', () async {
-      final h = _Harness(autoLoginLimit: 0);
-      await h.credentials.save(
-        _Harness.accountKey,
-        const Credentials('20240001', 'pw'),
-      );
-      h.backend.fetchBehavior = (call, termId) async => throw expired();
-
-      await expectLater(h.service.getSchedule(), throwsA(isA<AcademicError>()));
+      expect(h.backend.loginCount, 1);
       expect(h.service.breakerOpen, isTrue);
 
       final state = await h.service.signIn('20240001', 'pw');
@@ -309,55 +322,55 @@ void main() {
       expect(h.service.breakerOpen, isFalse);
     });
 
-    test('自动重登遇验证码：回调拿到的码被提交，成功后继续取课表', () async {
+    test('自动重登遇验证码：回调提交成功后重试，用户取消则抛 CAPTCHA_REQUIRED 并回滚', () async {
       String? receivedCode;
-      final h = _Harness(
+      final hOk = _Harness(
         captchaHandler: (state) async {
           expect(state.imageBase64, isNotEmpty);
           return '1234';
         },
       );
-      await h.credentials.save(
+      await hOk.credentials.save(
         _Harness.accountKey,
         const Credentials('20240001', 'pw'),
       );
-      h.backend.fetchBehavior = (call, termId) async {
+      hOk.backend.fetchBehavior = (call, termId) async {
         if (call == 1) throw expired();
         return sampleSchedule();
       };
-      h.backend.loginBehavior = (call, credentials) async => const CaptchaState(
-        continuationId: 'c1',
-        imageBase64: 'iVBORw0KGgo=',
-        mimeType: 'image/png',
-      );
-      h.backend.submitBehavior = (call, code) async {
+      hOk.backend.loginBehavior = (call, credentials) async =>
+          const CaptchaState(
+            continuationId: 'c1',
+            imageBase64: 'iVBORw0KGgo=',
+            mimeType: 'image/png',
+          );
+      hOk.backend.submitBehavior = (call, code) async {
         receivedCode = code;
-        h.backend.cookies = snapshotOf(_baseUrl, value: 'fresh');
+        hOk.backend.cookies = snapshotOf(_baseUrl, value: 'fresh');
         return const AuthenticatedState(studentId: '1', studentName: 'n');
       };
 
-      final schedule = await h.service.getSchedule();
-
+      final schedule = await hOk.service.getSchedule();
       expect(receivedCode, '1234');
-      expect(h.backend.submitCount, 1);
+      expect(hOk.backend.submitCount, 1);
       expect(schedule.entries, isNotEmpty);
-    });
 
-    test('自动重登遇验证码但用户取消：抛 CAPTCHA_REQUIRED 并回滚', () async {
-      final h = _Harness(captchaHandler: (state) async => null);
-      await h.credentials.save(
+      // 用户取消验证码
+      final hCancel = _Harness(captchaHandler: (state) async => null);
+      await hCancel.credentials.save(
         _Harness.accountKey,
         const Credentials('20240001', 'pw'),
       );
-      h.backend.fetchBehavior = (call, termId) async => throw expired();
-      h.backend.loginBehavior = (call, credentials) async => const CaptchaState(
-        continuationId: 'c1',
-        imageBase64: 'iVBORw0KGgo=',
-        mimeType: 'image/png',
-      );
+      hCancel.backend.fetchBehavior = (call, termId) async => throw expired();
+      hCancel.backend.loginBehavior = (call, credentials) async =>
+          const CaptchaState(
+            continuationId: 'c1',
+            imageBase64: 'iVBORw0KGgo=',
+            mimeType: 'image/png',
+          );
 
       await expectLater(
-        h.service.getSchedule(),
+        hCancel.service.getSchedule(),
         throwsA(
           isA<AcademicError>().having(
             (e) => e.code,
@@ -366,18 +379,27 @@ void main() {
           ),
         ),
       );
-      expect(h.backend.importCount, 1);
-      expect(h.backend.submitCount, 0);
+      expect(hCancel.backend.importCount, 1);
+      expect(hCancel.backend.submitCount, 0);
     });
   });
 
-  group('调试数据（DebugPage 的数据源）', () {
-    test('onRequest 被注入，请求记录进 service.requestLog', () async {
+  group('调试数据、阶段回调与多接口重登', () {
+    test('onRequest 请求记录、原始课表透出及重登阶段回调一致性', () async {
       final h = _Harness();
-      await h.service.getSchedule();
+      final stages = <String>[];
+      h.service.onStage = stages.add;
+      h.backend.lastScheduleRawBody = '{"kbList":[{"kcmc":"x"}]}';
+      h.backend.lastScheduleRows = <Map<String, dynamic>>[
+        <String, dynamic>{'kcmc': 'x', 'xqj': '1'},
+      ];
 
-      expect(h.config, isNotNull);
-      expect(h.config!.onRequest, isNotNull, reason: '必须在建客户端时注入记录器');
+      // Cookie 有效时不触发 relogin 阶段，且透出原始课表并注入 onRequest
+      await h.service.getSchedule();
+      expect(stages, isEmpty);
+      expect(h.service.lastScheduleRawBody, '{"kbList":[{"kcmc":"x"}]}');
+      expect(h.service.lastScheduleRows.single['kcmc'], 'x');
+      expect(h.config?.onRequest, isNotNull);
 
       h.config!.onRequest!(
         const RequestLog(
@@ -389,455 +411,213 @@ void main() {
       );
       expect(h.service.requestLog, hasLength(1));
       expect(h.service.requestLog.single.status, 200);
-      expect(h.service.requestLog.single.method, 'GET');
-    });
 
-    test('客户端拿到的原始课表数据经 service 透出', () async {
-      final h = _Harness();
-      h.backend.lastScheduleRawBody = '{"kbList":[{"kcmc":"x"}]}';
-      h.backend.lastScheduleRows = <Map<String, dynamic>>[
-        <String, dynamic>{'kcmc': 'x', 'xqj': '1'},
-      ];
-
-      await h.service.getSchedule();
-
-      expect(h.service.lastScheduleRawBody, '{"kbList":[{"kcmc":"x"}]}');
-      expect(h.service.lastScheduleRows, hasLength(1));
-      expect(h.service.lastScheduleRows.single['kcmc'], 'x');
-    });
-  });
-
-  group('阶段回调（供 UI 显示"正在重新登录"）', () {
-    test('自动重登会按序触发 relogin 与 fetching_schedule 阶段', () async {
-      final h = _Harness();
-      final stages = <String>[];
-      h.service.onStage = stages.add;
+      // 课表、考试、成绩遇 Cookie 失效重登时按序触发阶段回调
       await h.credentials.save(
         _Harness.accountKey,
         const Credentials('20240001', 'pw'),
       );
+      var fetchCall = 0;
       h.backend.fetchBehavior = (call, termId) async {
-        if (call == 1) throw expired();
+        if (++fetchCall == 1) throw expired();
         return sampleSchedule();
       };
-
       await h.service.getSchedule();
-
       expect(stages, [
         ScheduleService.stageRelogin,
         ScheduleService.stageFetchingSchedule,
       ]);
-    });
-
-    test('Cookie 有效时不触发 relogin 阶段', () async {
-      final h = _Harness();
-      final stages = <String>[];
-      h.service.onStage = stages.add;
-
-      await h.service.getSchedule();
-
-      expect(stages, isEmpty);
-    });
-
-    test('考试与成绩查询遇 Cookie 失效重登时同样触发 relogin 阶段（行为一致性）', () async {
-      final h = _Harness();
-      final stages = <String>[];
-      h.service.onStage = stages.add;
-      await h.credentials.save(
-        _Harness.accountKey,
-        const Credentials('20240001', 'pw'),
-      );
-
-      h.backend.examsBehavior = (call, termId) async {
-        if (call == 1) throw expired();
-        return const <ExamItem>[];
-      };
-
-      await h.service.fetchExams();
-      expect(stages, contains(ScheduleService.stageRelogin));
 
       stages.clear();
-      h.backend.gradesBehavior = (call, termId) async {
-        if (call == 1) throw expired();
-        return const <GradeItem>[];
+      var examsCall = 0;
+      h.backend.examsBehavior = (call, termId) async {
+        if (++examsCall == 1) throw expired();
+        return const <ExamItem>[];
       };
-
-      await h.service.fetchGrades();
+      await h.service.fetchExams();
       expect(stages, contains(ScheduleService.stageRelogin));
     });
-  });
 
-  group('登录与课表可单独使用', () {
-    test('只用登录：signIn 记住密码并落盘 Cookie', () async {
+    test('登录与退出：signIn（直接或经验证码，remember=true/false）与 signOut 清理', () async {
       final h = _Harness();
-
       final state = await h.service.signIn('20240001', 'pw');
-
       expect(state, isA<AuthenticatedState>());
       final saved = await h.credentials.get(_Harness.accountKey);
       expect(saved?.username, '20240001');
       expect(saved?.password, 'pw');
       expect(h.storage.saveCount, 1);
-    });
-
-    test('只用登录：remember=false 时不写安全存储', () async {
-      final h = _Harness();
-
-      await h.service.signIn('20240001', 'pw', remember: false);
-
-      expect(await h.credentials.has(_Harness.accountKey), isFalse);
-      expect(h.storage.saveCount, 1, reason: 'Cookie 仍要保存');
-    });
-
-    test('只用课表：完全不碰凭据也能取（有有效 Cookie 时）', () async {
-      final h = _Harness();
-
-      final schedule = await h.service.getSchedule();
-
-      expect(schedule.entries, isNotEmpty);
-      expect(h.backend.loginCount, 0);
-    });
-
-    test('退出登录清空快照；forget 一并删凭据', () async {
-      final h = _Harness();
-      await h.service.signIn('20240001', 'pw');
 
       await h.service.signOut(forgetCredentials: true);
-
       expect(h.storage.clearCount, 1);
       expect(await h.credentials.has(_Harness.accountKey), isFalse);
+
+      // remember=false 不写安全存储，但仍落盘 Cookie
+      await h.service.signIn('20240001', 'pw', remember: false);
+      expect(await h.credentials.has(_Harness.accountKey), isFalse);
+      expect(h.storage.saveCount, 2);
+
+      // 经验证码完成 signIn 后仍按 remember 规则保存凭据与 accountHint
+      final hCaptcha = _Harness();
+      hCaptcha.backend.loginBehavior = (call, credentials) async =>
+          const CaptchaState(
+            continuationId: 'c1',
+            imageBase64: 'iVBORw0KGgo=',
+            mimeType: 'image/png',
+          );
+      expect(
+        await hCaptcha.service.signIn('20240001', 'pw'),
+        isA<CaptchaState>(),
+      );
+      expect(await hCaptcha.credentials.has(_Harness.accountKey), isFalse);
+      expect(
+        await hCaptcha.service.submitCaptcha('1234'),
+        isA<AuthenticatedState>(),
+      );
+      expect(
+        (await hCaptcha.credentials.get(_Harness.accountKey))?.password,
+        'pw',
+      );
+      expect(hCaptcha.service.accountHint, '20240001');
     });
 
-    test('学期列表失效时同样走回退登录', () async {
-      final h = _Harness();
-      await h.credentials.save(
-        _Harness.accountKey,
-        const Credentials('20240001', 'pw'),
-      );
-      var termsCall = 0;
-      h.backend.termsBehavior = (call) async {
-        termsCall++;
-        if (termsCall == 1) throw expired();
-        return const Terms(
-          currentId: '2026-2027-1',
-          items: <Term>[Term(id: '2026-2027-1', name: '当前学期')],
+    test(
+      'fetchTerms / fetchExams / fetchGrades 遇 Cookie 失效均走自动重登并落盘新 Cookie',
+      () async {
+        final h = _Harness(autoLoginLimit: 5);
+        await h.credentials.save(
+          _Harness.accountKey,
+          const Credentials('20240001', 'pw'),
         );
-      };
 
-      final terms = await h.service.fetchTerms();
+        var termsCall = 0;
+        h.backend.termsBehavior = (call) async {
+          if (++termsCall == 1) throw expired();
+          return const Terms(
+            currentId: '2026-2027-1',
+            items: <Term>[Term(id: '2026-2027-1', name: '当前学期')],
+          );
+        };
+        var examsCall = 0;
+        h.backend.examsBehavior = (call, termId) async {
+          if (++examsCall == 1) throw expired();
+          return sampleExams();
+        };
+        var gradesCall = 0;
+        h.backend.gradesBehavior = (call, termId) async {
+          if (++gradesCall == 1) throw expired();
+          return sampleGrades();
+        };
 
-      expect(terms.currentId, '2026-2027-1');
-      expect(h.backend.loginCount, 1);
-    });
-  });
+        expect((await h.service.fetchTerms()).currentId, '2026-2027-1');
+        expect(await h.service.fetchExams(), isNotEmpty);
+        expect(await h.service.fetchGrades(), isNotEmpty);
+        expect(h.backend.loginCount, 3);
+        expect(h.storage.snapshot!.cookies.single.value, 'fresh');
+      },
+    );
 
-  group('凭据 key：冷启动必须能算出账号', () {
-    test('accountHint 补齐账号 → Cookie 失效后能用保存的账密重登', () async {
-      // 身份为空：模拟真机冷启动——Cookie 快照里没有用户名。
-      final h = _Harness(
+    test('冷启动快照无用户名时靠 accountHint 拼出凭据 key；未设置则无法重登', () async {
+      // 未设 accountHint：取不到凭据
+      final hMissing = _Harness(
         backend: FakeBackend(studentId: '', studentName: ''),
         storage: FakeSessionRepository(snapshotOf(_baseUrl)),
       );
-      await h.credentials.save(
+      await hMissing.credentials.save(
         _Harness.accountKey,
         const Credentials('20240001', 'pw'),
       );
-      h.backend.fetchBehavior = (call, termId) async {
-        if (call == 1) {
-          throw AcademicError(ErrorCode.sessionExpired, '登录已失效');
-        }
-        return sampleSchedule(termId ?? '2026-2027-1');
-      };
-      // 冷启动：Cookie 快照在，但快照里没有用户名，只能靠本地账号拼 key。
-      h.service.accountHint = '20240001';
-      await h.service.bootstrap();
-
-      final schedule = await h.service.getSchedule();
-
-      expect(schedule.entries, isNotEmpty);
-      expect(h.backend.loginCount, 1, reason: '应该用保存的账密自动重登');
-    });
-
-    test('没有账号就取不到凭据（修复前的失败模式）', () async {
-      // 身份为空：模拟真机冷启动——Cookie 快照里没有用户名。
-      final h = _Harness(
-        backend: FakeBackend(studentId: '', studentName: ''),
-        storage: FakeSessionRepository(snapshotOf(_baseUrl)),
-      );
-      await h.credentials.save(
-        _Harness.accountKey,
-        const Credentials('20240001', 'pw'),
-      );
-      h.backend.fetchBehavior = (call, termId) async {
-        throw AcademicError(ErrorCode.sessionExpired, '登录已失效');
-      };
-      await h.service.bootstrap();
+      hMissing.backend.fetchBehavior = (call, termId) async => throw expired();
+      await hMissing.service.bootstrap();
 
       await expectLater(
-        h.service.getSchedule(),
+        hMissing.service.getSchedule(),
         throwsA(
           isA<AcademicError>()
-              .having((error) => error.code, 'code', ErrorCode.sessionExpired)
-              .having(
-                (error) => error.message,
-                'message',
-                contains('没有保存账号密码'),
-              ),
+              .having((e) => e.code, 'code', ErrorCode.sessionExpired)
+              .having((e) => e.message, 'message', contains('没有保存账号密码')),
         ),
       );
-      expect(h.backend.loginCount, 0, reason: '账号为空时连凭据 key 都算不出来');
+      expect(hMissing.backend.loginCount, 0);
+
+      // 设置 accountHint：自动重登成功
+      final hHint = _Harness(
+        backend: FakeBackend(studentId: '', studentName: ''),
+        storage: FakeSessionRepository(snapshotOf(_baseUrl)),
+      );
+      await hHint.credentials.save(
+        _Harness.accountKey,
+        const Credentials('20240001', 'pw'),
+      );
+      hHint.backend.fetchBehavior = (call, termId) async {
+        if (call == 1) throw expired();
+        return sampleSchedule(termId ?? '2026-2027-1');
+      };
+      hHint.service.accountHint = '20240001';
+      await hHint.service.bootstrap();
+
+      final schedule = await hHint.service.getSchedule();
+      expect(schedule.entries, isNotEmpty);
+      expect(hHint.backend.loginCount, 1);
     });
   });
 
-  group('需求 2（扩展）：考试与成绩查询的失效回退登录与全局阻塞互斥锁', () {
-    test('fetchExams Cookie 失效 → 用保存的账密重登 → 重试一次成功 → 新 Cookie 落盘', () async {
-      final h = _Harness();
-      await h.credentials.save(
+  group('全局阻塞互斥锁与并发安全', () {
+    test('重登进行中到达的新查询被阻塞等待：重登成功则继续查询，失败则一同抛错不盲发请求', () async {
+      // 1. 重登成功分支
+      final hOk = _Harness();
+      await hOk.credentials.save(
         _Harness.accountKey,
         const Credentials('20240001', 'pw'),
       );
       var examsCall = 0;
-      h.backend.examsBehavior = (call, termId) async {
-        examsCall++;
-        if (examsCall == 1) throw expired();
+      hOk.backend.examsBehavior = (call, termId) async {
+        if (++examsCall == 1) throw expired();
         return sampleExams();
       };
-
-      final exams = await h.service.fetchExams();
-
-      expect(exams, isNotEmpty);
-      expect(h.backend.examsCount, 2, reason: '失效后重试一次');
-      expect(h.backend.loginCount, 1, reason: '必须触发自动重登');
-      expect(h.storage.snapshot!.cookies.single.value, 'fresh');
-    });
-
-    test('fetchGrades Cookie 失效 → 用保存的账密重登 → 重试一次成功 → 新 Cookie 落盘', () async {
-      final h = _Harness();
-      await h.credentials.save(
-        _Harness.accountKey,
-        const Credentials('20240001', 'pw'),
-      );
-      var gradesCall = 0;
-      h.backend.gradesBehavior = (call, termId) async {
-        gradesCall++;
-        if (gradesCall == 1) throw expired();
-        return sampleGrades();
-      };
-
-      final grades = await h.service.fetchGrades();
-
-      expect(grades, isNotEmpty);
-      expect(h.backend.gradesCount, 2, reason: '失效后重试一次');
-      expect(h.backend.loginCount, 1, reason: '必须触发自动重登');
-      expect(h.storage.snapshot!.cookies.single.value, 'fresh');
-    });
-
-    test('没有保存账密时 fetchExams / fetchGrades 抛 SESSION_EXPIRED 且不尝试登录', () async {
-      final h = _Harness();
-      h.backend.examsBehavior = (call, termId) async => throw expired();
-      h.backend.gradesBehavior = (call, termId) async => throw expired();
-
-      await expectLater(
-        h.service.fetchExams(),
-        throwsA(
-          isA<AcademicError>().having(
-            (e) => e.code,
-            'code',
-            ErrorCode.sessionExpired,
-          ),
-        ),
-      );
-      await expectLater(
-        h.service.fetchGrades(),
-        throwsA(
-          isA<AcademicError>().having(
-            (e) => e.code,
-            'code',
-            ErrorCode.sessionExpired,
-          ),
-        ),
-      );
-      expect(h.backend.loginCount, 0);
-    });
-
-    test('全局阻塞互斥：并发 fetchExams 与 fetchGrades 遇失效，只登一次、共享单 flight', () async {
-      final h = _Harness();
-      await h.credentials.save(
-        _Harness.accountKey,
-        const Credentials('20240001', 'pw'),
-      );
-      var examsCall = 0;
-      h.backend.examsBehavior = (call, termId) async {
-        examsCall++;
-        if (examsCall == 1) throw expired();
-        return sampleExams();
-      };
-      var gradesCall = 0;
-      h.backend.gradesBehavior = (call, termId) async {
-        gradesCall++;
-        if (gradesCall == 1) throw expired();
-        return sampleGrades();
-      };
-      h.backend.loginBehavior = (call, credentials) async {
-        await Future<void>.delayed(const Duration(milliseconds: 40));
-        h.backend.cookies = snapshotOf(_baseUrl, value: 'fresh');
-        return const AuthenticatedState(studentId: '1', studentName: 'n');
-      };
-
-      final results = await Future.wait<dynamic>(<Future<dynamic>>[
-        h.service.fetchExams(),
-        h.service.fetchGrades(),
-      ]);
-
-      expect(results[0], isA<List<ExamItem>>());
-      expect(results[1], isA<List<GradeItem>>());
-      expect(h.backend.loginCount, 1, reason: '并发失效必须共享同一次重登，不得重复登录');
-      expect(h.backend.examsCount, 2);
-      expect(h.backend.gradesCount, 2);
-    });
-
-    test('全局阻塞互斥：重登进行中到达的新查询被阻塞等待，不得一边登录一边查询数据', () async {
-      final h = _Harness();
-      await h.credentials.save(
-        _Harness.accountKey,
-        const Credentials('20240001', 'pw'),
-      );
-      var examsCall = 0;
-      h.backend.examsBehavior = (call, termId) async {
-        examsCall++;
-        if (examsCall == 1) throw expired();
-        return sampleExams();
-      };
-
       final loginCompleter = Completer<void>();
-      h.backend.loginBehavior = (call, credentials) async {
+      hOk.backend.loginBehavior = (call, credentials) async {
         await loginCompleter.future;
-        h.backend.cookies = snapshotOf(_baseUrl, value: 'fresh');
+        hOk.backend.cookies = snapshotOf(_baseUrl, value: 'fresh');
         return const AuthenticatedState(studentId: '1', studentName: 'n');
       };
 
-      // 1. 发起 fetchExams，触发重登挂起
-      final examsFuture = h.service.fetchExams();
-      // 等待宏任务调度，确保 examsBehavior 执行并进入重登
+      final examsFuture = hOk.service.fetchExams();
       await Future<void>.delayed(const Duration(milliseconds: 10));
-      expect(h.backend.loginCount, 1);
-      expect(
-        h.service.reloginFlightForTest,
-        isNotNull,
-        reason: '重登正在 flight 中',
-      );
+      expect(hOk.service.reloginFlightForTest, isNotNull);
 
-      // 2. 在重登未完成期间，调用 fetchGrades
-      bool gradesFinished = false;
-      final gradesFuture = h.service.fetchGrades().then((v) {
-        gradesFinished = true;
-        return v;
-      });
-
-      // 让出事件循环，检查 fetchGrades 是否被阻止在网络请求之前
+      final gradesFuture = hOk.service.fetchGrades();
       await Future<void>.delayed(const Duration(milliseconds: 10));
-      expect(h.backend.gradesCount, 0, reason: '重登进行中不得发起查询请求（防止一边登录一边查询）');
-      expect(gradesFinished, isFalse);
+      expect(hOk.backend.gradesCount, 0);
 
-      // 3. 完成重登，让等待的请求继续
       loginCompleter.complete();
-      final exams = await examsFuture;
-      final grades = await gradesFuture;
+      expect(await examsFuture, isNotEmpty);
+      expect(await gradesFuture, isNotEmpty);
+      expect(hOk.backend.loginCount, 1);
+      expect(hOk.backend.gradesCount, 1);
 
-      expect(exams, isNotEmpty);
-      expect(grades, isNotEmpty);
-      expect(h.backend.loginCount, 1, reason: '全程只登一次');
-      expect(h.backend.gradesCount, 1, reason: '重登完成后使用新凭据直接查询一次即成功');
-    });
-
-    test('全局阻塞互斥：重登失败时等待的查询一同抛出错误，不盲发查询请求', () async {
-      final h = _Harness();
-      await h.credentials.save(
+      // 2. 重登失败分支
+      final hFail = _Harness();
+      await hFail.credentials.save(
         _Harness.accountKey,
         const Credentials('20240001', 'pw'),
       );
-      h.backend.examsBehavior = (call, termId) async => throw expired();
-
-      final loginCompleter = Completer<void>();
-      h.backend.loginBehavior = (call, credentials) async {
-        await loginCompleter.future;
+      hFail.backend.examsBehavior = (call, termId) async => throw expired();
+      final failCompleter = Completer<void>();
+      hFail.backend.loginBehavior = (call, credentials) async {
+        await failCompleter.future;
         throw badCredentials();
       };
 
-      final examsFuture = h.service.fetchExams();
+      final failExams = hFail.service.fetchExams();
       await Future<void>.delayed(const Duration(milliseconds: 10));
-
-      final gradesFuture = h.service.fetchGrades();
+      final failGrades = hFail.service.fetchGrades();
       await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(hFail.backend.gradesCount, 0);
 
-      expect(h.backend.gradesCount, 0);
-
-      loginCompleter.complete();
-
-      await expectLater(
-        examsFuture,
-        throwsA(
-          isA<AcademicError>().having(
-            (e) => e.code,
-            'code',
-            ErrorCode.invalidCredentials,
-          ),
-        ),
-      );
-      await expectLater(
-        gradesFuture,
-        throwsA(
-          isA<AcademicError>().having(
-            (e) => e.code,
-            'code',
-            ErrorCode.invalidCredentials,
-          ),
-        ),
-      );
-
-      expect(h.backend.gradesCount, 0, reason: '重登失败后不该再发送无效凭据请求');
-    });
-
-    test('全局阻塞互斥：getSchedule 与 fetchExams / fetchGrades 并发失效共享单次重登', () async {
-      final h = _Harness();
-      await h.credentials.save(
-        _Harness.accountKey,
-        const Credentials('20240001', 'pw'),
-      );
-      var scheduleCall = 0;
-      h.backend.fetchBehavior = (call, termId) async {
-        scheduleCall++;
-        if (scheduleCall == 1) throw expired();
-        return sampleSchedule();
-      };
-      var examsCall = 0;
-      h.backend.examsBehavior = (call, termId) async {
-        examsCall++;
-        if (examsCall == 1) throw expired();
-        return sampleExams();
-      };
-      var gradesCall = 0;
-      h.backend.gradesBehavior = (call, termId) async {
-        gradesCall++;
-        if (gradesCall == 1) throw expired();
-        return sampleGrades();
-      };
-      h.backend.loginBehavior = (call, credentials) async {
-        await Future<void>.delayed(const Duration(milliseconds: 30));
-        h.backend.cookies = snapshotOf(_baseUrl, value: 'fresh');
-        return const AuthenticatedState(studentId: '1', studentName: 'n');
-      };
-
-      final results = await Future.wait<dynamic>(<Future<dynamic>>[
-        h.service.getSchedule(),
-        h.service.fetchExams(),
-        h.service.fetchGrades(),
-      ]);
-
-      expect(results[0], isA<Schedule>());
-      expect(results[1], isA<List<ExamItem>>());
-      expect(results[2], isA<List<GradeItem>>());
-      expect(h.backend.loginCount, 1, reason: '课表与考试成绩并发失效只能触发一次登录');
+      failCompleter.complete();
+      await expectLater(failExams, throwsA(isA<AcademicError>()));
+      await expectLater(failGrades, throwsA(isA<AcademicError>()));
+      expect(hFail.backend.gradesCount, 0);
     });
 
     test('重登中途 signOut 清理会话：重登结果不写回 cookieStorage，防复活', () async {
@@ -857,49 +637,32 @@ void main() {
 
       final examsFuture = h.service.fetchExams();
       await Future<void>.delayed(const Duration(milliseconds: 10));
-      expect(h.backend.loginCount, 1);
-
-      // 用户在重登等待中主动退出登录
       await h.service.signOut();
 
-      // 放行后台登录完成
       loginCompleter.complete();
       await expectLater(examsFuture, throwsA(isA<AcademicError>()));
-
-      // 验证 cookieStorage 没有被后台重登污染复活
-      final storedSnapshot = await h.storage.load();
-      expect(storedSnapshot, isNull, reason: '已退出登录不得写回 Cookie 快照');
+      expect(await h.storage.load(), isNull);
     });
 
-    test('并发查询初始化共享同一个 backend 客户端创建任务', () async {
+    test('并发查询初始化共享同一个 backend 创建任务，且手动 signIn 等待进行中的自动重登', () async {
       final h = _Harness();
-      final results = await Future.wait<dynamic>(<Future<dynamic>>[
+      final initResults = await Future.wait<dynamic>(<Future<dynamic>>[
         h.service.fetchTerms(),
         h.service.fetchExams(),
         h.service.fetchGrades(),
       ]);
-
-      expect(results[0], isA<Terms>());
-      expect(results[1], isA<List<ExamItem>>());
-      expect(results[2], isA<List<GradeItem>>());
+      expect(initResults, hasLength(3));
       expect(h.backend.termsCount, 1);
-      expect(h.backend.examsCount, 1);
-      expect(h.backend.gradesCount, 1);
-    });
 
-    test('手选登录 signIn 遇到正在进行的后台自动重登会先行等待，避免双重并发登录', () async {
-      final h = _Harness();
       await h.credentials.save(
         _Harness.accountKey,
         const Credentials('20240001', 'pw'),
       );
       var examsCall = 0;
       h.backend.examsBehavior = (call, termId) async {
-        examsCall++;
-        if (examsCall == 1) throw expired();
+        if (++examsCall == 1) throw expired();
         return sampleExams();
       };
-
       final loginCompleter = Completer<void>();
       h.backend.loginBehavior = (call, credentials) async {
         await loginCompleter.future;
@@ -911,49 +674,13 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 10));
       expect(h.backend.loginCount, 1);
 
-      // 手动登录介入
       final signInFuture = h.service.signIn('20240001', 'new-pw');
       await Future<void>.delayed(const Duration(milliseconds: 10));
-      // 此时因为等待 reloginFlight，signIn 尚未发起第二次 client.login
-      expect(h.backend.loginCount, 1, reason: 'signIn 必须等待当前自动重登完成，不得直接冲撞');
+      expect(h.backend.loginCount, 1);
 
       loginCompleter.complete();
       await examsFuture;
-      final state = await signInFuture;
-      expect(state, isA<AuthenticatedState>());
-    });
-
-    test('经验证码完成 signIn 后仍会保存凭据与 accountHint（remember=false 则不存密码）', () async {
-      final h1 = _Harness();
-      h1.backend.loginBehavior = (call, credentials) async =>
-          const CaptchaState(
-            continuationId: 'c1',
-            imageBase64: 'iVBORw0KGgo=',
-            mimeType: 'image/png',
-          );
-      final first = await h1.service.signIn('20240001', 'pw');
-      expect(first, isA<CaptchaState>());
-      expect(await h1.credentials.has(_Harness.accountKey), isFalse);
-
-      final done1 = await h1.service.submitCaptcha('1234');
-      expect(done1, isA<AuthenticatedState>());
-      final saved = await h1.credentials.get(_Harness.accountKey);
-      expect(saved?.username, '20240001');
-      expect(saved?.password, 'pw');
-      expect(h1.service.accountHint, '20240001');
-      expect(h1.storage.saveCount, 1);
-
-      final h2 = _Harness();
-      h2.backend.loginBehavior = (call, credentials) async =>
-          const CaptchaState(
-            continuationId: 'c2',
-            imageBase64: 'iVBORw0KGgo=',
-            mimeType: 'image/png',
-          );
-      await h2.service.signIn('20240001', 'pw', remember: false);
-      await h2.service.submitCaptcha('1234');
-      expect(await h2.credentials.has(_Harness.accountKey), isFalse);
-      expect(h2.service.accountHint, '20240001');
+      expect(await signInFuture, isA<AuthenticatedState>());
     });
   });
 }

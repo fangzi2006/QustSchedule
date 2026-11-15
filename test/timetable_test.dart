@@ -45,7 +45,7 @@ Map<PeriodGroup, int> countsOf({
 
 void main() {
   group('buildSections：快捷设置 → 时间表', () {
-    test('上午 4 节：每节 45 分钟、课间 10 分钟，逐节累加', () {
+    test('三段各自按起始时间逐节累加，大课间替代小课间', () {
       final sections = buildSections(setup(), countsOf());
       expect(sections.length, 10);
 
@@ -57,25 +57,8 @@ void main() {
       expect(formatClock(sections[1].endMinutes), '09:40');
 
       expect(formatClock(sections[2].startMinutes), '09:50');
-    });
 
-    test('大课间替代小课间，不是叠加', () {
-      final sections = buildSections(
-        setup(
-          bigBreaks: const <PeriodGroup, BigBreak>{
-            PeriodGroup.morning: BigBreak(afterInGroup: 2, minutes: 20),
-          },
-        ),
-        countsOf(),
-      );
-
-      // 第 2 节 08:55-09:40，大课间 20 分钟 → 第 3 节 10:00 开始。
-      expect(formatClock(sections[1].endMinutes), '09:40');
-      expect(formatClock(sections[2].startMinutes), '10:00');
-    });
-
-    test('下午从自己的开始时间重新起算，不受上午影响', () {
-      final sections = buildSections(setup(), countsOf());
+      // 下午、晚上从各自的开始时间重新起算，不受上午影响
       final afternoon = sections.firstWhere(
         (s) => s.group == PeriodGroup.afternoon,
       );
@@ -85,9 +68,21 @@ void main() {
       expect(formatClock(afternoon.startMinutes), '14:00');
       expect(formatClock(evening.startMinutes), '19:00');
       expect(formatClock(evening.endMinutes), '19:45');
+
+      // 大课间替代小课间，不是叠加：第 2 节 08:55-09:40，大课间 20 分钟 → 第 3 节 10:00 开始
+      final withBigBreak = buildSections(
+        setup(
+          bigBreaks: const <PeriodGroup, BigBreak>{
+            PeriodGroup.morning: BigBreak(afterInGroup: 2, minutes: 20),
+          },
+        ),
+        countsOf(),
+      );
+      expect(formatClock(withBigBreak[1].endMinutes), '09:40');
+      expect(formatClock(withBigBreak[2].startMinutes), '10:00');
     });
 
-    test('某段节数为 0 时跳过该段，不产生空档', () {
+    test('某段节数为 0 时跳过该段，每节时长越界报错', () {
       final sections = buildSections(
         setup(),
         countsOf(morning: 2, afternoon: 0, evening: 2),
@@ -95,9 +90,7 @@ void main() {
       expect(sections.length, 4);
       expect(sections[2].group, PeriodGroup.evening);
       expect(sections[2].period, 3);
-    });
 
-    test('每节时长越界报错', () {
       expect(
         () => buildSections(setup(lesson: 5), countsOf()),
         throwsArgumentError,
@@ -120,62 +113,50 @@ void main() {
       ),
     );
 
-    test('取「已生效里最新」的一张', () {
+    test('取已生效最新表、按生效日切换、跨年回绕、全在未来、空列表与排序', () {
       final tables = <Timetable>[
         table('winter', '2026-11-01'),
         table('summer', '2026-05-01'),
         table('base', '2020-01-01'),
       ];
-      final active = activeTimetableAt(tables, DateTime(2026, 10, 17));
-      expect(active!.id, 'summer', reason: '冬季作息 11/1 才生效');
-    });
-
-    test('到了生效日当天就切换', () {
-      final tables = <Timetable>[
-        table('winter', '2026-11-01'),
-        table('summer', '2026-05-01'),
-      ];
+      expect(
+        activeTimetableAt(tables, DateTime(2026, 10, 17))!.id,
+        'summer',
+        reason: '冬季作息 11/1 才生效',
+      );
       expect(activeTimetableAt(tables, DateTime(2026, 11, 1))!.id, 'winter');
       expect(activeTimetableAt(tables, DateTime(2026, 10, 31))!.id, 'summer');
-    });
-
-    test('全都在未来时取最早那张（不能没有作息）', () {
-      final tables = <Timetable>[table('future', '2030-01-01')];
-      expect(activeTimetableAt(tables, DateTime(2026, 10, 17))!.id, 'future');
-    });
-
-    test('空列表返回 null', () {
+      expect(
+        activeTimetableAt([
+          table('future', '2030-01-01'),
+        ], DateTime(2026, 10, 17))!.id,
+        'future',
+      );
       expect(
         activeTimetableAt(const <Timetable>[], DateTime(2026, 10, 17)),
         isNull,
       );
-    });
 
-    test('sortedTimetables 按生效月日倒序', () {
       final sorted = sortedTimetables(<Timetable>[
         table('a', '2020-01-01'),
         table('b', '2026-11-01'),
         table('c', '2024-06-01'),
       ]);
       expect(sorted.map((t) => t.id).toList(), <String>['b', 'c', 'a']);
-    });
 
-    test('activeTimetableAt 按月日循环切换（跨年回绕）', () {
-      final tables = <Timetable>[
+      // 按月日循环切换（跨年回绕）
+      final cycle = <Timetable>[
         table('spring', '2026-05-01'),
         table('autumn', '2026-10-01'),
       ];
-      // 10 月 18 日：秋冬（10/1）是月日 ≤ 今天里最大的 → 生效。
-      expect(activeTimetableAt(tables, DateTime(2026, 10, 18))!.id, 'autumn');
-      // 6 月 1 日：春夏生效。
-      expect(activeTimetableAt(tables, DateTime(2026, 6, 1))!.id, 'spring');
-      // 1 月 5 日：比所有表都早 → 回绕取月日最大的（秋冬仍在用）。
-      expect(activeTimetableAt(tables, DateTime(2026, 1, 5))!.id, 'autumn');
+      expect(activeTimetableAt(cycle, DateTime(2026, 10, 18))!.id, 'autumn');
+      expect(activeTimetableAt(cycle, DateTime(2026, 6, 1))!.id, 'spring');
+      expect(activeTimetableAt(cycle, DateTime(2026, 1, 5))!.id, 'autumn');
     });
   });
 
   group('序列化', () {
-    test('Timetable 往返后内容一致', () {
+    test('Timetable 与 QuickSetup 往返一致，旧版 counts 字段被忽略', () {
       final original = Timetable(
         id: 't1',
         name: '冬季作息',
@@ -203,36 +184,52 @@ void main() {
         original.sections[2].startMinutes,
       );
       expect(restored.sections[2].group, PeriodGroup.morning);
-    });
 
-    test('QuickSetup 往返后内容一致', () {
-      final original = setup(
+      final originalSetup = setup(
         bigBreaks: const <PeriodGroup, BigBreak>{
           PeriodGroup.afternoon: BigBreak(afterInGroup: 3, minutes: 30),
         },
       );
-      final restored = QuickSetup.fromJson(
-        jsonDecode(jsonEncode(original.toJson())) as Map<String, dynamic>,
+      final restoredSetup = QuickSetup.fromJson(
+        jsonDecode(jsonEncode(originalSetup.toJson())) as Map<String, dynamic>,
       );
-      expect(restored.lessonMinutes, 45);
-      expect(restored.starts[PeriodGroup.afternoon], 14 * 60);
-      expect(restored.bigBreaks[PeriodGroup.afternoon]!.afterInGroup, 3);
-      expect(restored.bigBreaks[PeriodGroup.afternoon]!.minutes, 30);
-    });
+      expect(restoredSetup.lessonMinutes, 45);
+      expect(restoredSetup.starts[PeriodGroup.afternoon], 14 * 60);
+      expect(restoredSetup.bigBreaks[PeriodGroup.afternoon]!.afterInGroup, 3);
+      expect(restoredSetup.bigBreaks[PeriodGroup.afternoon]!.minutes, 30);
 
-    test('旧版 QuickSetup 里的 counts 被忽略（节数已挪到全局设置）', () {
-      final restored = QuickSetup.fromJson(<String, dynamic>{
+      final legacySetup = QuickSetup.fromJson(<String, dynamic>{
         'lessonMinutes': 50,
         'counts': <String, int>{'morning': 6, 'afternoon': 6, 'evening': 4},
       });
-      expect(restored.lessonMinutes, 50);
-      expect(restored.starts[PeriodGroup.morning], 8 * 60);
+      expect(legacySetup.lessonMinutes, 50);
+      expect(legacySetup.starts[PeriodGroup.morning], 8 * 60);
     });
   });
 
   group('Preferences 迁移与持久化', () {
-    test('schema 1 的旧文件：保留 termStarts 并补一张默认表', () {
-      final prefs = Preferences.decode(
+    test('内置作息、空/损坏文件兜底及 schema 1/5 作息表迁移', () {
+      // 内置两套作息：默认 + 夏季（下午 14:00 起），以及空/损坏文件兜底
+      final def = Preferences.decode('');
+      expect(
+        def.timetables.map((t) => t.id),
+        containsAll(<String>['default', 'default-summer']),
+      );
+      final summer = def.timetables.firstWhere((t) => t.id == 'default-summer');
+      final afternoonStart = summer.sections
+          .firstWhere(
+            (s) => s.period == defaultSectionCounts[PeriodGroup.morning]! + 1,
+          )
+          .startMinutes;
+      expect(formatClock(afternoonStart), '14:00');
+      expect(Preferences.decode('not json').timetables, hasLength(2));
+      expect(
+        Preferences.decode('{"timetables": "oops"}').timetables,
+        hasLength(2),
+      );
+
+      // schema 1 保留 termStarts 并补两套作息
+      final s1 = Preferences.decode(
         jsonEncode(<String, Object?>{
           'schema': 1,
           'termStarts': <String, String>{
@@ -240,39 +237,11 @@ void main() {
           },
         }),
       );
+      expect(s1.termStartOf('2026-2027-1'), DateTime(2026, 8, 31));
+      expect(s1.timetables, hasLength(2));
+      expect(s1.timetables.every((t) => t.sections.isNotEmpty), isTrue);
 
-      expect(prefs.termStartOf('2026-2027-1'), DateTime(2026, 8, 31));
-      expect(prefs.timetables, hasLength(2), reason: '升级后要有两套内置作息');
-      expect(prefs.timetables.every((t) => t.sections.isNotEmpty), isTrue);
-    });
-
-    test('空文件 / 损坏文件都按默认设置处理，不抛异常', () {
-      expect(Preferences.decode('').timetables, hasLength(2));
-      expect(Preferences.decode('not json').timetables, hasLength(2));
-      expect(
-        Preferences.decode('{"timetables": "oops"}').timetables,
-        hasLength(2),
-      );
-    });
-
-    test('内置两套作息：默认 + 夏季（夏季下午 14:00 起）', () {
-      final prefs = Preferences.decode('');
-      expect(
-        prefs.timetables.map((t) => t.id),
-        containsAll(<String>['default', 'default-summer']),
-      );
-      final summer = prefs.timetables.firstWhere(
-        (t) => t.id == 'default-summer',
-      );
-      final afternoonStart = summer.sections
-          .firstWhere(
-            (s) => s.period == defaultSectionCounts[PeriodGroup.morning]! + 1,
-          )
-          .startMinutes;
-      expect(formatClock(afternoonStart), '14:00');
-    });
-
-    test('老用户只有一张未动过的默认表：补插夏季表；动过就不碰', () {
+      // 老用户未改默认表：补插夏季表；改名后不碰
       final untouched = Preferences.decode(
         jsonEncode(<String, Object?>{
           'schema': 5,
@@ -293,35 +262,33 @@ void main() {
       expect(renamed.timetables.single.name, '我的作息');
     });
 
-    test('出厂地址簿带 6 条青科大线路，默认线路 1', () {
-      final prefs = Preferences.inMemory();
-      expect(prefs.schools.length, 6);
-      expect(prefs.schools.first, 'https://jwglxt1.qust.edu.cn/jwglxt');
-      expect(prefs.schools.last, 'https://jwglxt6.qust.edu.cn/jwglxt');
-      expect(
-        prefs.currentSchool,
-        'https://jwglxt1.qust.edu.cn/jwglxt',
-        reason: '默认地址必须是线路 1',
-      );
-    });
+    test('出厂 6 条线路及 schema 7 补齐、schema 8 删除保留', () {
+      final fresh = Preferences.inMemory();
+      expect(fresh.schools.length, 6);
+      expect(fresh.schools.first, 'https://jwglxt1.qust.edu.cn/jwglxt');
+      expect(fresh.schools.last, 'https://jwglxt6.qust.edu.cn/jwglxt');
+      expect(fresh.currentSchool, 'https://jwglxt1.qust.edu.cn/jwglxt');
 
-    test('schema 7 的地址簿只有一条：升级时补齐 6 条线路', () {
-      final prefs = Preferences.decode(
+      final s7 = Preferences.decode(
         '{"schema":7,"schools":["https://jwglxt1.qust.edu.cn/jwglxt"]}',
       );
-      expect(prefs.schools.length, 6, reason: '老用户升级后也要有 6 条可选');
-      expect(prefs.schools.first, 'https://jwglxt1.qust.edu.cn/jwglxt');
-    });
+      expect(s7.schools.length, 6);
+      expect(s7.schools.first, 'https://jwglxt1.qust.edu.cn/jwglxt');
 
-    test('已是 schema 8：用户删掉的线路不会被补回来', () {
-      final prefs = Preferences.decode(
+      final s8 = Preferences.decode(
         '{"schema":8,"schools":["https://jwglxt1.qust.edu.cn/jwglxt"]}',
       );
-      expect(prefs.schools.length, 1, reason: '迁移只跑一次，删除要留得住');
+      expect(s8.schools.length, 1);
     });
 
-    test('schema 5：静默更新开关/间隔/调课规则能正确读回', () {
-      final prefs = Preferences.decode(
+    test('schema 4/5/6：静默更新、调课规则与课表备注开关读回及旧版默认值', () {
+      final s4 = Preferences.decode(jsonEncode(<String, Object?>{'schema': 4}));
+      expect(s4.autoRefresh, isTrue);
+      expect(s4.autoRefreshIntervalMinutes, defaultAutoRefreshIntervalMinutes);
+      expect(s4.reschedules, isEmpty);
+      expect(s4.showScheduleRemarks, isTrue);
+
+      final s5 = Preferences.decode(
         jsonEncode(<String, Object?>{
           'schema': 5,
           'autoRefresh': false,
@@ -337,43 +304,22 @@ void main() {
           ],
         }),
       );
+      expect(s5.autoRefresh, isFalse);
+      expect(s5.autoRefreshIntervalMinutes, 60);
+      expect(s5.reschedules.single.fromMonth, 10);
+      expect(s5.reschedules.single.toDay, 25);
+      expect(s5.showScheduleRemarks, isTrue);
 
-      expect(prefs.autoRefresh, isFalse);
-      expect(prefs.autoRefreshIntervalMinutes, 60);
-      expect(prefs.reschedules, hasLength(1));
-      expect(prefs.reschedules.single.fromMonth, 10);
-      expect(prefs.reschedules.single.toDay, 25);
-    });
-
-    test('schema 6：是否显示课表备注能正确读回；缺字段默认显示', () {
-      final off = Preferences.decode(
+      final s6 = Preferences.decode(
         jsonEncode(<String, Object?>{
           'schema': 6,
           'showScheduleRemarks': false,
         }),
       );
-      expect(off.showScheduleRemarks, isFalse);
-
-      final legacy = Preferences.decode(
-        jsonEncode(<String, Object?>{'schema': 5}),
-      );
-      expect(legacy.showScheduleRemarks, isTrue, reason: '旧文件缺字段默认显示');
+      expect(s6.showScheduleRemarks, isFalse);
     });
 
-    test('旧文件缺 schema 5 字段：静默更新默认开、间隔 30、无调课', () {
-      final prefs = Preferences.decode(
-        jsonEncode(<String, Object?>{'schema': 4}),
-      );
-
-      expect(prefs.autoRefresh, isTrue);
-      expect(
-        prefs.autoRefreshIntervalMinutes,
-        defaultAutoRefreshIntervalMinutes,
-      );
-      expect(prefs.reschedules, isEmpty);
-    });
-
-    test('保存多张表后能按生效日选出生效的那张', () async {
+    test('保存多张表后能按生效日选出生效的那张，且不允许清空时间表', () async {
       final prefs = Preferences.inMemory();
       await prefs.saveTimetables(<Timetable>[
         Timetable(
@@ -396,10 +342,7 @@ void main() {
         'summer',
       );
       expect(prefs.activeTimetable(today: DateTime(2026, 12, 1))!.id, 'winter');
-    });
 
-    test('不允许把时间表清空', () async {
-      final prefs = Preferences.inMemory();
       expect(
         () => prefs.saveTimetables(const <Timetable>[]),
         throwsArgumentError,
@@ -407,51 +350,34 @@ void main() {
     });
   });
 
-  group('时间格式化', () {
-    test('formatClock 补零', () {
+  group('时间格式化、房间号文本与全局节数', () {
+    test('formatClock / parseClock / snapToFiveMinutes', () {
       expect(formatClock(0), '00:00');
       expect(formatClock(8 * 60), '08:00');
       expect(formatClock(8 * 60 + 5), '08:05');
       expect(formatClock(23 * 60 + 59), '23:59');
-    });
 
-    test('parseClock 解析容错', () {
       expect(parseClock('08:05'), 485);
       expect(parseClock('8:05'), 485);
       expect(parseClock(' 14:00 '), 840);
       expect(parseClock('25:00'), isNull);
       expect(parseClock('abc'), isNull);
-    });
 
-    test('snapToFiveMinutes 对齐到 5 分钟', () {
       expect(snapToFiveMinutes(483), 485);
       expect(snapToFiveMinutes(482), 480);
       expect(snapToFiveMinutes(-10), 0);
     });
-  });
 
-  group('房间号文本（课表格子与提醒共用）', () {
-    test('多段地点只留最后一段', () {
+    test('roomOnly 裁剪多段、校区前缀、空白与空串', () {
       expect(roomOnly('高密校区 M1-239'), 'M1-239');
       expect(roomOnly('青岛科技大学 崂山校区 明德楼 201'), '201');
-    });
-
-    test('单段里带校区前缀时截掉前缀', () {
       expect(roomOnly('崂山校区3教201'), '3教201');
-    });
-
-    test('没有可截的内容时只去首尾空白', () {
       expect(roomOnly(' 3教201 '), '3教201');
-    });
-
-    test('空串与纯空白返回空串', () {
       expect(roomOnly(''), '');
       expect(roomOnly('   '), '');
     });
-  });
 
-  group('全局节数（三段）', () {
-    test('clampCounts：每段非负、总数不超过 20', () {
+    test('clampCounts 与旧配置 splitCounts', () {
       final capped = clampCounts(
         countsOf(morning: 10, afternoon: 10, evening: 6),
       );
@@ -463,15 +389,11 @@ void main() {
       );
       expect(negative[PeriodGroup.morning], 0);
       expect(countsSum(negative), 1);
-    });
 
-    test('全 0 退回默认分段，而不是画一张空表', () {
       final safe = clampCounts(countsOf(morning: 0, afternoon: 0, evening: 0));
       expect(countsSum(safe), defaultSectionCount);
       expect(safe[PeriodGroup.morning], 4);
-    });
 
-    test('splitCounts 只用于旧配置迁移', () {
       expect(splitCounts(10)[PeriodGroup.morning], 4);
       expect(splitCounts(10)[PeriodGroup.afternoon], 4);
       expect(splitCounts(10)[PeriodGroup.evening], 2);
@@ -481,54 +403,46 @@ void main() {
   });
 
   group('reconcileSections：逐段对齐', () {
-    test('某段变少只裁这一段，不影响别的段', () {
+    test('某段变少独立裁剪、变多沿用末节时长后补、从 0 变有课按默认起算', () {
       final base = buildSections(setup(), countsOf());
-      final result = reconcileSections(base, countsOf(morning: 2, evening: 2));
 
-      expect(result.length, 8);
-      expect(result[0].group, PeriodGroup.morning);
-      expect(result[2].group, PeriodGroup.afternoon);
-      expect(result[6].group, PeriodGroup.evening);
-      // 晚上的课必须还在，且节次重排为 7–8。
-      expect(result[6].period, 7);
-      expect(formatClock(result[6].startMinutes), '19:00');
-    });
+      // 1. 某段变少只裁这一段，不影响别的段
+      final shrunk = reconcileSections(base, countsOf(morning: 2, evening: 2));
+      expect(shrunk.length, 8);
+      expect(shrunk[0].group, PeriodGroup.morning);
+      expect(shrunk[2].group, PeriodGroup.afternoon);
+      expect(shrunk[6].group, PeriodGroup.evening);
+      expect(shrunk[6].period, 7);
+      expect(formatClock(shrunk[6].startMinutes), '19:00');
 
-    test('某段变多：按该段最后一节的时长 + 默认课间往后补', () {
-      final base = buildSections(setup(), countsOf());
-      final result = reconcileSections(base, countsOf(morning: 6));
+      // 2. 某段变多：按该段最后一节的时长 + 默认课间往后补
+      final grown = reconcileSections(base, countsOf(morning: 6));
+      expect(grown.length, 12);
+      expect(formatClock(grown[4].startMinutes), '11:35');
+      expect(grown[4].durationMinutes, 45, reason: '沿用最后一节的时长');
+      expect(grown[4].group, PeriodGroup.morning);
+      expect(grown[6].group, PeriodGroup.afternoon, reason: '下午整体后移两节');
 
-      expect(result.length, 12);
-      // 第 4 节 10:45–11:30 → 补出来的第 5 节按默认课间（5 分钟）11:35 开始。
-      expect(formatClock(result[4].startMinutes), '11:35');
-      expect(result[4].durationMinutes, 45, reason: '沿用最后一节的时长');
-      expect(result[4].group, PeriodGroup.morning);
-      expect(result[6].group, PeriodGroup.afternoon, reason: '下午整体后移两节');
-    });
-
-    test('某段从 0 变成有课：从默认开始时间起算', () {
-      final base = buildSections(
+      // 3. 某段从 0 变成有课：从默认开始时间起算
+      final withoutAfternoon = buildSections(
         setup(),
         countsOf(morning: 4, afternoon: 0, evening: 0),
       );
-      final result = reconcileSections(
-        base,
+      final addedAfternoon = reconcileSections(
+        withoutAfternoon,
         countsOf(morning: 4, afternoon: 2, evening: 0),
       );
-
-      expect(result.length, 6);
-      expect(result[4].group, PeriodGroup.afternoon);
-      expect(formatClock(result[4].startMinutes), '14:00');
+      expect(addedAfternoon.length, 6);
+      expect(addedAfternoon[4].group, PeriodGroup.afternoon);
+      expect(formatClock(addedAfternoon[4].startMinutes), '14:00');
     });
 
-    test('空表按三段生成', () {
-      final result = reconcileSections(const <SectionTime>[], countsOf());
-      expect(result.length, 10);
-      expect(result.first.group, PeriodGroup.morning);
-      expect(result.last.group, PeriodGroup.evening);
-    });
+    test('空表按三段生成、节数夹在 1..20 且已对齐时保留手工修改', () {
+      final fromEmpty = reconcileSections(const <SectionTime>[], countsOf());
+      expect(fromEmpty.length, 10);
+      expect(fromEmpty.first.group, PeriodGroup.morning);
+      expect(fromEmpty.last.group, PeriodGroup.evening);
 
-    test('节数被夹在 1..20', () {
       expect(
         reconcileSections(
           const <SectionTime>[],
@@ -543,48 +457,35 @@ void main() {
         ).length,
         maxSections,
       );
-    });
 
-    test('已经对齐时原样返回（保留手工改过的时间）', () {
       final base = buildSections(setup(), countsOf());
       final edited = <SectionTime>[
         base[0].copyWith(startMinutes: 8 * 60 + 10, endMinutes: 8 * 60 + 55),
         ...base.sublist(1),
       ];
-      final result = reconcileSections(edited, countsOf());
-      expect(result[0].startMinutes, 8 * 60 + 10);
+      final preserved = reconcileSections(edited, countsOf());
+      expect(preserved[0].startMinutes, 8 * 60 + 10);
     });
   });
 
   group('生效日期（只选月日，按年循环）', () {
-    test('一律落在当年（年份不参与切换判断）', () {
-      final date = effectiveDateFor(
+    test('effectiveDateFor 一律落在当年，daysInMonth 处理大小月与闰年', () {
+      final pastInYear = effectiveDateFor(
         month: 2,
         day: 23,
         now: DateTime(2026, 12, 20),
       );
-      expect(date.year, 2026);
-      expect(date.month, 2);
-      expect(date.day, 23);
-    });
+      expect(pastInYear, DateTime(2026, 2, 23));
 
-    test('未来的月日留在今年', () {
-      final date = effectiveDateFor(
-        month: 11,
-        day: 1,
-        now: DateTime(2026, 10, 17),
+      expect(
+        effectiveDateFor(month: 11, day: 1, now: DateTime(2026, 10, 17)).year,
+        2026,
       );
-      expect(date.year, 2026);
-    });
-
-    test('同一天算今年（不跳到明年）', () {
       expect(
         effectiveDateFor(month: 10, day: 17, now: DateTime(2026, 10, 17)).year,
         2026,
       );
-    });
 
-    test('daysInMonth 处理大小月与闰年', () {
       expect(daysInMonth(2026, 1), 31);
       expect(daysInMonth(2026, 2), 28);
       expect(daysInMonth(2028, 2), 29);
@@ -594,29 +495,25 @@ void main() {
   });
 
   group('Preferences 全局节数', () {
-    test('默认 4/4/2；旧文件缺字段时也是 10 节', () {
-      final prefs = Preferences.decode('');
-      expect(prefs.sectionCount, 10);
-      expect(prefs.sectionCounts[PeriodGroup.morning], 4);
-      expect(prefs.sectionCounts[PeriodGroup.evening], 2);
+    test('默认值、旧字段迁移、三段解码范围校验与写入夹取', () async {
+      final def = Preferences.decode('');
+      expect(def.sectionCount, 10);
+      expect(def.sectionCounts[PeriodGroup.morning], 4);
+      expect(def.sectionCounts[PeriodGroup.evening], 2);
       expect(
         Preferences.decode(jsonEncode(<String, Object?>{'schema': 1}))
             .sectionCount,
         10,
       );
-    });
 
-    test('旧的单个 sectionCount 迁移成三段', () {
-      final prefs = Preferences.decode(
+      final migrated = Preferences.decode(
         jsonEncode(<String, Object?>{'schema': 2, 'sectionCount': 12}),
       );
-      expect(prefs.sectionCount, 12);
-      expect(prefs.sectionCounts[PeriodGroup.morning], 4);
-      expect(prefs.sectionCounts[PeriodGroup.evening], 4);
-    });
+      expect(migrated.sectionCount, 12);
+      expect(migrated.sectionCounts[PeriodGroup.morning], 4);
+      expect(migrated.sectionCounts[PeriodGroup.evening], 4);
 
-    test('新格式直接读三段，并夹在合法范围', () {
-      final prefs = Preferences.decode(
+      final decoded = Preferences.decode(
         jsonEncode(<String, Object?>{
           'schema': 2,
           'sectionCounts': <String, int>{
@@ -626,11 +523,9 @@ void main() {
           },
         }),
       );
-      expect(prefs.sectionCount, 8);
-      expect(prefs.sectionCounts[PeriodGroup.morning], 5);
-    });
+      expect(decoded.sectionCount, 8);
+      expect(decoded.sectionCounts[PeriodGroup.morning], 5);
 
-    test('写入时夹取，且三段之和等于 sectionCount', () async {
       final prefs = Preferences.inMemory();
       await prefs.setSectionCounts(
         countsOf(morning: 5, afternoon: 5, evening: 2),
@@ -647,8 +542,8 @@ void main() {
     });
   });
 
-  group('Preferences 格子显示开关', () {
-    test('默认都显示；旧文件没有这两个字段也按显示处理', () {
+  group('Preferences 格子显示与外观设置', () {
+    test('格子显示开关默认值、旧文件兼容与落盘读写', () async {
       expect(Preferences.decode('').showTeacher, isTrue);
       expect(Preferences.decode('').showLocation, isTrue);
       final legacy = Preferences.decode(
@@ -656,13 +551,10 @@ void main() {
       );
       expect(legacy.showTeacher, isTrue, reason: '升级不该把教师藏起来');
       expect(legacy.showLocation, isTrue);
-    });
 
-    test('关掉后落盘，重新读回来还是关着', () async {
       final dir = await Directory.systemTemp.createTemp('kb_prefs_show');
       final file = File('${dir.path}/app_prefs.json');
       final prefs = Preferences.decode('', file: file);
-
       await prefs.setShowTeacher(false);
       await prefs.setShowLocation(false);
 
@@ -674,56 +566,46 @@ void main() {
         (jsonDecode(raw) as Map<String, dynamic>)['schema'],
         preferencesSchema,
       );
-
       await dir.delete(recursive: true);
     });
-  });
 
-  group('Preferences 外观', () {
-    test('默认值：格子 72、字号 100%；旧文件缺字段也是这个值', () {
-      final prefs = Preferences.decode('');
-      expect(prefs.cellHeight, defaultCellHeight);
-      expect(prefs.courseTextScale, defaultCourseTextScale);
+    test('外观默认值、边界夹取、NaN 退回与落盘读写', () async {
+      final def = Preferences.decode('');
+      expect(def.cellHeight, defaultCellHeight);
+      expect(def.courseTextScale, defaultCourseTextScale);
       expect(
         Preferences.decode(jsonEncode(<String, Object?>{'schema': 3}))
             .cellHeight,
         defaultCellHeight,
       );
-    });
 
-    test('越界的值按上下限夹住，NaN 退回默认', () async {
-      final prefs = Preferences.inMemory();
-      await prefs.setCellHeight(999);
-      expect(prefs.cellHeight, maxCellHeight);
-      await prefs.setCellHeight(1);
-      expect(prefs.cellHeight, minCellHeight);
-      await prefs.setCourseTextScale(9);
-      expect(prefs.courseTextScale, maxCourseTextScale);
-      await prefs.setCourseTextScale(double.nan);
-      expect(prefs.courseTextScale, defaultCourseTextScale);
-    });
+      final mem = Preferences.inMemory();
+      await mem.setCellHeight(999);
+      expect(mem.cellHeight, maxCellHeight);
+      await mem.setCellHeight(1);
+      expect(mem.cellHeight, minCellHeight);
+      await mem.setCourseTextScale(9);
+      expect(mem.courseTextScale, maxCourseTextScale);
+      await mem.setCourseTextScale(double.nan);
+      expect(mem.courseTextScale, defaultCourseTextScale);
 
-    test('落盘后重新读回来一致', () async {
       final dir = await Directory.systemTemp.createTemp('kb_prefs_look');
       final file = File('${dir.path}/app_prefs.json');
       final prefs = Preferences.decode('', file: file);
-
       await prefs.setCellHeight(88);
       await prefs.setCourseTextScale(1.15);
 
       final again = Preferences.decode(await file.readAsString());
       expect(again.cellHeight, 88);
       expect(again.courseTextScale, closeTo(1.15, 1e-9));
-
       await dir.delete(recursive: true);
     });
   });
 
-  test('上次登录的账号按学校分别记，旧文件缺字段时为空（schema 7）', () async {
+  test('上次登录的账号与学生姓名按学校分别记，兼容旧版与尾斜杠（schema 7 / 13）', () async {
     final prefs = Preferences.inMemory();
     await prefs.setAccountOf('https://a.edu.cn/jwglxt', '111');
     await prefs.setAccountOf('https://b.edu.cn/jwglxt', '222');
-
     expect(prefs.accountOf('https://a.edu.cn/jwglxt'), '111');
     expect(prefs.accountOf('https://b.edu.cn/jwglxt'), '222');
 
@@ -731,19 +613,6 @@ void main() {
     expect(prefs.accountOf('https://a.edu.cn/jwglxt'), isEmpty);
     expect(prefs.accountOf('https://b.edu.cn/jwglxt'), '222', reason: '别清错学校');
 
-    // 旧文件（schema 6）没有这个字段：读出来是空，不崩。
-    final legacy = Preferences.decode('{"schema":6,"termStarts":{}}');
-    expect(legacy.accountOf('https://a.edu.cn/jwglxt'), isEmpty);
-
-    // 新文件能读回，并且地址比较忽略写法差异（尾斜杠、大小写）。
-    final restored = Preferences.decode(
-      '{"schema":7,"lastAccounts":{"https://a.edu.cn/jwglxt/":"333"}}',
-    );
-    expect(restored.accountOf('https://a.edu.cn/jwglxt'), '333');
-  });
-
-  test('上次登录的学生姓名按学校分别记，冷启动免等网络（schema 13）', () async {
-    final prefs = Preferences.inMemory();
     await prefs.setIdentityOf(
       'https://a.edu.cn/jwglxt',
       studentId: '111',
@@ -754,7 +623,6 @@ void main() {
       studentId: '222',
       studentName: '李四',
     );
-
     expect(prefs.accountOf('https://a.edu.cn/jwglxt'), '111');
     expect(prefs.studentNameOf('https://a.edu.cn/jwglxt'), '张三');
     expect(prefs.accountOf('https://b.edu.cn/jwglxt'), '222');
@@ -766,14 +634,17 @@ void main() {
     expect(prefs.accountOf('https://b.edu.cn/jwglxt'), '222', reason: '别清错学校');
     expect(prefs.studentNameOf('https://b.edu.cn/jwglxt'), '李四');
 
-    // 旧文件没有 lastStudentNames 字段：读出来是空，不崩溃。
-    final legacy = Preferences.decode(
-      '{"schema":7,"lastAccounts":{"https://a.edu.cn/jwglxt":"111"}}',
-    );
-    expect(legacy.accountOf('https://a.edu.cn/jwglxt'), '111');
-    expect(legacy.studentNameOf('https://a.edu.cn/jwglxt'), isEmpty);
+    // 旧文件（schema 6 / 7）缺字段时为空，不崩溃
+    final legacyS6 = Preferences.decode('{"schema":6,"termStarts":{}}');
+    expect(legacyS6.accountOf('https://a.edu.cn/jwglxt'), isEmpty);
 
-    // 新格式能读回姓名
+    final legacyS7 = Preferences.decode(
+      '{"schema":7,"lastAccounts":{"https://a.edu.cn/jwglxt/":"111"}}',
+    );
+    expect(legacyS7.accountOf('https://a.edu.cn/jwglxt'), '111');
+    expect(legacyS7.studentNameOf('https://a.edu.cn/jwglxt'), isEmpty);
+
+    // 新格式能读回账号与姓名，且地址比较忽略尾斜杠差异
     final restored = Preferences.decode(
       '{"schema":13,"lastAccounts":{"https://a.edu.cn/jwglxt/":"333"},"lastStudentNames":{"https://a.edu.cn/jwglxt/":"王五"}}',
     );
@@ -782,56 +653,38 @@ void main() {
   });
 
   group('课前提醒设置（schema 11）', () {
-    test('默认关闭，提前量默认 10 分钟，横幅形态', () {
+    test('默认值、旧文件缺字段与未知形态回落横幅', () {
       final prefs = Preferences.inMemory();
       expect(prefs.reminderEnabled, isFalse);
       expect(prefs.reminderLeadMinutes, defaultReminderLeadMinutes);
       expect(prefs.reminderStyle, ReminderStyle.banner);
       expect(defaultReminderLeadMinutes, 10);
       expect(reminderLeadOptions, <int>[5, 10, 15, 20, 30]);
-    });
 
-    test('提前量收敛到 1~60 分钟（滑块连续取值）', () async {
-      final prefs = Preferences.inMemory();
-      await prefs.setReminderLeadMinutes(7);
-      expect(prefs.reminderLeadMinutes, 7);
-      await prefs.setReminderLeadMinutes(30);
-      expect(prefs.reminderLeadMinutes, 30);
-      await prefs.setReminderLeadMinutes(0);
-      expect(prefs.reminderLeadMinutes, reminderMinLeadMinutes);
-      await prefs.setReminderLeadMinutes(999);
-      expect(prefs.reminderLeadMinutes, reminderMaxLeadMinutes);
-    });
-
-    test('落盘后重新读回来一致', () async {
-      final dir = await Directory.systemTemp.createTemp('kb_prefs_remind');
-      final file = File('${dir.path}/app_prefs.json');
-      final prefs = Preferences.decode('', file: file);
-
-      await prefs.setReminderEnabled(true);
-      await prefs.setReminderLeadMinutes(20);
-      await prefs.setReminderStyle(ReminderStyle.fluid);
-
-      final text = await file.readAsString();
-      expect(text, contains('"schema":$preferencesSchema'));
-      final again = Preferences.decode(text);
-      expect(again.reminderEnabled, isTrue);
-      expect(again.reminderLeadMinutes, 20);
-      expect(again.reminderStyle, ReminderStyle.fluid);
-
-      await dir.delete(recursive: true);
-    });
-
-    test('schema 8 旧文件没有这些字段：按关闭 + 默认提前量 + 横幅处理', () {
       final legacy = Preferences.decode(
         '{"schema":8,"termStarts":{},"autoRefresh":false}',
       );
       expect(legacy.reminderEnabled, isFalse);
       expect(legacy.reminderLeadMinutes, 10);
       expect(legacy.reminderStyle, ReminderStyle.banner);
+
+      final unknown = Preferences.decode(
+        '{"schema":10,"reminderStyle":"capsule"}',
+      );
+      expect(unknown.reminderStyle, ReminderStyle.banner);
     });
 
-    test('文件里的提前量越界时收敛，合法值原样保留', () {
+    test('提前量收敛与持久化、文件解码校验', () async {
+      final mem = Preferences.inMemory();
+      await mem.setReminderLeadMinutes(7);
+      expect(mem.reminderLeadMinutes, 7);
+      await mem.setReminderLeadMinutes(30);
+      expect(mem.reminderLeadMinutes, 30);
+      await mem.setReminderLeadMinutes(0);
+      expect(mem.reminderLeadMinutes, reminderMinLeadMinutes);
+      await mem.setReminderLeadMinutes(999);
+      expect(mem.reminderLeadMinutes, reminderMaxLeadMinutes);
+
       final kept = Preferences.decode(
         '{"schema":10,"reminderEnabled":true,"reminderLeadMinutes":7}',
       );
@@ -842,13 +695,21 @@ void main() {
         '{"schema":10,"reminderLeadMinutes":999}',
       );
       expect(clamped.reminderLeadMinutes, reminderMaxLeadMinutes);
-    });
 
-    test('文件里写了未知形态：回落横幅', () {
-      final prefs = Preferences.decode(
-        '{"schema":10,"reminderStyle":"capsule"}',
-      );
-      expect(prefs.reminderStyle, ReminderStyle.banner);
+      final dir = await Directory.systemTemp.createTemp('kb_prefs_remind');
+      final file = File('${dir.path}/app_prefs.json');
+      final prefs = Preferences.decode('', file: file);
+      await prefs.setReminderEnabled(true);
+      await prefs.setReminderLeadMinutes(20);
+      await prefs.setReminderStyle(ReminderStyle.fluid);
+
+      final text = await file.readAsString();
+      expect(text, contains('"schema":$preferencesSchema'));
+      final again = Preferences.decode(text);
+      expect(again.reminderEnabled, isTrue);
+      expect(again.reminderLeadMinutes, 20);
+      expect(again.reminderStyle, ReminderStyle.fluid);
+      await dir.delete(recursive: true);
     });
   });
 }

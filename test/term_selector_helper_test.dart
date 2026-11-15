@@ -6,22 +6,12 @@ void main() {
   group('parseEnrollmentYear', () {
     final refDate = DateTime(2025, 9, 1);
 
-    test('解析青科大真实10位学号 (如 2412345678 -> 2024)', () {
+    test('解析青科大 10 位学号、4 位年份前缀与纯年份字符', () {
+      // 青科大 10 位学号（YY+CC+MM+NN+SS，前 2 位严格为入学年）
       expect(parseEnrollmentYear('2412345678', now: refDate), 2024);
       expect(parseEnrollmentYear('2312345678', now: refDate), 2023);
       expect(parseEnrollmentYear('2112345678', now: refDate), 2021);
       expect(parseEnrollmentYear('2501010101', now: refDate), 2025);
-    });
-
-    test('解析4位年份前缀学号 (如 20240001 -> 2024, 20260001 -> 2026)', () {
-      expect(parseEnrollmentYear('20240001', now: refDate), 2024);
-      expect(parseEnrollmentYear('20230001', now: refDate), 2023);
-      expect(parseEnrollmentYear('20260001', now: DateTime(2026, 9, 1)), 2026);
-      expect(parseEnrollmentYear('20221234', now: refDate), 2022);
-      expect(parseEnrollmentYear('202400000001', now: refDate), 2024);
-    });
-
-    test('解析青科大标准10位学号 (YY+CC+MM+NN+SS，前2位严格为入学年)', () {
       expect(parseEnrollmentYear('2012345678', now: refDate), 2020);
       expect(
         parseEnrollmentYear('2012345678', now: DateTime(2021, 9, 1)),
@@ -31,41 +21,42 @@ void main() {
       expect(parseEnrollmentYear('2021010101', now: refDate), 2020);
       expect(parseEnrollmentYear('2015010101', now: refDate), 2020);
       expect(parseEnrollmentYear('2020000001', now: refDate), 2020);
-      expect(parseEnrollmentYear('2412345678', now: refDate), 2024);
-    });
 
-    test('纯年份字符 (2024 -> 2024, 24 -> 2024)', () {
+      // 4 位年份前缀学号
+      expect(parseEnrollmentYear('20240001', now: refDate), 2024);
+      expect(parseEnrollmentYear('20230001', now: refDate), 2023);
+      expect(parseEnrollmentYear('20260001', now: DateTime(2026, 9, 1)), 2026);
+      expect(parseEnrollmentYear('20221234', now: refDate), 2022);
+      expect(parseEnrollmentYear('202400000001', now: refDate), 2024);
+
+      // 纯年份字符
       expect(parseEnrollmentYear('2024', now: refDate), 2024);
       expect(parseEnrollmentYear('24', now: refDate), 2024);
     });
 
-    test('空或无效学号返回 null 优雅回退', () {
-      expect(parseEnrollmentYear(null, now: refDate), isNull);
-      expect(parseEnrollmentYear('', now: refDate), isNull);
-      expect(parseEnrollmentYear('   ', now: refDate), isNull);
-      expect(parseEnrollmentYear('guest', now: refDate), isNull);
-      expect(parseEnrollmentYear('1', now: refDate), isNull);
-    });
-
-    test('超出在校合理年限的异常值返回 null', () {
-      expect(parseEnrollmentYear('20050001', now: refDate), isNull);
-      expect(parseEnrollmentYear('20991234', now: refDate), isNull);
-      expect(parseEnrollmentYear('00001234', now: refDate), isNull);
-      expect(parseEnrollmentYear('99991234', now: refDate), isNull);
+    test('空值、无效格式与超出在校合理年限返回 null', () {
+      for (final raw in [
+        null,
+        '',
+        '   ',
+        'guest',
+        '1',
+        '20050001',
+        '20991234',
+        '00001234',
+        '99991234',
+      ]) {
+        expect(parseEnrollmentYear(raw, now: refDate), isNull, reason: '$raw');
+      }
     });
   });
 
   group('estimateCurrentAcademicYear', () {
-    test('根据自然日历推断学年', () {
-      // 9月开学进入新学年
+    test('根据自然日历推断学年，并被已选/服务端当前学期提升', () {
       expect(estimateCurrentAcademicYear(now: DateTime(2024, 9, 15)), 2024);
-      // 次年1月仍属于上一年的秋季学期
       expect(estimateCurrentAcademicYear(now: DateTime(2025, 1, 10)), 2024);
-      // 次年4月属于上一年的春季学期
       expect(estimateCurrentAcademicYear(now: DateTime(2025, 4, 15)), 2024);
-    });
 
-    test('已选学期或服务端当前学期更大时提升当前学年', () {
       expect(
         estimateCurrentAcademicYear(
           now: DateTime(2024, 5, 1),
@@ -129,85 +120,59 @@ void main() {
       ),
     ];
 
-    test('过滤早于入学年份的历史学期，且将未来学期限制在当前学年以内', () {
-      // 2024级学生，当前处于2025学年
-      final filtered = filterTerms(
-        terms: terms,
-        enrollmentYear: 2024,
-        currentAcademicYear: 2025,
+    test('按入学年份与当前学年过滤，缺失入学年份与空列表兜底', () {
+      // 2024 级学生，当前 2025 学年：过滤入学前与超前学期
+      expect(
+        filterTerms(
+          terms: terms,
+          enrollmentYear: 2024,
+          currentAcademicYear: 2025,
+        ).map((t) => t.id),
+        ['2025-2026-2', '2025-2026-1', '2024-2025-2', '2024-2025-1'],
       );
 
-      final ids = filtered.map((t) => t.id).toList();
-      // 2026-2027-1 (超前) 和 2023-2024 / 2022-2023 (入学前) 必须被过滤
-      expect(ids, <String>[
-        '2025-2026-2',
-        '2025-2026-1',
-        '2024-2025-2',
-        '2024-2025-1',
-      ]);
-    });
-
-    test('当前选中学期始终被保留，即使早于入学年份', () {
-      final filtered = filterTerms(
-        terms: terms,
-        enrollmentYear: 2024,
-        currentAcademicYear: 2025,
-        currentTermId: '2023-2024-2',
-      );
-      final ids = filtered.map((t) => t.id).toList();
-      expect(ids, contains('2023-2024-2'));
-    });
-
-    test('无法解析学号时不过滤历史学期，但限制未来学期', () {
-      final filtered = filterTerms(
+      // 无法解析学号时保留历史学期但仍限制未来学年
+      final noEnrollmentIds = filterTerms(
         terms: terms,
         enrollmentYear: null,
         currentAcademicYear: 2025,
+      ).map((t) => t.id).toList();
+      expect(noEnrollmentIds, containsAll(['2022-2023-1', '2023-2024-2']));
+      expect(noEnrollmentIds, isNot(contains('2026-2027-1')));
+
+      // 原始 terms 为空时根据在校区间自动推导
+      expect(
+        filterTerms(
+          terms: const <Term>[],
+          enrollmentYear: 2024,
+          currentAcademicYear: 2025,
+        ).map((t) => t.id),
+        ['2025-2026-2', '2025-2026-1', '2024-2025-2', '2024-2025-1'],
       );
-      final ids = filtered.map((t) => t.id).toList();
-      expect(ids, contains('2022-2023-1'));
-      expect(ids, contains('2023-2024-2'));
-      expect(ids, isNot(contains('2026-2027-1')));
     });
 
-    test('原始 terms 为空时根据在校区间自动推导', () {
-      final filtered = filterTerms(
-        terms: const <Term>[],
-        enrollmentYear: 2024,
-        currentAcademicYear: 2025,
+    test('按 now、serverCurrentTermId 与 currentSemester 精确截断未来学期', () {
+      // 秋季第1学期截断当年第2学期
+      expect(
+        filterTerms(
+          terms: terms,
+          enrollmentYear: 2024,
+          now: DateTime(2024, 10, 1),
+        ).map((t) => t.id),
+        ['2024-2025-1'],
       );
-      final ids = filtered.map((t) => t.id).toList();
-      expect(ids, <String>[
-        '2025-2026-2',
-        '2025-2026-1',
-        '2024-2025-2',
-        '2024-2025-1',
-      ]);
-    });
-
-    test('未显式传入 currentAcademicYear 时通过 now 自然过滤未来学期 (秋季第1学期截断第2学期)', () {
-      final filtered = filterTerms(
-        terms: terms,
-        enrollmentYear: 2024,
-        now: DateTime(2024, 10, 1),
+      // 春季第2学期展示当年第1与第2学期
+      expect(
+        filterTerms(
+          terms: terms,
+          enrollmentYear: 2024,
+          now: DateTime(2025, 3, 1),
+        ).map((t) => t.id),
+        ['2024-2025-2', '2024-2025-1'],
       );
-      final ids = filtered.map((t) => t.id).toList();
-      // 2024年10月为2024-2025秋季学期（第1学期），未来学年以及当年的第2学期均被过滤
-      expect(ids, <String>['2024-2025-1']);
-    });
 
-    test('春季第2学期时展示当年第1与第2学期', () {
-      final filtered = filterTerms(
-        terms: terms,
-        enrollmentYear: 2024,
-        now: DateTime(2025, 3, 1),
-      );
-      final ids = filtered.map((t) => t.id).toList();
-      expect(ids, <String>['2024-2025-2', '2024-2025-1']);
-    });
-
-    test('基于 serverCurrentTermId 精确截断未来学期 (如当前为大三上 2026-2027-1 时不显示大三下 2026-2027-2)', () {
-      final termsWithJuniorSpring = <Term>[
+      // serverCurrentTermId 精确截断（大三上 2026-2027-1 时不显示 2026-2027-2）
+      final withJuniorSpring = <Term>[
         const Term(
           id: '2026-2027-2',
           name: '2026-2027 第2学期',
@@ -216,56 +181,47 @@ void main() {
         ),
         ...terms,
       ];
-      final filtered = filterTerms(
-        terms: termsWithJuniorSpring,
+      final juniorIds = filterTerms(
+        terms: withJuniorSpring,
         enrollmentYear: 2024,
         serverCurrentTermId: '2026-2027-1',
+      ).map((t) => t.id).toList();
+      expect(juniorIds, isNot(contains('2026-2027-2')));
+      expect(
+        juniorIds,
+        containsAll([
+          '2026-2027-1',
+          '2025-2026-2',
+          '2025-2026-1',
+          '2024-2025-2',
+          '2024-2025-1',
+        ]),
       );
-      final ids = filtered.map((t) => t.id).toList();
-      expect(ids, isNot(contains('2026-2027-2')));
-      expect(ids, contains('2026-2027-1'));
-      expect(ids, contains('2025-2026-2'));
-      expect(ids, contains('2025-2026-1'));
-      expect(ids, contains('2024-2025-2'));
-      expect(ids, contains('2024-2025-1'));
+
+      // 原始 terms 为空且当前为第1学期时不推导当年第2学期
+      expect(
+        filterTerms(
+          terms: const <Term>[],
+          enrollmentYear: 2024,
+          serverCurrentTermId: '2025-2026-1',
+        ).map((t) => t.id),
+        ['2025-2026-1', '2024-2025-2', '2024-2025-1'],
+      );
+
+      // 显式 currentSemester 截断
+      expect(
+        filterTerms(
+          terms: terms,
+          enrollmentYear: 2024,
+          currentAcademicYear: 2025,
+          currentSemester: 1,
+        ).map((t) => t.id),
+        ['2025-2026-1', '2024-2025-2', '2024-2025-1'],
+      );
     });
 
-    test('原始 terms 为空且当前为第1学期时，不推导当前学年第2学期', () {
-      final filtered = filterTerms(
-        terms: const <Term>[],
-        enrollmentYear: 2024,
-        serverCurrentTermId: '2025-2026-1',
-      );
-      final ids = filtered.map((t) => t.id).toList();
-      expect(ids, isNot(contains('2025-2026-2')));
-      expect(ids, <String>['2025-2026-1', '2024-2025-2', '2024-2025-1']);
-    });
-
-    test('原始 terms 为空且传入了当前选中学期时，确保该学期被保留', () {
-      final filtered = filterTerms(
-        terms: const <Term>[],
-        enrollmentYear: 2024,
-        serverCurrentTermId: '2025-2026-1',
-        currentTermId: '2023-2024-2',
-      );
-      final ids = filtered.map((t) => t.id).toList();
-      expect(ids, contains('2023-2024-2'));
-      expect(ids, contains('2025-2026-1'));
-    });
-
-    test('currentSemester 显式指定时按学期截断', () {
-      final filtered = filterTerms(
-        terms: terms,
-        enrollmentYear: 2024,
-        currentAcademicYear: 2025,
-        currentSemester: 1,
-      );
-      final ids = filtered.map((t) => t.id).toList();
-      expect(ids, <String>['2025-2026-1', '2024-2025-2', '2024-2025-1']);
-    });
-
-    test('青科大两学期制：自动过滤教务系统自带的第3学期 (小学期/短学期)', () {
-      final termsWithShortSemester = <Term>[
+    test('两学期制自动过滤第 3 学期（小学期），但始终保留当前选中学期', () {
+      final withShortSemester = <Term>[
         const Term(
           id: '2024-2025-3',
           name: '2024-2025 第3学期',
@@ -280,182 +236,84 @@ void main() {
         ),
         ...terms,
       ];
-      final filtered = filterTerms(
-        terms: termsWithShortSemester,
-        enrollmentYear: 2024,
-        currentAcademicYear: 2025,
+      expect(
+        filterTerms(
+          terms: withShortSemester,
+          enrollmentYear: 2024,
+          currentAcademicYear: 2025,
+        ).map((t) => t.id),
+        ['2025-2026-2', '2025-2026-1', '2024-2025-2', '2024-2025-1'],
       );
-      final ids = filtered.map((t) => t.id).toList();
-      expect(ids, isNot(contains('2024-2025-3')));
-      expect(ids, isNot(contains('2023-2024-3')));
-      expect(ids, <String>[
-        '2025-2026-2',
-        '2025-2026-1',
-        '2024-2025-2',
-        '2024-2025-1',
-      ]);
-    });
 
-    test('当前选中学期若是第3学期时，做极端防御性兜底予以保留', () {
-      final termsWithShortSemester = <Term>[
-        const Term(
-          id: '2024-2025-3',
-          name: '2024-2025 第3学期',
-          year: 2024,
-          semester: 3,
-        ),
-        ...terms,
-      ];
-      final filtered = filterTerms(
-        terms: termsWithShortSemester,
-        enrollmentYear: 2024,
-        currentAcademicYear: 2025,
-        currentTermId: '2024-2025-3',
+      // 早于入学年份的当前选中学期
+      expect(
+        filterTerms(
+          terms: terms,
+          enrollmentYear: 2024,
+          currentAcademicYear: 2025,
+          currentTermId: '2023-2024-2',
+        ).map((t) => t.id),
+        contains('2023-2024-2'),
       );
-      final ids = filtered.map((t) => t.id).toList();
-      expect(ids, contains('2024-2025-3'));
+
+      // 空 terms 且传入当前选中学期
+      expect(
+        filterTerms(
+          terms: const <Term>[],
+          enrollmentYear: 2024,
+          serverCurrentTermId: '2025-2026-1',
+          currentTermId: '2023-2024-2',
+        ).map((t) => t.id),
+        containsAll(['2023-2024-2', '2025-2026-1']),
+      );
+
+      // 第 3 学期作为当前选中学期时的防御性保留
+      expect(
+        filterTerms(
+          terms: withShortSemester,
+          enrollmentYear: 2024,
+          currentAcademicYear: 2025,
+          currentTermId: '2024-2025-3',
+        ).map((t) => t.id),
+        contains('2024-2025-3'),
+      );
     });
   });
 
   group('formatTermPrimaryLabel', () {
     const enrollment = 2024;
 
-    test('Year 0: 大一 上学期 与 大一 下学期', () {
-      expect(
-        formatTermPrimaryLabel(
-          term: const Term(
-            id: '2024-2025-1',
-            name: '',
-            year: 2024,
-            semester: 1,
+    test('大一至大五上下学期与小学期名称映射', () {
+      final cases = <(int, int, String)>[
+        (2024, 1, '大一 上学期'),
+        (2024, 2, '大一 下学期'),
+        (2024, 3, '大一 第3学期'),
+        (2025, 1, '大二 上学期'),
+        (2025, 2, '大二 下学期'),
+        (2026, 1, '大三 上学期'),
+        (2026, 2, '大三 下学期'),
+        (2027, 1, '大四 上学期'),
+        (2027, 2, '大四 下学期'),
+        (2028, 1, '大五 上学期'),
+        (2028, 2, '大五 下学期'),
+      ];
+      for (final (year, semester, expected) in cases) {
+        expect(
+          formatTermPrimaryLabel(
+            term: Term(
+              id: '$year-${year + 1}-$semester',
+              name: '',
+              year: year,
+              semester: semester,
+            ),
+            enrollmentYear: enrollment,
           ),
-          enrollmentYear: enrollment,
-        ),
-        '大一 上学期',
-      );
-      expect(
-        formatTermPrimaryLabel(
-          term: const Term(
-            id: '2024-2025-2',
-            name: '',
-            year: 2024,
-            semester: 2,
-          ),
-          enrollmentYear: enrollment,
-        ),
-        '大一 下学期',
-      );
+          expected,
+        );
+      }
     });
 
-    test('Year 1: 大二 上学期 与 大二 下学期', () {
-      expect(
-        formatTermPrimaryLabel(
-          term: const Term(
-            id: '2025-2026-1',
-            name: '',
-            year: 2025,
-            semester: 1,
-          ),
-          enrollmentYear: enrollment,
-        ),
-        '大二 上学期',
-      );
-      expect(
-        formatTermPrimaryLabel(
-          term: const Term(
-            id: '2025-2026-2',
-            name: '',
-            year: 2025,
-            semester: 2,
-          ),
-          enrollmentYear: enrollment,
-        ),
-        '大二 下学期',
-      );
-    });
-
-    test('Year 2: 大三 上学期 与 大三 下学期', () {
-      expect(
-        formatTermPrimaryLabel(
-          term: const Term(
-            id: '2026-2027-1',
-            name: '',
-            year: 2026,
-            semester: 1,
-          ),
-          enrollmentYear: enrollment,
-        ),
-        '大三 上学期',
-      );
-      expect(
-        formatTermPrimaryLabel(
-          term: const Term(
-            id: '2026-2027-2',
-            name: '',
-            year: 2026,
-            semester: 2,
-          ),
-          enrollmentYear: enrollment,
-        ),
-        '大三 下学期',
-      );
-    });
-
-    test('Year 3: 大四 上学期 与 大四 下学期', () {
-      expect(
-        formatTermPrimaryLabel(
-          term: const Term(
-            id: '2027-2028-1',
-            name: '',
-            year: 2027,
-            semester: 1,
-          ),
-          enrollmentYear: enrollment,
-        ),
-        '大四 上学期',
-      );
-      expect(
-        formatTermPrimaryLabel(
-          term: const Term(
-            id: '2027-2028-2',
-            name: '',
-            year: 2027,
-            semester: 2,
-          ),
-          enrollmentYear: enrollment,
-        ),
-        '大四 下学期',
-      );
-    });
-
-    test('Year 4: 大五 上学期 与 大五 下学期 (支持五年制专业)', () {
-      expect(
-        formatTermPrimaryLabel(
-          term: const Term(
-            id: '2028-2029-1',
-            name: '',
-            year: 2028,
-            semester: 1,
-          ),
-          enrollmentYear: enrollment,
-        ),
-        '大五 上学期',
-      );
-      expect(
-        formatTermPrimaryLabel(
-          term: const Term(
-            id: '2028-2029-2',
-            name: '',
-            year: 2028,
-            semester: 2,
-          ),
-          enrollmentYear: enrollment,
-        ),
-        '大五 下学期',
-      );
-    });
-
-    test('Beyond Year 4 (大五以后) 回退至学年学期名称', () {
+    test('超出大五或无入学年份回退至学年学期名', () {
       expect(
         formatTermPrimaryLabel(
           term: const Term(
@@ -480,9 +338,6 @@ void main() {
         ),
         '2030-2031 第2学期',
       );
-    });
-
-    test('无入学年份时回退至学年学期名', () {
       expect(
         formatTermPrimaryLabel(
           term: const Term(
@@ -497,62 +352,39 @@ void main() {
       );
     });
 
-    test('支持小学期 (第3学期)', () {
-      expect(
-        formatTermPrimaryLabel(
-          term: const Term(
-            id: '2024-2025-3',
-            name: '',
-            year: 2024,
-            semester: 3,
-          ),
-          enrollmentYear: enrollment,
-        ),
-        '大一 第3学期',
+    test('支持 studentId、xqm 映射与 formatTermPrimaryLabelById', () {
+      const baseTerm = Term(
+        id: '2024-2025-1',
+        name: '',
+        year: 2024,
+        semester: 1,
       );
-    });
-
-    test('支持从 studentId 字符串直接换算', () {
       expect(
         formatTermPrimaryLabel(
-          term: const Term(
-            id: '2024-2025-1',
-            name: '',
-            year: 2024,
-            semester: 1,
-          ),
+          term: baseTerm,
           studentId: '2412345678',
           now: DateTime(2025, 9, 1),
         ),
         '大一 上学期',
       );
-    });
 
-    test('formatTermPrimaryLabel 支持正方 xqm 映射 (1/3 -> 上学期, 2/12 -> 下学期, 16 -> 第3学期)', () {
-      final t = const Term(id: '2024-2025-1', name: '');
-      expect(
-        formatTermPrimaryLabel(term: t, enrollmentYear: enrollment, xqm: '3'),
-        '大一 上学期',
-      );
-      expect(
-        formatTermPrimaryLabel(term: t, enrollmentYear: enrollment, xqm: '1'),
-        '大一 上学期',
-      );
-      expect(
-        formatTermPrimaryLabel(term: t, enrollmentYear: enrollment, xqm: '12'),
-        '大一 下学期',
-      );
-      expect(
-        formatTermPrimaryLabel(term: t, enrollmentYear: enrollment, xqm: '2'),
-        '大一 下学期',
-      );
-      expect(
-        formatTermPrimaryLabel(term: t, enrollmentYear: enrollment, xqm: '16'),
-        '大一 第3学期',
-      );
-    });
+      for (final (xqm, expected) in [
+        ('3', '大一 上学期'),
+        ('1', '大一 上学期'),
+        ('12', '大一 下学期'),
+        ('2', '大一 下学期'),
+        ('16', '大一 第3学期'),
+      ]) {
+        expect(
+          formatTermPrimaryLabel(
+            term: const Term(id: '2024-2025-1', name: ''),
+            enrollmentYear: enrollment,
+            xqm: xqm,
+          ),
+          expected,
+        );
+      }
 
-    test('formatTermPrimaryLabelById 快捷转换 (含 2024-2025-12)', () {
       expect(
         formatTermPrimaryLabelById(
           termId: '2024-2025-1',

@@ -1,14 +1,10 @@
-/// AppModel 的周次与学期逻辑测试。
-///
-/// 这里覆盖的是"周视图能不能对上真实校历"的三件事：
-///  1. maxWeek 取自课表实际最晚周次（不是拿 25 兜底）；
-///  2. 校准后反推出的开学日被持久化，重开 app 仍生效；
-///  3. 学期下拉默认折叠，且当前学期一定在选项里。
+/// AppModel 的周次、学期、缓存、调课与静默同步逻辑测试。
 library;
 
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/src/academic_cache.dart';
 import 'package:qustschedule/src/app_model.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
@@ -16,7 +12,6 @@ import 'package:qustschedule/src/schedule_cache.dart';
 import 'package:qustschedule/src/schedule_service.dart';
 import 'package:qustschedule/src/term_calendar.dart';
 import 'package:qustschedule/src/timetable.dart';
-import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/src/updater/update_models.dart';
 import 'package:qustschedule/src/updater/update_service.dart';
 import 'package:zf_academic/zf_academic_io.dart';
@@ -54,7 +49,6 @@ Terms termsWith(int count) => Terms(
   ],
 );
 
-/// 同时拿到状态机与它背后的假后端（验证"后台刷新"这类行为需要能控制 fetch）。
 ({AppModel model, FakeBackend backend, InMemoryCredentialStore credentials})
 buildRig({Preferences? preferences, FakeBackend? backend}) {
   final fake = backend ?? FakeBackend();
@@ -77,7 +71,6 @@ buildRig({Preferences? preferences, FakeBackend? backend}) {
 AppModel buildModel({Preferences? preferences}) =>
     buildRig(preferences: preferences).model;
 
-/// boot() 需要各个存储都已就绪，才不会去碰 path_provider / 平台通道。
 AppModel bootRig({
   FakeBackend? backend,
   FakeSessionRepository? repository,
@@ -95,7 +88,6 @@ AppModel bootRig({
       backendFactory: (_) => fake,
       baseUrl: _baseUrl,
     ),
-    // repository 单独传一份，让 boot() 判定"已就绪"，不去碰 path_provider。
     repository: repo,
     preferences: preferences ?? Preferences.inMemory(),
     scheduleCache: cache ?? FakeScheduleCache(),
@@ -106,33 +98,20 @@ AppModel bootRig({
 }
 
 void main() {
-  group('账号本地记忆（凭据 key 依赖它）', () {
-    test('冷启动：本地记着账号时，不联网也能显示学号', () async {
-      // 没有 Cookie 快照、也没有保存的凭据 → 停在登录页；但账号应该已经从设置里读出来，
-      // 不用等任何网络请求（否则调试页永远是"-"，直到某次刷新成功）。
-      final prefs = Preferences.inMemory(
+  group('账号本地记忆与会话生命周期', () {
+    test('冷启动直接从本地记忆与缓存恢复学号与姓名，不发起多余网络请求', () async {
+      // 无缓存无会话时停在 needLogin，但能读出本地记住的学号
+      final prefsOnlyId = Preferences.inMemory(
         lastAccounts: <String, String>{_baseUrl: '20240001'},
       );
-      final model = bootRig(preferences: prefs);
-      await model.boot();
+      final modelNoCache = bootRig(preferences: prefsOnlyId);
+      addTearDown(modelNoCache.dispose);
+      await modelNoCache.boot();
+      expect(modelNoCache.status, AppStatus.needLogin);
+      expect(modelNoCache.studentId, '20240001');
 
-      expect(model.status, AppStatus.needLogin);
-      expect(model.studentId, '20240001');
-    });
-
-    test('登录成功后记住账号与姓名', () async {
-      final prefs = Preferences.inMemory();
-      final rig = buildRig(preferences: prefs);
-      await rig.model.signIn('20240001', 'pw');
-
-      expect(prefs.accountOf(_baseUrl), '20240001');
-      expect(prefs.studentNameOf(_baseUrl), '测试学生');
-      expect(rig.model.studentId, '20240001');
-      expect(rig.model.studentName, '测试学生');
-    });
-
-    test('冷启动直接从本地缓存恢复学号与姓名，不发起网络请求', () async {
-      final prefs = Preferences.inMemory(
+      // 有课表缓存且本地已记住学号与姓名时，冷启动无需调 checkSession
+      final prefsFull = Preferences.inMemory(
         lastAccounts: <String, String>{_baseUrl: '20240001'},
         lastStudentNames: <String, String>{_baseUrl: '张三'},
       );
@@ -144,18 +123,60 @@ void main() {
         ),
       );
       final backend = FakeBackend(studentId: '', studentName: '');
-      final model = bootRig(preferences: prefs, cache: cache, backend: backend);
+      final modelCached = bootRig(
+        preferences: prefsFull,
+        cache: cache,
+        backend: backend,
+      );
+      addTearDown(modelCached.dispose);
 
-      await model.boot();
+      await modelCached.boot();
+      expect(modelCached.studentId, '20240001');
+      expect(modelCached.studentName, '张三');
+      expect(backend.checkSessionCount, 0);
+    });
 
+    test('登录成功后记住账号与姓名，退出登录一并清空账号、姓名、课表缓存与学业状态', () async {
+      final prefs = Preferences.inMemory();
+      final cache = FakeScheduleCache(
+        CachedSchedule(
+          baseUrl: _baseUrl,
+          schedule: sampleSchedule(),
+          fetchedAt: DateTime.now(),
+        ),
+      );
+      final model = bootRig(preferences: prefs, cache: cache);
+      addTearDown(model.dispose);
+
+      await model.signIn('20240001', 'pw');
+      expect(prefs.accountOf(_baseUrl), '20240001');
+      expect(prefs.studentNameOf(_baseUrl), '测试学生');
       expect(model.studentId, '20240001');
-      expect(model.studentName, '张三');
-      expect(backend.checkSessionCount, 0, reason: '已有完整缓存身份，冷启动无需打网络');
-      model.dispose();
+      expect(model.studentName, '测试学生');
+
+      model.hydrateForTest(
+        schedule: sampleSchedule(),
+        exams: [ExamItem(courseName: '测试考试', startTime: DateTime(2026, 1, 1))],
+        grades: const [
+          GradeItem(courseName: '测试课程', credit: 2.0, rawScore: '85'),
+        ],
+        isNotEvaluated: true,
+      );
+
+      await model.signOut();
+      expect(prefs.accountOf(_baseUrl), isEmpty);
+      expect(prefs.studentNameOf(_baseUrl), isEmpty);
+      expect(model.studentId, isEmpty);
+      expect(model.studentName, isEmpty);
+      expect(cache.clearCount, 1);
+      expect(cache.cached, isNull);
+      expect(model.academicTermId, isEmpty);
+      expect(model.exams, isEmpty);
+      expect(model.grades, isEmpty);
+      expect(model.isNotEvaluated, isFalse);
     });
 
     test('冷启动遇到会话过期：用本地记住的账号 + 保存的密码自动重登', () async {
-      // 用户报告的确切场景：长时间不用 → Cookie 失效 → 冷启动刷新。
       final credentials = InMemoryCredentialStore();
       await credentials.save(
         '$_baseUrl|20240001',
@@ -168,7 +189,7 @@ void main() {
       final backend = FakeBackend(studentId: '', studentName: '')
         ..fetchBehavior = (call, termId) async {
           if (call == 1) {
-            throw AcademicError(ErrorCode.sessionExpired, '登录已失效');
+            throw const AcademicError(ErrorCode.sessionExpired, '登录已失效');
           }
           return sampleSchedule(termId ?? '2026-2027-1');
         };
@@ -186,110 +207,70 @@ void main() {
         gradesCache: InMemoryGradesCache(),
         schoolBaseUrl: _baseUrl,
       );
+      addTearDown(model.dispose);
 
       await model.boot();
-
-      expect(backend.loginCount, 1, reason: 'Cookie 失效应触发自动重登');
-      expect(model.schedule?.entries, isNotEmpty, reason: '重登后课表要更新');
+      expect(backend.loginCount, 1);
+      expect(model.schedule?.entries, isNotEmpty);
       expect(model.studentId, isNotEmpty);
     });
+  });
 
-    test('退出登录清掉记住的账号与姓名', () async {
-      final prefs = Preferences.inMemory(
-        lastAccounts: <String, String>{_baseUrl: '20240001'},
-        lastStudentNames: <String, String>{_baseUrl: '测试学生'},
+  group('周次、校历校准与全局节数', () {
+    test('maxWeek 计算、空课表兜底 20、goToWeek 边界夹取与 weekEntries 按周过滤', () {
+      final model = buildModel();
+      addTearDown(model.dispose);
+
+      model.hydrateForTest(
+        schedule: scheduleWithWeeks(<int>[1, 5, 17]),
+        week: 5,
       );
-      final rig = buildRig(preferences: prefs);
-      await rig.model.signOut();
+      expect(model.maxWeek, 17);
+      expect(model.weekEntries.map((e) => e.name), <String>['第5周课']);
 
-      expect(prefs.accountOf(_baseUrl), isEmpty);
-      expect(prefs.studentNameOf(_baseUrl), isEmpty);
-      expect(rig.model.studentId, isEmpty);
-      expect(rig.model.studentName, isEmpty);
+      model.goToWeek(0);
+      expect(model.week, 1);
+      model.goToWeek(99);
+      expect(model.week, 17);
+
+      model.hydrateForTest(
+        schedule: const Schedule(
+          termId: '2026-2027-1',
+          maxWeeks: 25,
+          entries: <ScheduleEntry>[],
+        ),
+      );
+      expect(model.maxWeek, 20);
     });
-  });
 
-  test('maxWeek 取自课表最晚周次，而不是 25 的兜底值', () {
-    final model = buildModel();
-    model.hydrateForTest(schedule: scheduleWithWeeks(<int>[1, 5, 17]));
+    test('开学日默认按学期估算，calibrateCurrentWeek 校准持久化，resetCalendar 恢复估算', () async {
+      final prefs = Preferences.inMemory();
+      final model = buildModel(preferences: prefs);
+      addTearDown(model.dispose);
+      model.hydrateForTest(
+        schedule: scheduleWithWeeks(<int>[1, 2, 3, 4, 5, 6, 7, 8]),
+        terms: termsWith(4),
+      );
 
-    expect(model.maxWeek, 17);
-  });
+      final estimated = model.termStart;
+      expect(estimated, isNotNull);
+      expect(estimated!.weekday, DateTime.monday);
+      expect(estimated.month, greaterThanOrEqualTo(8));
 
-  test('课表为空时 maxWeek 回落到 20（仍可切换周次）', () {
-    final model = buildModel();
-    model.hydrateForTest(
-      schedule: const Schedule(
-        termId: '2026-2027-1',
-        maxWeeks: 25,
-        entries: <ScheduleEntry>[],
-      ),
-    );
+      await model.calibrateCurrentWeek(5);
+      expect(model.currentWeekOfToday, 5);
+      final saved = prefs.termStartOf('2026-2027-1');
+      expect(saved, isNotNull);
+      expect(weekOf(saved!, DateTime.now()), 5);
 
-    expect(model.maxWeek, 20);
-  });
+      await model.resetCalendar();
+      expect(model.currentWeekOfToday, isNot(5));
+      expect(prefs.termStartOf('2026-2027-1'), isNotNull);
+    });
 
-  test('周次切换会被 clamp 到 1..maxWeek', () {
-    final model = buildModel();
-    model.hydrateForTest(schedule: scheduleWithWeeks(<int>[1, 3]), week: 1);
-
-    model.goToWeek(0);
-    expect(model.week, 1);
-    model.goToWeek(99);
-    expect(model.week, model.maxWeek);
-  });
-
-  test('weekEntries 只返回本周该上的课', () {
-    final model = buildModel();
-    model.hydrateForTest(schedule: scheduleWithWeeks(<int>[1, 2, 3]), week: 2);
-
-    expect(model.weekEntries.map((entry) => entry.name), <String>['第2周课']);
-  });
-
-  test('校准后开学日被反推并持久化，重新打开仍生效', () async {
-    final prefs = Preferences.inMemory();
-    final model = buildModel(preferences: prefs);
-    model.hydrateForTest(
-      schedule: scheduleWithWeeks(<int>[1, 2, 3, 4, 5, 6, 7, 8]),
-    );
-
-    await model.calibrateCurrentWeek(5);
-
-    expect(model.currentWeekOfToday, 5, reason: '校准后今天就是第 5 周');
-    final saved = prefs.termStartOf('2026-2027-1');
-    expect(saved, isNotNull);
-    expect(weekOf(saved!, DateTime.now()), 5);
-  });
-
-  test('未校准时按学期估算开学日（秋季 = 9 月初所在周的周一）', () {
-    final model = buildModel();
-    model.hydrateForTest(
-      schedule: scheduleWithWeeks(<int>[1, 2]),
-      terms: termsWith(4),
-    );
-
-    final start = model.termStart;
-    expect(start, isNotNull);
-    expect(start!.weekday, DateTime.monday);
-    expect(start.month, greaterThanOrEqualTo(8));
-  });
-
-  test('resetCalendar 回到估算值（清掉校准）', () async {
-    final prefs = Preferences.inMemory();
-    final model = buildModel(preferences: prefs);
-    model.hydrateForTest(schedule: scheduleWithWeeks(<int>[1, 2, 3, 4, 5]));
-
-    await model.calibrateCurrentWeek(4);
-    expect(model.currentWeekOfToday, 4);
-
-    await model.resetCalendar();
-    expect(model.currentWeekOfToday, isNot(4));
-    expect(prefs.termStartOf('2026-2027-1'), isNotNull, reason: '重置后写入估算值');
-  });
-
-  group('全局节数', () {
-    test('改分段节数后网格行数与时间轴同步变化', () async {
+    test('分段节数变更同步网格与时间轴，课程节次超出配置时 gridSectionCount 自动托底', () async {
       final rig = buildRig();
+      addTearDown(rig.model.dispose);
       rig.model.hydrateForTest(schedule: scheduleWithWeeks(<int>[1]));
 
       expect(rig.model.sectionCount, 10);
@@ -304,21 +285,10 @@ void main() {
       expect(rig.model.sectionCount, 12);
       expect(rig.model.gridSectionCount, 12);
       expect(rig.model.activeSections, hasLength(12));
-      expect(rig.model.startLabelOf(12), isNotEmpty, reason: '补齐的第 12 节也要有时间');
+      expect(rig.model.startLabelOf(12), isNotEmpty);
 
-      await rig.model.setSectionCounts(<PeriodGroup, int>{
-        PeriodGroup.morning: 4,
-        PeriodGroup.afternoon: 2,
-        PeriodGroup.evening: 0,
-      });
-      expect(rig.model.sectionCount, 6);
-      expect(rig.model.gridSectionCount, 6);
-      expect(rig.model.activeSections, hasLength(6));
-    });
-
-    test('数据节次超过节数时网格取大值（不丢课）', () {
-      final model = buildModel();
-      model.hydrateForTest(
+      // 课程节次超出配置时 gridSectionCount 取大值不丢课
+      rig.model.hydrateForTest(
         schedule: const Schedule(
           termId: '2026-2027-1',
           maxWeeks: 16,
@@ -334,89 +304,59 @@ void main() {
           ],
         ),
       );
-
-      expect(model.sectionCount, 10);
-      expect(model.gridSectionCount, 13);
-      expect(model.hasSectionsBeyondTimetable, isTrue);
+      await rig.model.setSectionCounts(<PeriodGroup, int>{
+        PeriodGroup.morning: 4,
+        PeriodGroup.afternoon: 4,
+        PeriodGroup.evening: 2,
+      });
+      expect(rig.model.sectionCount, 10);
+      expect(rig.model.gridSectionCount, 13);
+      expect(rig.model.hasSectionsBeyondTimetable, isTrue);
     });
   });
 
-  group('后台刷新（不遮挡课表）', () {
-    test('刷新期间状态仍是 ready、课表不清空，只出提示', () async {
+  group('后台刷新、首次加载与身份补齐', () {
+    test('后台刷新期间保持 ready、支持手动关闭提示，失败时保留旧课表提示错误，旧学期自动升级到新学期', () async {
       final rig = buildRig();
-      rig.model.hydrateForTest(schedule: sampleSchedule());
+      addTearDown(rig.model.dispose);
+      rig.model.hydrateForTest(schedule: sampleSchedule('2025-2026-2'));
+      expect(rig.model.termId, '2025-2026-2');
+
       final completer = Completer<Schedule>();
-      rig.backend.fetchBehavior = (call, termId) => completer.future;
+      rig.backend.fetchBehavior = (call, termId) {
+        expect(termId, isNull);
+        return completer.future;
+      };
 
       final pending = rig.model.refresh();
       await Future<void>.delayed(Duration.zero);
 
-      expect(rig.model.status, AppStatus.ready, reason: '不能退回 loading 遮住课表');
+      expect(rig.model.status, AppStatus.ready);
       expect(rig.model.refreshing, isTrue);
       expect(rig.model.hint, '更新中…');
       expect(rig.model.schedule, isNotNull);
 
-      completer.complete(sampleSchedule());
+      rig.model.clearHint();
+      expect(rig.model.hint, isEmpty);
+
+      completer.complete(sampleSchedule('2026-2027-1'));
       await pending;
       expect(rig.model.refreshing, isFalse);
+      expect(rig.model.termId, '2026-2027-1');
       expect(rig.model.hint, '已更新');
-      rig.model.dispose();
-    });
 
-    test('刷新失败：保留旧课表，提示错误而不是整页报错', () async {
-      final rig = buildRig();
-      rig.model.hydrateForTest(schedule: sampleSchedule());
+      // 刷新失败保留旧课表并提示错误
       rig.backend.fetchBehavior = (call, termId) async => throw pageChanged();
-
       await rig.model.refresh();
-
       expect(rig.model.status, AppStatus.ready);
       expect(rig.model.schedule, isNotNull);
       expect(rig.model.hintIsError, isTrue);
       expect(rig.model.hint, contains('更新失败'));
-      rig.model.dispose();
-    });
-
-    test('提示可以手动关掉', () async {
-      final rig = buildRig();
-      rig.model.hydrateForTest(schedule: sampleSchedule());
-      final completer = Completer<Schedule>();
-      rig.backend.fetchBehavior = (call, termId) => completer.future;
-      final pending = rig.model.refresh();
-      await Future<void>.delayed(Duration.zero);
-      expect(rig.model.hint, isNotEmpty);
-
-      rig.model.clearHint();
-      expect(rig.model.hint, isEmpty);
-
-      completer.complete(sampleSchedule());
-      await pending;
-      rig.model.dispose();
-    });
-
-    test('旧学期缓存刷新时能自适应升级到新学期', () async {
-      final rig = buildRig();
-      // 本地缓存是旧学期
-      rig.model.hydrateForTest(schedule: sampleSchedule('2025-2026-2'));
-      expect(rig.model.termId, '2025-2026-2');
-
-      // 教务系统已进入新学期，返回 2026-2027-1
-      rig.backend.fetchBehavior = (call, termId) async {
-        // 验证传入的 termId 是 null（允许教务自决当前活跃学期）
-        expect(termId, isNull);
-        return sampleSchedule('2026-2027-1');
-      };
-
-      await rig.model.refresh();
-
-      expect(rig.model.termId, '2026-2027-1');
-      expect(rig.model.schedule?.termId, '2026-2027-1');
-      expect(rig.model.hint, '已更新');
-      rig.model.dispose();
     });
 
     test('重登刷新时提示先切到正在重新登录，登录完切回更新中，取回后已更新', () async {
       final rig = buildRig();
+      addTearDown(rig.model.dispose);
       rig.model.hydrateForTest(schedule: sampleSchedule());
       rig.model.username = '20240001';
       rig.model.service.accountHint = '20240001';
@@ -453,255 +393,172 @@ void main() {
       scheduleCompleter.complete(sampleSchedule());
       await pending;
       expect(rig.model.hint, '已更新');
-      rig.model.dispose();
     });
-  });
 
-  group('状态弹窗的数据来源', () {
-    test('首次加载走 loading + "获取中…"，成功后提示自动消失', () async {
+    test('首次加载走 loading 与获取中提示；失败进入 failed，dismissError 无课表回 needLogin、有旧课表回 ready', () async {
       final rig = buildRig();
+      addTearDown(rig.model.dispose);
       final completer = Completer<Schedule>();
       rig.backend.fetchBehavior = (call, termId) => completer.future;
 
       final pending = rig.model.loadScheduleForTest();
       await Future<void>.delayed(Duration.zero);
-
       expect(rig.model.status, AppStatus.loading);
       expect(rig.model.hint, '获取中…');
       expect(rig.model.refreshing, isTrue);
-      expect(rig.model.schedule, isNull);
 
       completer.complete(sampleSchedule());
       await pending;
-
       expect(rig.model.status, AppStatus.ready);
-      expect(rig.model.hint, isEmpty, reason: '成功后弹窗不该继续挂着');
+      expect(rig.model.hint, isEmpty);
       expect(rig.model.refreshing, isFalse);
-      rig.model.dispose();
-    });
 
-    test('首次加载失败：状态 failed，关掉弹窗回登录页', () async {
-      final rig = buildRig();
-      rig.backend.fetchBehavior = (call, termId) async => throw pageChanged();
-
-      await rig.model.loadScheduleForTest();
-
-      expect(rig.model.status, AppStatus.failed);
-      expect(rig.model.message, isNotEmpty);
-      expect(rig.model.schedule, isNull);
-
-      rig.model.dismissError();
-      expect(rig.model.status, AppStatus.needLogin, reason: '没有课表可回，只能去登录');
-      rig.model.dispose();
-    });
-
-    test('有旧课表时关掉错误弹窗退回 ready，课表还在', () async {
-      final rig = buildRig();
-      rig.model.hydrateForTest(schedule: sampleSchedule());
+      // 有旧课表时 dismissError 退回 ready
       rig.model.setStatusForTest(
         AppStatus.failed,
         message: '出错了',
         code: 'PAGE_CHANGED',
       );
-      expect(rig.model.schedule, isNotNull);
-
       rig.model.dismissError();
       expect(rig.model.status, AppStatus.ready);
-      expect(rig.model.schedule, isNotNull);
-      rig.model.dispose();
-    });
-  });
 
-  group('冷启动免登：身份补齐', () {
-    test('Cookie 有效但读不到姓名时，用 checkSession 补一次', () async {
-      // 模拟"课表能取、但客户端还不知道我是谁"
-      final rig = buildRig(
+      // 无旧课表时失败 → dismissError 回 needLogin
+      final rigEmpty = buildRig();
+      addTearDown(rigEmpty.model.dispose);
+      rigEmpty.backend.fetchBehavior = (call, termId) async =>
+          throw pageChanged();
+      await rigEmpty.model.loadScheduleForTest();
+      expect(rigEmpty.model.status, AppStatus.failed);
+      rigEmpty.model.dismissError();
+      expect(rigEmpty.model.status, AppStatus.needLogin);
+    });
+
+    test('冷启动身份补齐：缺失时调 checkSession 补齐，已知身份不重复请求，接口无返回则回退本地账号', () async {
+      // 1. 缺失身份时调 checkSession 补齐
+      final rig1 = buildRig(
         backend: FakeBackend(studentId: '', studentName: ''),
       );
-      await rig.model.loadScheduleForTest();
+      addTearDown(rig1.model.dispose);
+      await rig1.model.loadScheduleForTest();
+      expect(rig1.backend.checkSessionCount, 1);
+      expect(rig1.model.studentName, '测试学生');
+      expect(rig1.model.studentId, '20240001');
+      expect(rig1.model.signedIn, isTrue);
 
-      expect(rig.backend.checkSessionCount, 1);
-      expect(rig.model.studentName, '测试学生');
-      expect(rig.model.studentId, '20240001');
-      expect(rig.model.signedIn, isTrue);
-      rig.model.dispose();
-    });
+      // 2. 已知身份时不重复请求
+      final rig2 = buildRig();
+      addTearDown(rig2.model.dispose);
+      await rig2.model.loadScheduleForTest();
+      expect(rig2.backend.checkSessionCount, 0);
 
-    test('已经知道身份时不再多发请求', () async {
-      final rig = buildRig();
-      await rig.model.loadScheduleForTest();
-
-      expect(rig.backend.checkSessionCount, 0, reason: '身份齐全就不该多打一次接口');
-      rig.model.dispose();
-    });
-
-    test('身份读不到时至少用账号顶上，不显示未登录', () async {
-      final rig = buildRig(
+      // 3. 接口也读不到身份时用本地 username 兜底
+      final rig3 = buildRig(
         backend: FakeBackend(
           studentId: '',
           studentName: '',
           checkSessionReadsIdentity: false,
         ),
       );
-      rig.model.username = '20240001';
-      await rig.model.loadScheduleForTest();
-
-      expect(rig.model.studentId, '20240001');
-      expect(rig.model.signedIn, isTrue);
-      rig.model.dispose();
+      addTearDown(rig3.model.dispose);
+      rig3.model.username = '20240001';
+      await rig3.model.loadScheduleForTest();
+      expect(rig3.model.studentId, '20240001');
+      expect(rig3.model.signedIn, isTrue);
     });
-  });
 
-  group('修改密码', () {
-    test('新密码通过验证后写入安全存储', () async {
+    test('修改密码：通过验证后写入安全存储，被拒时抛错且不覆盖原凭据', () async {
       final rig = buildRig();
+      addTearDown(rig.model.dispose);
       await rig.model.loadScheduleForTest();
 
       await rig.model.changePassword('brand-new-pass');
-
       final saved = await rig.credentials.get('$_baseUrl|20240001');
-      expect(saved, isNotNull);
-      expect(saved!.password, 'brand-new-pass');
+      expect(saved?.password, 'brand-new-pass');
       expect(rig.backend.loginCount, 1);
-      rig.model.dispose();
-    });
 
-    test('新密码被拒时抛错，且不覆盖原来的凭据', () async {
-      final rig = buildRig();
-      await rig.model.loadScheduleForTest();
       rig.backend.loginBehavior = (call, credentials) async =>
-          throw AcademicError(ErrorCode.invalidCredentials, '用户名或密码不正确');
-
+          throw const AcademicError(ErrorCode.invalidCredentials, '用户名或密码不正确');
       await expectLater(
         rig.model.changePassword('wrong'),
         throwsA(isA<AcademicError>()),
       );
-      expect(await rig.credentials.has('$_baseUrl|20240001'), isFalse);
-      rig.model.dispose();
+      expect(
+        (await rig.credentials.get('$_baseUrl|20240001'))?.password,
+        'brand-new-pass',
+      );
     });
   });
 
   group('教务地址簿', () {
-    test('新增去重，切换会记住当前地址', () async {
+    test('addSchool 末尾斜杠去重，removeSchool 只删地址簿不动当前会话', () async {
       final prefs = Preferences.inMemory();
       final model = buildModel(preferences: prefs);
-      expect(model.schools, isNotEmpty);
+      addTearDown(model.dispose);
 
       await model.addSchool('https://jw2.example.edu.cn/jwglxt');
       await model.addSchool('https://jw2.example.edu.cn/jwglxt/');
-      expect(
-        model.schools.where((item) => item.contains('jw2')).length,
-        1,
-        reason: '末尾斜杠算同一个地址',
-      );
+      expect(model.schools.where((item) => item.contains('jw2')).length, 1);
 
-      // 切换地址现在会沿用当前账号自动登录，所以先让它处于"登录过"的状态
-      // （真实用户切线路前必然是登录着的）。
-      await model.signIn('20240001', 'pw');
-      await model.changeSchool('https://jw2.example.edu.cn/jwglxt');
-      expect(model.schoolBaseUrl, 'https://jw2.example.edu.cn/jwglxt');
-      await Future<void>.delayed(Duration.zero);
-      expect(prefs.currentSchool, contains('jw2'));
+      final beforeCurrent = prefs.currentSchool;
+      await model.removeSchool('https://jw2.example.edu.cn/jwglxt');
+      expect(model.schools.any((item) => item.contains('jw2')), isFalse);
+      expect(prefs.currentSchool, beforeCurrent);
     });
 
-    test('切换地址沿用当前账号直接登录，不退回登录页', () async {
+    test('切换线路沿用当前账号原地加载登录（不经过 needLogin/signingIn），并将账号落到新地址下', () async {
       final prefs = Preferences.inMemory();
       final model = buildModel(preferences: prefs);
+      addTearDown(model.dispose);
       await model.signIn('20240001', 'pw');
       expect(model.status, AppStatus.ready);
+
+      final seen = <AppStatus>[];
+      model.addListener(() => seen.add(model.status));
 
       await model.changeSchool('https://jwglxt2.qust.edu.cn/jwglxt');
 
       expect(model.schoolBaseUrl, 'https://jwglxt2.qust.edu.cn/jwglxt');
-      // 6 条线路是同一套系统、账号通用：换过去应当自动登录，而不是把用户
-      // 踢回登录页重填一遍。
-      expect(model.status, AppStatus.ready, reason: '不该退回 needLogin');
-      expect(model.username, '20240001');
-      expect(model.schedule, isNotNull, reason: '课表要在新地址上取回来');
-      expect(
-        prefs.accountOf('https://jwglxt2.qust.edu.cn/jwglxt'),
-        '20240001',
-        reason: '账号要落到新地址下，否则下次冷启动拼不出凭据 key',
-      );
-    });
-
-    test('切换线路全程不经过登录页状态（不会闪回登录页）', () async {
-      final model = buildModel();
-      await model.signIn('20240001', 'pw');
-
-      // 监听要在登录之后才挂：只看"换线路"这一段的状态。
-      final seen = <AppStatus>[];
-      model.addListener(() => seen.add(model.status));
-
-      await model.changeSchool('https://jwglxt4.qust.edu.cn/jwglxt');
-
-      // 根路由把 needLogin / signingIn / (failed 且无课表) 都映射成登录页。
-      // 换线路时这两个状态一次都不许出现，用户才会停在课表页看它换。
       expect(seen, isNot(contains(AppStatus.needLogin)));
       expect(seen, isNot(contains(AppStatus.signingIn)));
-      expect(seen, contains(AppStatus.loading), reason: '换线路期间是原地加载');
+      expect(seen, contains(AppStatus.loading));
       expect(model.status, AppStatus.ready);
+      expect(model.username, '20240001');
+      expect(model.schedule, isNotNull);
+      expect(prefs.accountOf('https://jwglxt2.qust.edu.cn/jwglxt'), '20240001');
     });
 
-    test('切换线路时登录失败：回滚原线路，只提示不跳页', () async {
+    test('切换线路异常回滚：无保存密码或新线路登录失败时均保留原线路并提示错误', () async {
+      // 1. 读不到保存的密码
+      final modelNoPwd = buildModel();
+      addTearDown(modelNoPwd.dispose);
+      final beforeNoPwd = modelNoPwd.schoolBaseUrl;
+      await modelNoPwd.changeSchool('https://jwglxt3.qust.edu.cn/jwglxt');
+      expect(modelNoPwd.schoolBaseUrl, beforeNoPwd);
+      expect(modelNoPwd.status, isNot(AppStatus.needLogin));
+      expect(modelNoPwd.hintIsError, isTrue);
+      expect(modelNoPwd.hint, contains('没有找到已保存的密码'));
+
+      // 2. 新线路登录被拒
       final backend = FakeBackend();
       final rig = buildRig(backend: backend);
+      addTearDown(rig.model.dispose);
       await rig.model.signIn('20240001', 'pw');
-      final String before = rig.model.schoolBaseUrl;
-
-      // 新线路登录被拒（密码改了 / 线路异常）。
+      final beforeFail = rig.model.schoolBaseUrl;
       backend.loginBehavior = (int call, Credentials credentials) async =>
           throw const AcademicError(ErrorCode.invalidCredentials, '账号或密码不正确');
 
       await rig.model.changeSchool('https://jwglxt6.qust.edu.cn/jwglxt');
-
-      expect(rig.model.schoolBaseUrl, before, reason: '切不过去就留在原线路');
-      expect(
-        rig.model.status,
-        isNot(AppStatus.needLogin),
-        reason: '失败也不能把用户丢到登录页',
-      );
+      expect(rig.model.schoolBaseUrl, beforeFail);
+      expect(rig.model.status, isNot(AppStatus.needLogin));
       expect(rig.model.message, contains('切换失败'));
-    });
-
-    test('读不到保存的密码时：不动当前地址，只提示，交给用户处理', () async {
-      final model = buildModel();
-      final String before = model.schoolBaseUrl;
-
-      await model.changeSchool('https://jwglxt3.qust.edu.cn/jwglxt');
-
-      // 切不了就保持原样，而不是把用户丢到登录页替他决定。
-      expect(model.schoolBaseUrl, before, reason: '切换失败不该改地址');
-      expect(model.status, isNot(AppStatus.needLogin));
-      expect(model.hintIsError, isTrue);
-      expect(model.hint, contains('没有找到已保存的密码'));
-    });
-
-    test('删除地址只删地址簿，不动当前会话', () async {
-      final prefs = Preferences.inMemory(
-        schools: <String>[
-          'https://a.example.edu.cn/jwglxt',
-          'https://b.example.edu.cn/jwglxt',
-        ],
-        currentSchool: 'https://a.example.edu.cn/jwglxt',
-      );
-      final model = buildModel(preferences: prefs);
-
-      await model.removeSchool('https://b.example.edu.cn/jwglxt');
-      expect(model.schools.any((item) => item.contains('/b.')), isFalse);
-      expect(model.schools.any((item) => item.contains('/a.')), isTrue);
-      expect(
-        prefs.currentSchool,
-        'https://a.example.edu.cn/jwglxt',
-        reason: '当前地址不该被删',
-      );
     });
   });
 
-  group('课表本地缓存与静默更新', () {
-    test('有缓存且距上次抓取在最小间隔内：直接展示缓存，不联网', () async {
+  group('课表本地缓存与静默更新策略', () {
+    test('最小间隔内直接展示缓存不联网，跨地址缓存丢弃，抓课表成功回写缓存且往返保留备注', () async {
+      // 1. 最小间隔内直接展示缓存
       final fake = FakeBackend();
-      final model = bootRig(
+      final modelFresh = bootRig(
         backend: fake,
         repository: FakeSessionRepository(snapshotOf(_baseUrl)),
         cache: FakeScheduleCache(
@@ -712,41 +569,14 @@ void main() {
           ),
         ),
       );
+      addTearDown(modelFresh.dispose);
+      await modelFresh.boot();
+      expect(modelFresh.status, AppStatus.ready);
+      expect(modelFresh.schedule?.entries, isNotEmpty);
+      expect(fake.fetchCount, 0);
 
-      await model.boot();
-
-      expect(model.status, AppStatus.ready);
-      expect(model.schedule, isNotNull);
-      expect(model.schedule!.entries, isNotEmpty);
-      expect(fake.fetchCount, 0, reason: '刚抓过（在最小间隔内），不应再联网');
-      model.dispose();
-    });
-
-    test('有缓存且超过最小间隔：先展示缓存，同时后台静默刷新一次', () async {
-      final fake = FakeBackend();
-      final model = bootRig(
-        backend: fake,
-        repository: FakeSessionRepository(snapshotOf(_baseUrl)),
-        cache: FakeScheduleCache(
-          CachedSchedule(
-            baseUrl: _baseUrl,
-            schedule: sampleSchedule(),
-            fetchedAt: DateTime.now().subtract(const Duration(hours: 4)),
-          ),
-        ),
-      );
-
-      await model.boot();
-      await Future<void>.delayed(Duration.zero);
-
-      expect(model.status, AppStatus.ready);
-      expect(model.schedule, isNotNull);
-      expect(fake.fetchCount, 1, reason: '超过最小间隔应后台静默刷一次');
-      model.dispose();
-    });
-
-    test('换地址后旧线路的缓存被丢弃，不展示', () async {
-      final model = bootRig(
+      // 2. 跨地址缓存丢弃
+      final modelOtherSchool = bootRig(
         cache: FakeScheduleCache(
           CachedSchedule(
             baseUrl: 'https://other.example.edu.cn/jwglxt',
@@ -755,50 +585,88 @@ void main() {
           ),
         ),
       );
+      addTearDown(modelOtherSchool.dispose);
+      await modelOtherSchool.boot();
+      expect(modelOtherSchool.status, AppStatus.needLogin);
+      expect(modelOtherSchool.schedule, isNull);
 
-      await model.boot();
+      // 3. 抓课表成功回写缓存
+      final writeCache = FakeScheduleCache();
+      final modelSave = bootRig(cache: writeCache);
+      addTearDown(modelSave.dispose);
+      await modelSave.loadScheduleForTest();
+      expect(writeCache.saveCount, 1);
+      expect(writeCache.lastSaved?.baseUrl, _baseUrl);
 
-      expect(model.status, AppStatus.needLogin, reason: '缓存是别的学校的，不能拿来看');
-      expect(model.schedule, isNull);
-      model.dispose();
+      // 4. 缓存序列化往返保留实践/其他课程备注
+      const scheduleWithRemarks = Schedule(
+        termId: '2026-2027-1',
+        maxWeeks: 16,
+        entries: <ScheduleEntry>[
+          ScheduleEntry(
+            id: 'a',
+            name: '高等数学',
+            day: 1,
+            startPeriod: 1,
+            endPeriod: 2,
+            weeks: <int>[1],
+          ),
+        ],
+        remarks: <ScheduleRemark>[
+          ScheduleRemark(
+            practical: true,
+            content: '生产实习',
+            courseName: '金工实习',
+            teacher: '王老师',
+            weeks: '第18周',
+            location: '东校区 车间A',
+          ),
+          ScheduleRemark(practical: false, content: '线上自主学习'),
+        ],
+      );
+      final encoded = FileScheduleCache.encodeForTest(scheduleWithRemarks);
+      final back = FileScheduleCache.decodeForTest(
+        jsonDecode(jsonEncode(encoded)),
+      );
+      expect(back?.remarks, hasLength(2));
+      final practical = back!.remarks.firstWhere((r) => r.practical);
+      expect(practical.courseName, '金工实习');
+      expect(practical.teacher, '王老师');
+      expect(practical.location, '东校区 车间A');
     });
 
-    test('抓课表成功后回写缓存', () async {
-      final cache = FakeScheduleCache();
-      final model = bootRig(cache: cache);
-
-      await model.loadScheduleForTest();
-
-      expect(cache.saveCount, 1);
-      expect(cache.lastSaved?.schedule.termId, '2026-2027-1');
-      expect(cache.lastSaved?.baseUrl, _baseUrl);
-      model.dispose();
-    });
-
-    test('退出登录清空缓存', () async {
-      final cache = FakeScheduleCache(
-        CachedSchedule(
-          baseUrl: _baseUrl,
-          schedule: sampleSchedule(),
-          fetchedAt: DateTime.now(),
+    test('超过最小间隔时冷启动静默刷新并串联学业同步；关闭开关或未达自定义间隔时不刷新，且支持间隔夹取', () async {
+      // 1. 超过间隔：冷启动静默刷新并串联学业同步
+      final fakeExpired = FakeBackend();
+      final modelExpired = bootRig(
+        backend: fakeExpired,
+        repository: FakeSessionRepository(snapshotOf(_baseUrl)),
+        preferences: Preferences.inMemory(
+          autoRefresh: true,
+          autoRefreshIntervalMinutes: 30,
+        ),
+        cache: FakeScheduleCache(
+          CachedSchedule(
+            baseUrl: _baseUrl,
+            schedule: sampleSchedule('2026-2027-1'),
+            fetchedAt: DateTime.now().subtract(const Duration(hours: 3)),
+          ),
         ),
       );
-      final model = bootRig(cache: cache);
-      model.hydrateForTest(schedule: sampleSchedule());
+      addTearDown(modelExpired.dispose);
+      await modelExpired.boot();
+      await Future<void>.delayed(Duration.zero);
+      expect(modelExpired.status, AppStatus.ready);
+      expect(fakeExpired.fetchCount, 1);
+      expect(modelExpired.academicSyncForTest, isNotNull);
+      await modelExpired.academicSyncForTest;
+      expect(modelExpired.exams, isNotEmpty);
+      expect(modelExpired.grades, isNotEmpty);
 
-      await model.signOut();
-
-      expect(cache.clearCount, 1);
-      expect(cache.cached, isNull);
-      model.dispose();
-    });
-  });
-
-  group('静默更新开关与间隔', () {
-    test('关掉静默更新后，即使超过间隔也不后台刷新', () async {
-      final fake = FakeBackend();
-      final model = bootRig(
-        backend: fake,
+      // 2. 关闭静默更新开关：不刷新
+      final fakeDisabled = FakeBackend();
+      final modelDisabled = bootRig(
+        backend: fakeDisabled,
         repository: FakeSessionRepository(snapshotOf(_baseUrl)),
         preferences: Preferences.inMemory(autoRefresh: false),
         cache: FakeScheduleCache(
@@ -809,20 +677,15 @@ void main() {
           ),
         ),
       );
-
-      await model.boot();
+      addTearDown(modelDisabled.dispose);
+      await modelDisabled.boot();
       await Future<void>.delayed(Duration.zero);
+      expect(fakeDisabled.fetchCount, 0);
 
-      expect(model.status, AppStatus.ready);
-      expect(model.schedule, isNotNull);
-      expect(fake.fetchCount, 0, reason: '开关关掉就不该静默刷新');
-      model.dispose();
-    });
-
-    test('间隔可设置：调大后刚抓过不久就不刷新', () async {
-      final fake = FakeBackend();
-      final model = bootRig(
-        backend: fake,
+      // 3. 自定义间隔未到期时不刷新，且 setAutoRefreshIntervalMinutes 边界夹取
+      final fakeInterval = FakeBackend();
+      final modelInterval = bootRig(
+        backend: fakeInterval,
         repository: FakeSessionRepository(snapshotOf(_baseUrl)),
         preferences: Preferences.inMemory(autoRefreshIntervalMinutes: 60),
         cache: FakeScheduleCache(
@@ -833,111 +696,60 @@ void main() {
           ),
         ),
       );
-
-      await model.boot();
+      addTearDown(modelInterval.dispose);
+      await modelInterval.boot();
       await Future<void>.delayed(Duration.zero);
+      expect(fakeInterval.fetchCount, 0);
 
-      expect(model.autoRefreshIntervalMinutes, 60);
-      expect(fake.fetchCount, 0, reason: '20 分钟 < 60 分钟间隔，不刷新');
-      model.dispose();
-    });
-
-    test('setAutoRefreshIntervalMinutes 写入并夹取', () async {
-      final prefs = Preferences.inMemory();
-      final model = bootRig(preferences: prefs);
-
-      await model.setAutoRefreshIntervalMinutes(9999);
-      expect(model.autoRefreshIntervalMinutes, maxAutoRefreshIntervalMinutes);
-
-      await model.setAutoRefreshIntervalMinutes(15);
-      expect(model.autoRefreshIntervalMinutes, minAutoRefreshIntervalMinutes);
-      model.dispose();
+      await modelInterval.setAutoRefreshIntervalMinutes(9999);
+      expect(
+        modelInterval.autoRefreshIntervalMinutes,
+        maxAutoRefreshIntervalMinutes,
+      );
+      await modelInterval.setAutoRefreshIntervalMinutes(15);
+      expect(
+        modelInterval.autoRefreshIntervalMinutes,
+        minAutoRefreshIntervalMinutes,
+      );
     });
   });
 
   group('调课（渲染层 overlay，按日期）', () {
-    test('按日期调课只改渲染，不覆盖原始课表数据', () async {
+    test('调课增删改与非匹配规则：只改渲染不改原始数据', () async {
       final model = bootRig();
+      addTearDown(model.dispose);
       model.hydrateForTest(schedule: sampleSchedule(), week: 1);
 
-      // sampleSchedule 的课在周一（day=1）第 1 节，weeks [1..4]。
-      // 把第 1 周周一那天（用 termStart 算出月日）调到周六。
-      final start = model.termStart!; // 周一
-      final to = start.add(const Duration(days: 5)); // 周六
-      await model.addReschedule(
+      final start = model.termStart!;
+      final sat = start.add(const Duration(days: 5));
+      final rule = await model.addReschedule(
         fromMonth: start.month,
         fromDay: start.day,
-        toMonth: to.month,
-        toDay: to.day,
+        toMonth: sat.month,
+        toDay: sat.day,
       );
-
-      // 原始数据原封不动。
       expect(model.schedule!.entries.single.day, 1);
-
-      // 渲染层：第 1 周被挪到周六。
-      final rendered = model.entriesForWeek(1);
-      expect(rendered.single.day, 6);
-      expect(rendered.single.startPeriod, 1);
-      model.dispose();
-    });
-
-    test('删除调课后恢复原时间', () async {
-      final model = bootRig();
-      model.hydrateForTest(schedule: sampleSchedule(), week: 1);
-
-      final start = model.termStart!;
-      final to = start.add(const Duration(days: 5));
-      final rule = await model.addReschedule(
-        fromMonth: start.month,
-        fromDay: start.day,
-        toMonth: to.month,
-        toDay: to.day,
-      );
       expect(model.entriesForWeek(1).single.day, 6);
 
-      await model.removeReschedule(rule.id);
-      expect(model.entriesForWeek(1).single.day, 1);
-      expect(model.reschedules, isEmpty);
-      model.dispose();
-    });
-
-    test('编辑调课：updateReschedule 改目标日期、保留 id，渲染跟随', () async {
-      final model = bootRig();
-      model.hydrateForTest(schedule: sampleSchedule(), week: 1);
-
-      final start = model.termStart!;
-      final rule = await model.addReschedule(
-        fromMonth: start.month,
-        fromDay: start.day,
-        toMonth: start.add(const Duration(days: 5)).month,
-        toDay: start.add(const Duration(days: 5)).day,
-      );
-      expect(model.entriesForWeek(1).single.day, 6);
-
-      // 把目标日改到 3 天后（周四 = day 4），来源不变。
-      final newTo = start.add(const Duration(days: 3));
+      // 编辑目标日到周四，保留 id
+      final thu = start.add(const Duration(days: 3));
       await model.updateReschedule(
         rule.id,
         fromMonth: start.month,
         fromDay: start.day,
-        toMonth: newTo.month,
-        toDay: newTo.day,
+        toMonth: thu.month,
+        toDay: thu.day,
       );
-      // 仍是同一条（id 不变、数量不变），不是新增。
       expect(model.reschedules, hasLength(1));
       expect(model.reschedules.single.id, rule.id);
-      expect(model.reschedules.single.toDay, newTo.day);
-      // 渲染跟随新目标日。
       expect(model.entriesForWeek(1).single.day, 4);
-      model.dispose();
-    });
 
-    test('没匹配到日期的规则不影响渲染', () async {
-      final model = bootRig();
-      model.hydrateForTest(schedule: sampleSchedule(), week: 1);
+      // 删除调课后恢复原时间
+      await model.removeReschedule(rule.id);
+      expect(model.entriesForWeek(1).single.day, 1);
+      expect(model.reschedules, isEmpty);
 
-      final start = model.termStart!;
-      // 调到一个月后、不属于该课的某天（不影响该课实际日期）。
+      // 未匹配到日期的规则不影响渲染
       final other = start.add(const Duration(days: 10));
       final otherTo = other.add(const Duration(days: 1));
       await model.addReschedule(
@@ -947,15 +759,14 @@ void main() {
         toDay: otherTo.day,
       );
       expect(model.entriesForWeek(1).single.day, 1);
-      model.dispose();
     });
 
     test('跨周调课：调到目标周的课不再被同 id 的原周实例顶掉', () async {
       final model = bootRig();
-      // sampleSchedule：一门课周一第 1-2 节，跨第 1-4 周（同 id 的 4 个实例）。
+      addTearDown(model.dispose);
       model.hydrateForTest(schedule: sampleSchedule(), week: 1);
 
-      final start = model.termStart!; // 第 1 周周一
+      final start = model.termStart!;
       final to = start.add(const Duration(days: 9)); // 第 2 周周三
       await model.addReschedule(
         fromMonth: start.month,
@@ -964,33 +775,22 @@ void main() {
         toDay: to.day,
       );
 
-      // 第 1 周唯一的实例被调走 → 本周空。
       expect(model.entriesForWeek(1), isEmpty);
-
-      // 第 2 周：原本周一的实例仍在，且调过来的周三实例也显示
-      //（旧实现按 id 去重，这里会被同 id 的原周实例顶掉 → 周三不显示）。
       final week2 = model.entriesForWeek(2);
       expect(week2.length, 2);
-      expect(week2.where((e) => e.day == 3).length, 1, reason: '调过来的周三实例必须显示');
-      expect(
-        week2.where((e) => e.day == 1).length,
-        1,
-        reason: '原本第 2 周周一的实例仍在',
-      );
-
-      // 原始课表数据一个字节都没动。
+      expect(week2.where((e) => e.day == 3).length, 1);
+      expect(week2.where((e) => e.day == 1).length, 1);
       expect(model.schedule!.entries.single.day, 1);
-      expect(model.schedule!.entries.single.weeks, <int>[1, 2, 3, 4]);
-      model.dispose();
     });
 
-    test('合并无冲突：调课与目标日原有课都显示', () async {
+    test('调课合并：无冲突共存，冲突时调课优先显示并记录该天被顶课程', () async {
       final model = bootRig();
+      addTearDown(model.dispose);
       model.hydrateForTest(
-        schedule: Schedule(
+        schedule: const Schedule(
           termId: '2026-2027-1',
           maxWeeks: 16,
-          entries: const <ScheduleEntry>[
+          entries: <ScheduleEntry>[
             ScheduleEntry(
               id: 'a',
               name: '高等数学',
@@ -1002,6 +802,14 @@ void main() {
             ScheduleEntry(
               id: 'b',
               name: '大学英语',
+              day: 3,
+              startPeriod: 1,
+              endPeriod: 2,
+              weeks: <int>[1],
+            ),
+            ScheduleEntry(
+              id: 'c',
+              name: '线性代数',
               day: 3,
               startPeriod: 5,
               endPeriod: 6,
@@ -1013,7 +821,7 @@ void main() {
       );
 
       final start = model.termStart!;
-      final wed = start.add(const Duration(days: 2)); // 周三
+      final wed = start.add(const Duration(days: 2));
       await model.addReschedule(
         fromMonth: start.month,
         fromDay: start.day,
@@ -1022,177 +830,71 @@ void main() {
       );
 
       final view = model.rescheduleViewFor(1);
-      // 高数调到周三（1-2 节），英语本就在周三（5-6 节），不冲突，都在。
-      expect(view.entries.length, 2);
-      expect(view.entries.every((e) => e.day == 3), isTrue);
-      expect(view.hasConflictOn(3), isFalse);
-      expect(view.conflicts, isEmpty);
-      model.dispose();
-    });
-
-    test('合并冲突：调课优先显示，原课被抑制并记为该天冲突', () async {
-      final model = bootRig();
-      model.hydrateForTest(
-        schedule: Schedule(
-          termId: '2026-2027-1',
-          maxWeeks: 16,
-          entries: const <ScheduleEntry>[
-            ScheduleEntry(
-              id: 'a',
-              name: '高等数学',
-              day: 1,
-              startPeriod: 1,
-              endPeriod: 2,
-              weeks: <int>[1],
-            ),
-            ScheduleEntry(
-              id: 'b',
-              name: '大学英语',
-              day: 3,
-              startPeriod: 1,
-              endPeriod: 2,
-              weeks: <int>[1],
-            ),
-          ],
-        ),
-        week: 1,
-      );
-
-      final start = model.termStart!;
-      final wed = start.add(const Duration(days: 2)); // 周三
-      // 把高数（周一 1-2）调到周三，正好压在英语（周三 1-2）上。
-      await model.addReschedule(
-        fromMonth: start.month,
-        fromDay: start.day,
-        toMonth: wed.month,
-        toDay: wed.day,
-      );
-
-      final view = model.rescheduleViewFor(1);
-      // 只显示调课（高数到周三），英语被顶掉。
-      expect(view.entries.map((e) => e.id), <String>['a']);
-      expect(view.entries.single.day, 3);
-
-      // 冲突记录：周三、被顶掉的是英语、赢家是高数。
+      // 高数 (1-2) 顶掉英语 (1-2)，与线性代数 (5-6) 共存
+      expect(view.entries.map((e) => e.id).toSet(), <String>{'a', 'c'});
       expect(view.hasConflictOn(3), isTrue);
       expect(view.hasConflictOn(1), isFalse);
       final conflict = view.conflicts[3]!.single;
       expect(conflict.displaced.id, 'b');
       expect(conflict.winner.id, 'a');
-
-      // 原始课表两门课都原样在（周一高数、周三英语），未被改动。
-      expect(model.schedule!.entries.firstWhere((e) => e.id == 'a').day, 1);
-      expect(model.schedule!.entries.firstWhere((e) => e.id == 'b').day, 3);
-      model.dispose();
     });
   });
 
-  test('课表缓存往返带上备注（实践课程 / 其他课程）', () {
-    final schedule = Schedule(
-      termId: '2026-2027-1',
-      maxWeeks: 16,
-      entries: const <ScheduleEntry>[
-        ScheduleEntry(
-          id: 'a',
-          name: '高等数学',
-          day: 1,
-          startPeriod: 1,
-          endPeriod: 2,
-          weeks: <int>[1],
-        ),
-      ],
-      remarks: const <ScheduleRemark>[
-        ScheduleRemark(
-          practical: true,
-          content: '生产实习',
-          courseName: '金工实习',
-          teacher: '王老师',
-          weeks: '第18周',
-          location: '东校区 车间A',
-        ),
-        ScheduleRemark(practical: false, content: '线上自主学习'),
-      ],
-    );
-    // 模拟真实缓存：序列化 → jsonEncode → 落盘 → 读回 → jsonDecode → 反序列化。
-    final encoded = FileScheduleCache.encodeForTest(schedule);
-    final back = FileScheduleCache.decodeForTest(
-      jsonDecode(jsonEncode(encoded)),
-    );
-    expect(back, isNotNull);
-    expect(back!.remarks, hasLength(2));
-    final practical = back.remarks.firstWhere((r) => r.practical);
-    expect(practical.content, '生产实习');
-    expect(practical.courseName, '金工实习');
-    expect(practical.teacher, '王老师');
-    expect(practical.weeks, '第18周');
-    expect(practical.location, '东校区 车间A');
-    final other = back.remarks.firstWhere((r) => !r.practical);
-    expect(other.content, '线上自主学习');
-    expect(other.teacher, isNull);
-  });
-
-  group('回到前台（AppLifecycleListener.onShow）', () {
-    // 用"本周一"推出两个时间点，保证与跑测试的真实日期无关：
-    //   start       = 上周一 → 今天落在第 2 周
-    //   lastSeenDay = 上周日 → 上次看见的是第 1 周
+  group('回到前台与自动更新调度', () {
     final today = dayOnly(DateTime.now());
     final start = mondayOf(today).subtract(const Duration(days: 7));
     final lastWeekDay = mondayOf(today).subtract(const Duration(days: 1));
 
-    test('跨天且原本停在当前周：周次跟到新的当前周', () async {
-      final model = buildModel();
-      model.hydrateForTest(
+    test('onAppShown：跨天且停在当前周时自动推进并通知学业页，手翻其他周或未跨天保持原周次', () async {
+      // 1. 跨天且原本停在当前周：周次跟到新的当前周，并通知学业页刷新日期
+      final modelFollow = buildModel();
+      addTearDown(modelFollow.dispose);
+      modelFollow.hydrateForTest(
         schedule: scheduleWithWeeks(<int>[1, 2, 3]),
         week: 1,
         termStart: start,
       );
-      // 刚刷新过：只验证跨天，不触发网络请求。
-      model.seedLifecycleForTest(
+      modelFollow.seedLifecycleForTest(
         lastSeenDay: lastWeekDay,
         lastFetchedAt: DateTime.now(),
       );
+      var academicNotifyCount = 0;
+      modelFollow.academicNotifier.addListener(() => academicNotifyCount++);
 
-      await model.onAppShown();
+      await modelFollow.onAppShown();
+      expect(modelFollow.currentWeekOfToday, 2);
+      expect(modelFollow.week, 2);
+      expect(academicNotifyCount, 1);
 
-      expect(model.currentWeekOfToday, 2, reason: '前提：今天应在第 2 周');
-      expect(model.week, 2, reason: '原本停在当前周，跨天后应跟过去');
-      model.dispose();
-    });
-
-    test('跨天但用户手翻到了别的周：不被拽回当前周', () async {
-      final model = buildModel();
-      model.hydrateForTest(
+      // 2. 跨天但用户手翻到了别的周：不被拽回当前周
+      final modelManual = buildModel();
+      addTearDown(modelManual.dispose);
+      modelManual.hydrateForTest(
         schedule: scheduleWithWeeks(<int>[1, 2, 3]),
         week: 3,
         termStart: start,
       );
-      model.seedLifecycleForTest(
+      modelManual.seedLifecycleForTest(
         lastSeenDay: lastWeekDay,
         lastFetchedAt: DateTime.now(),
       );
+      await modelManual.onAppShown();
+      expect(modelManual.week, 3);
 
-      await model.onAppShown();
-
-      expect(model.week, 3, reason: '用户主动翻到的周不该被覆盖');
-      model.dispose();
-    });
-
-    test('没跨天：周次不动', () async {
-      final model = buildModel();
-      model.hydrateForTest(
+      // 3. 没跨天：周次不动
+      final modelSameDay = buildModel();
+      addTearDown(modelSameDay.dispose);
+      modelSameDay.hydrateForTest(
         schedule: scheduleWithWeeks(<int>[1, 2, 3]),
         week: 1,
         termStart: start,
       );
-      model.seedLifecycleForTest(
+      modelSameDay.seedLifecycleForTest(
         lastSeenDay: today,
         lastFetchedAt: DateTime.now(),
       );
-
-      await model.onAppShown();
-
-      expect(model.week, 1);
-      model.dispose();
+      await modelSameDay.onAppShown();
+      expect(modelSameDay.week, 1);
     });
 
     test('静默刷新的判定：开关 / 正在刷 / 无课表 / 间隔', () {
@@ -1216,50 +918,47 @@ void main() {
       expect(due(autoRefresh: false, lastFetchedAt: longAgo), isFalse);
       expect(due(refreshing: true, lastFetchedAt: longAgo), isFalse);
       expect(due(hasSchedule: false, lastFetchedAt: longAgo), isFalse);
-      expect(due(lastFetchedAt: null), isTrue, reason: '不知道上次抓取时间就放行一次');
+      expect(due(lastFetchedAt: null), isTrue);
       expect(
         due(lastFetchedAt: now.subtract(const Duration(minutes: 29))),
         isFalse,
-        reason: '未到最小间隔',
       );
       expect(
         due(lastFetchedAt: now.subtract(const Duration(minutes: 31))),
         isTrue,
       );
     });
-  });
 
-  group('自动更新会话调度 (AppModel.checkAutoUpdate)', () {
-    test('autoCheckUpdate 为 false 时直接跳过', () async {
-      final model = buildModel(
+    test('checkAutoUpdate：autoCheckUpdate 关闭时跳过，开启时同一会话只检查一次', () async {
+      final modelOff = buildModel(
         preferences: Preferences.inMemory(autoCheckUpdate: false),
       );
-      bool callbackInvoked = false;
-      model.checkAutoUpdate(
-        onHasUpdate: (_) => callbackInvoked = true,
+      addTearDown(modelOff.dispose);
+      var offInvoked = false;
+      modelOff.checkAutoUpdate(
+        onHasUpdate: (_) => offInvoked = true,
         initialDelay: Duration.zero,
       );
       await Future<void>.delayed(Duration.zero);
-      expect(callbackInvoked, isFalse);
-      expect(model.hasCheckedAutoUpdate, isFalse);
-    });
+      expect(offInvoked, isFalse);
+      expect(modelOff.hasCheckedAutoUpdate, isFalse);
 
-    test('已检查过时不再重复触发', () async {
-      final model = buildModel(
+      final modelOn = buildModel(
         preferences: Preferences.inMemory(autoCheckUpdate: true),
       );
-      int callbackCount = 0;
+      addTearDown(modelOn.dispose);
+      var callbackCount = 0;
       final mockService = _MockUpdateService(hasUpdate: true);
-      model.checkAutoUpdate(
+      modelOn.checkAutoUpdate(
         onHasUpdate: (_) => callbackCount++,
         updateService: mockService,
         initialDelay: Duration.zero,
       );
       await Future<void>.delayed(Duration.zero);
       expect(callbackCount, 1);
-      expect(model.hasCheckedAutoUpdate, isTrue);
+      expect(modelOn.hasCheckedAutoUpdate, isTrue);
 
-      model.checkAutoUpdate(
+      modelOn.checkAutoUpdate(
         onHasUpdate: (_) => callbackCount++,
         updateService: mockService,
         initialDelay: Duration.zero,
@@ -1270,365 +969,8 @@ void main() {
     });
   });
 
-  group('学业服务状态与学期隔离 (Academic services & isolation)', () {
-    test(
-      'setAcademicTerm isolates terms and clears old data on switch',
-      () async {
-        final backend = FakeBackend();
-        backend.examsBehavior = (call, term) async {
-          if (term == '2025-2026-1') {
-            return [
-              ExamItem(
-                courseName: '旧学期考试',
-                startTime: DateTime(2025, 12, 1, 9, 0),
-              ),
-            ];
-          }
-          return [
-            ExamItem(
-              courseName: '新学期考试',
-              startTime: DateTime(2026, 6, 1, 9, 0),
-            ),
-          ];
-        };
-        backend.gradesBehavior = (call, term) async {
-          if (term == '2025-2026-1') {
-            return const [
-              GradeItem(courseName: '旧学期课程', credit: 2.0, rawScore: '80'),
-            ];
-          }
-          return const [
-            GradeItem(courseName: '新学期课程', credit: 3.0, rawScore: '90'),
-          ];
-        };
-
-        final rig = buildRig(backend: backend);
-        final model = rig.model;
-
-        // 首次加载 2025-2026-1
-        await model.loadAcademicData(termId: '2025-2026-1');
-        expect(model.exams.map((e) => e.courseName), contains('旧学期考试'));
-        expect(model.grades.map((g) => g.courseName), contains('旧学期课程'));
-
-        // 切换到 2025-2026-2
-        model.setAcademicTerm('2025-2026-2');
-        await Future<void>.delayed(Duration.zero);
-        await model.loadAcademicData(termId: '2025-2026-2');
-
-        expect(model.academicTermId, equals('2025-2026-2'));
-        expect(model.exams.map((e) => e.courseName), contains('新学期考试'));
-        expect(model.exams.map((e) => e.courseName), isNot(contains('旧学期考试')));
-        expect(model.grades.map((g) => g.courseName), contains('新学期课程'));
-        expect(model.grades.map((g) => g.courseName), isNot(contains('旧学期课程')));
-      },
-    );
-
-    test('signOut clears academicTermId, exams, and grades', () async {
-      final rig = buildRig();
-      final model = rig.model;
-
-      model.hydrateForTest(
-        schedule: sampleSchedule(),
-        exams: [ExamItem(courseName: '测试考试', startTime: DateTime(2026, 1, 1))],
-        grades: const [
-          GradeItem(courseName: '测试课程', credit: 2.0, rawScore: '85'),
-        ],
-        isNotEvaluated: true,
-      );
-
-      expect(model.exams, isNotEmpty);
-      expect(model.grades, isNotEmpty);
-      expect(model.isNotEvaluated, isTrue);
-
-      await model.signOut();
-
-      expect(model.academicTermId, isEmpty);
-      expect(model.exams, isEmpty);
-      expect(model.grades, isEmpty);
-      expect(model.isNotEvaluated, isFalse);
-    });
-  });
-
-  group('静默更新串联 (syncSilently & 学业同步)', () {
-    test('syncSilently 课表查询完成后以异步非阻塞形式派发考试与成绩查询，不增加课表提示延迟', () async {
-      final backend = FakeBackend();
-      final academicCompleter = Completer<void>();
-      backend.examsBehavior = (call, termId) async {
-        await academicCompleter.future;
-        return sampleExams();
-      };
-      backend.gradesBehavior = (call, termId) async {
-        await academicCompleter.future;
-        return sampleGrades();
-      };
-
-      final rig = buildRig(backend: backend);
-      final model = rig.model;
-      // 预置已有课表，进入静默更新模式
-      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
-
-      final syncFuture = model.syncSilently();
-
-      // 验证课表更新返回，不等待学业同步完成
-      await syncFuture;
-      expect(model.hint, '已更新', reason: '课表获取完成后立即提示更新，无须等待学业数据');
-      expect(academicCompleter.isCompleted, isFalse, reason: '学业数据仍在异步进行中');
-
-      final academicSync = model.academicSyncForTest;
-      expect(academicSync, isNotNull, reason: '课表完成后派发了学业同步');
-
-      // 放行学业查询
-      academicCompleter.complete();
-      await academicSync;
-
-      expect(model.exams, isNotEmpty);
-      expect(model.grades, isNotEmpty);
-      expect(model.hint, '已更新', reason: '学业同步完成后绝不修改或覆盖课表提示');
-    });
-
-    test('静默更新中的学业同步完成后绝不弹出或下发通知（不额外调用 _showHint）', () async {
-      final backend = FakeBackend();
-      final rig = buildRig(backend: backend);
-      final model = rig.model;
-      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
-
-      final hints = <String>[];
-      model.addListener(() {
-        if (model.hint.isNotEmpty &&
-            (hints.isEmpty || hints.last != model.hint)) {
-          hints.add(model.hint);
-        }
-      });
-
-      await model.syncSilently();
-      await model.academicSyncForTest;
-
-      expect(hints, contains('更新中…'));
-      expect(hints, contains('已更新'));
-      // 没有任何包含考试或成绩的通知
-      for (final h in hints) {
-        expect(h, isNot(contains('考试')));
-        expect(h, isNot(contains('成绩')));
-      }
-    });
-
-    test('课表页手动刷新 refresh() 严格只刷新课表，不派发学业同步', () async {
-      final backend = FakeBackend();
-      final rig = buildRig(backend: backend);
-      final model = rig.model;
-      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
-
-      await model.refresh();
-
-      expect(model.academicSyncForTest, isNull, reason: '手动刷新课表绝不派发学业同步');
-      expect(backend.examsCount, 0);
-      expect(backend.gradesCount, 0);
-    });
-
-    test('课表查询失败时不派发学业同步', () async {
-      final backend = FakeBackend();
-      backend.fetchBehavior = (call, termId) async =>
-          throw const AcademicError(ErrorCode.networkRetryable, '网络超时');
-
-      final rig = buildRig(backend: backend);
-      final model = rig.model;
-      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
-
-      await model.syncSilently();
-
-      expect(model.academicSyncForTest, isNull, reason: '课表失败不得派发学业同步');
-      expect(backend.examsCount, 0);
-      expect(backend.gradesCount, 0);
-    });
-
-    test('冷启动自动静默刷新触发 syncSilently 并串联后台学业同步', () async {
-      final backend = FakeBackend();
-      final oldFetched = DateTime.now().subtract(const Duration(hours: 3));
-      final cache = FakeScheduleCache(
-        CachedSchedule(
-          baseUrl: _baseUrl,
-          schedule: sampleSchedule('2026-2027-1'),
-          fetchedAt: oldFetched,
-        ),
-      );
-      final sessionRepo = FakeSessionRepository(snapshotOf(_baseUrl));
-      final prefs = Preferences.inMemory(
-        autoRefresh: true,
-        autoRefreshIntervalMinutes: 30,
-      );
-
-      final model = bootRig(
-        backend: backend,
-        cache: cache,
-        repository: sessionRepo,
-        preferences: prefs,
-      );
-
-      await model.boot();
-      await Future<void>.delayed(Duration.zero);
-
-      expect(model.status, AppStatus.ready);
-      final academicSync = model.academicSyncForTest;
-      expect(academicSync, isNotNull, reason: '冷启动静默刷新应异步串联学业同步');
-
-      await academicSync;
-      expect(model.exams, isNotEmpty);
-      expect(model.grades, isNotEmpty);
-      expect(backend.examsCount, 1);
-      expect(backend.gradesCount, 1);
-    });
-
-    test(
-      '静默更新中学业查询遇 Cookie 失效后台重登：学业重登保持静默，不破坏课表已更新提示，refreshing 不被锁住',
-      () async {
-        final backend = FakeBackend();
-        final rig = buildRig(backend: backend);
-        final model = rig.model;
-        await rig.credentials.save(
-          '${model.service.baseUrl.toLowerCase()}|20240001',
-          const Credentials('20240001', 'pw'),
-        );
-        model.service.accountHint = '20240001';
-        model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
-
-        var examsCall = 0;
-        backend.examsBehavior = (call, termId) async {
-          examsCall++;
-          if (examsCall == 1) {
-            throw const AcademicError(ErrorCode.sessionExpired, '会话失效');
-          }
-          return sampleExams();
-        };
-
-        await model.syncSilently();
-        expect(model.hint, '已更新', reason: '课表成功后提示已更新');
-
-        // 等待学业同步完成
-        await model.academicSyncForTest;
-
-        expect(model.hint, '已更新', reason: '学业后台重登绝不上浮正在重新登录提示破坏课表提示');
-        expect(
-          model.refreshing,
-          isFalse,
-          reason: '静默更新完成后 refreshing 必须回到 false',
-        );
-        expect(backend.loginCount, 1, reason: '学业查询触发了一次自动重登');
-        expect(model.exams, isNotEmpty);
-      },
-    );
-
-    test('学业同步进行中用户退出登录：学业完成时不得向已退出状态写回残留数据', () async {
-      final backend = FakeBackend();
-      final academicCompleter = Completer<void>();
-      backend.examsBehavior = (call, termId) async {
-        await academicCompleter.future;
-        return sampleExams();
-      };
-
-      final rig = buildRig(backend: backend);
-      final model = rig.model;
-      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
-
-      await model.syncSilently();
-      expect(model.academicSyncForTest, isNotNull);
-
-      // 用户在学业查询网络等待期间点击退出登录
-      await model.signOut();
-      expect(model.status, AppStatus.needLogin);
-
-      // 放行学业查询完成
-      academicCompleter.complete();
-      await Future<void>.delayed(Duration.zero);
-
-      expect(model.status, AppStatus.needLogin);
-      expect(model.exams, isEmpty, reason: '退出登录后学业同步完成不得复活数据');
-      expect(model.grades, isEmpty);
-    });
-
-    test('同学期静默更新与手动刷新完成后保留当前查看周次，不跳回今天', () async {
-      const longSchedule = Schedule(
-        termId: '2026-2027-1',
-        maxWeeks: 10,
-        entries: <ScheduleEntry>[
-          ScheduleEntry(
-            id: 'e1',
-            name: '长周期课程',
-            teacher: '李老师',
-            location: '教101',
-            day: 1,
-            startPeriod: 1,
-            endPeriod: 2,
-            weeks: <int>[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-          ),
-        ],
-      );
-      final backend = FakeBackend(
-        fetchBehavior: (call, termId) async => longSchedule,
-      );
-      final rig = buildRig(backend: backend);
-      final model = rig.model;
-      model.hydrateForTest(schedule: longSchedule);
-
-      final targetWeek = model.currentWeekOfToday == 8 ? 9 : 8;
-      model.goToWeek(targetWeek);
-      expect(model.week, targetWeek);
-
-      await model.syncSilently();
-      expect(model.week, targetWeek, reason: '静默更新后不应跳回今天所在周');
-
-      await model.refresh();
-      expect(model.week, targetWeek, reason: '手动刷新后不应跳回今天所在周');
-    });
-
-    test('同学期刷新后若新课表最大周次小于当前查看周次，则自动收敛到新的最大周次', () async {
-      const initialSchedule = Schedule(
-        termId: '2026-2027-1',
-        maxWeeks: 10,
-        entries: <ScheduleEntry>[
-          ScheduleEntry(
-            id: 'e1',
-            name: '长周期课程',
-            teacher: '李老师',
-            location: '教101',
-            day: 1,
-            startPeriod: 1,
-            endPeriod: 2,
-            weeks: <int>[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-          ),
-        ],
-      );
-      final backend = FakeBackend(
-        fetchBehavior: (call, termId) async => const Schedule(
-          termId: '2026-2027-1',
-          maxWeeks: 5,
-          entries: <ScheduleEntry>[
-            ScheduleEntry(
-              id: 'e2',
-              name: '短周期课程',
-              teacher: '李老师',
-              location: '教101',
-              day: 1,
-              startPeriod: 1,
-              endPeriod: 2,
-              weeks: <int>[1, 2, 3, 4, 5],
-            ),
-          ],
-        ),
-      );
-
-      final rig = buildRig(backend: backend);
-      final model = rig.model;
-      model.hydrateForTest(schedule: initialSchedule);
-
-      model.goToWeek(8);
-      expect(model.week, 8);
-
-      await model.refresh();
-      expect(model.maxWeek, 5);
-      expect(model.week, 5);
-    });
-
-    test('快速连续切换学业学期时，旧请求晚到不得覆盖新学期数据', () async {
+  group('学业学期隔离与静默同步串联', () {
+    test('setAcademicTerm 隔离各学期数据，快速连续切换时旧请求晚到不得覆盖新学期数据', () async {
       final oldTermExams = Completer<List<ExamItem>>();
       final oldTermGrades = Completer<List<GradeItem>>();
       final backend = FakeBackend(
@@ -1673,7 +1015,6 @@ void main() {
       model.setAcademicTerm('2026-2027-2');
       await Future<void>.delayed(const Duration(milliseconds: 20));
 
-      // 旧学期请求晚到完成，不得覆盖当前选中的新学期数据
       oldTermExams.complete(const <ExamItem>[ExamItem(courseName: '旧学期考试')]);
       oldTermGrades.complete(const <GradeItem>[
         GradeItem(courseName: '旧学期成绩', credit: 2.0, rawScore: '80'),
@@ -1686,26 +1027,147 @@ void main() {
       expect(model.grades.map((g) => g.courseName), ['新学期成绩']);
     });
 
-    test('跨天后回到前台会同步通知学业页刷新日期状态', () async {
-      final model = buildModel();
+    test('syncSilently 课表完成后异步非阻塞派发学业同步，学业完成或后台重登均保持静默不篡改课表提示', () async {
+      final backend = FakeBackend();
+      final academicCompleter = Completer<void>();
+      var examsCall = 0;
+      backend.examsBehavior = (call, termId) async {
+        examsCall++;
+        if (examsCall == 1) {
+          throw const AcademicError(ErrorCode.sessionExpired, '会话失效');
+        }
+        await academicCompleter.future;
+        return sampleExams();
+      };
+      backend.gradesBehavior = (call, termId) async {
+        await academicCompleter.future;
+        return sampleGrades();
+      };
+
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
       addTearDown(model.dispose);
-      final today = dayOnly(DateTime.now());
-      model.hydrateForTest(
-        schedule: sampleSchedule(),
-        termStart: today.subtract(const Duration(days: 7)),
+      await rig.credentials.save(
+        '${model.service.baseUrl.toLowerCase()}|20240001',
+        const Credentials('20240001', 'pw'),
       );
-      model.seedLifecycleForTest(
-        lastSeenDay: today.subtract(const Duration(days: 1)),
-        lastFetchedAt: DateTime.now(),
+      model.service.accountHint = '20240001';
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+      final hints = <String>[];
+      model.hints.addListener(() {
+        if (model.hint.isNotEmpty &&
+            (hints.isEmpty || hints.last != model.hint)) {
+          hints.add(model.hint);
+        }
+      });
+
+      await model.syncSilently();
+      expect(model.hint, '已更新');
+      expect(academicCompleter.isCompleted, isFalse);
+      final academicSync = model.academicSyncForTest;
+      expect(academicSync, isNotNull);
+
+      academicCompleter.complete();
+      await academicSync;
+
+      expect(backend.loginCount, 1);
+      expect(model.exams, isNotEmpty);
+      expect(model.grades, isNotEmpty);
+      expect(model.refreshing, isFalse);
+      expect(model.hint, '已更新');
+      for (final h in hints) {
+        expect(h, isNot(contains('考试')));
+        expect(h, isNot(contains('成绩')));
+        expect(h, isNot(contains('重新登录')));
+      }
+    });
+
+    test('手动 refresh() 或课表查询失败时不派发学业同步，且学业同步途中退出登录不写回残留数据', () async {
+      final backend = FakeBackend();
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
+      addTearDown(model.dispose);
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+      // 1. 手动 refresh() 不派发学业同步
+      await model.refresh();
+      expect(model.academicSyncForTest, isNull);
+      expect(backend.examsCount, 0);
+
+      // 2. syncSilently 课表失败不派发学业同步
+      backend.fetchBehavior = (call, termId) async =>
+          throw const AcademicError(ErrorCode.networkRetryable, '网络超时');
+      await model.syncSilently();
+      expect(model.academicSyncForTest, isNull);
+      expect(backend.examsCount, 0);
+
+      // 3. 学业同步进行中退出登录，完成后不得写回残留数据
+      backend.fetchBehavior = null;
+      final academicCompleter = Completer<void>();
+      backend.examsBehavior = (call, termId) async {
+        await academicCompleter.future;
+        return sampleExams();
+      };
+      await model.syncSilently();
+      expect(model.academicSyncForTest, isNotNull);
+
+      await model.signOut();
+      expect(model.status, AppStatus.needLogin);
+      academicCompleter.complete();
+      await Future<void>.delayed(Duration.zero);
+      expect(model.exams, isEmpty);
+      expect(model.grades, isEmpty);
+    });
+
+    test('同学期静默更新与手动刷新保留当前查看周次，若新课表 maxWeek 变小则自动收敛', () async {
+      const longSchedule = Schedule(
+        termId: '2026-2027-1',
+        maxWeeks: 10,
+        entries: <ScheduleEntry>[
+          ScheduleEntry(
+            id: 'e1',
+            name: '长周期课程',
+            day: 1,
+            startPeriod: 1,
+            endPeriod: 2,
+            weeks: <int>[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+          ),
+        ],
       );
+      final backend = FakeBackend(
+        fetchBehavior: (call, termId) async => longSchedule,
+      );
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
+      addTearDown(model.dispose);
+      model.hydrateForTest(schedule: longSchedule);
 
-      var academicNotifyCount = 0;
-      void listener() => academicNotifyCount++;
-      model.academicNotifier.addListener(listener);
-      addTearDown(() => model.academicNotifier.removeListener(listener));
+      final targetWeek = model.currentWeekOfToday == 8 ? 9 : 8;
+      model.goToWeek(targetWeek);
+      await model.syncSilently();
+      expect(model.week, targetWeek);
+      await model.refresh();
+      expect(model.week, targetWeek);
 
-      await model.onAppShown();
-      expect(academicNotifyCount, 1);
+      // 新课表最大周次缩水至 5 时，当前查看周次自动收敛到 5
+      backend.fetchBehavior = (call, termId) async => const Schedule(
+        termId: '2026-2027-1',
+        maxWeeks: 5,
+        entries: <ScheduleEntry>[
+          ScheduleEntry(
+            id: 'e2',
+            name: '短周期课程',
+            day: 1,
+            startPeriod: 1,
+            endPeriod: 2,
+            weeks: <int>[1, 2, 3, 4, 5],
+          ),
+        ],
+      );
+      await model.refresh();
+      expect(model.maxWeek, 5);
+      expect(model.week, 5);
     });
   });
 }

@@ -78,52 +78,33 @@ void main() {
   });
 
   group('InMemoryExamCache and InMemoryGradesCache', () {
-    test('ExamCache read / write / clear operations', () async {
-      final cache = InMemoryExamCache();
-      expect(await cache.load('2025-2026-1'), isNull);
+    test('read / write / clear operations for exams and grades', () async {
+      final examCache = InMemoryExamCache();
+      expect(await examCache.load('2025-2026-1'), isNull);
+      await examCache.save('2025-2026-1', const [
+        ExamItem(courseName: '线性代数', rawTimeStr: '2026-01-10 14:00-16:00'),
+      ]);
+      final loadedExam = await examCache.load('2025-2026-1');
+      expect(loadedExam?.items.single.courseName, equals('线性代数'));
+      expect((await examCache.loadAll()).length, equals(1));
+      await examCache.clear();
+      expect(await examCache.load('2025-2026-1'), isNull);
 
-      final items = [
-        const ExamItem(
-          courseName: '线性代数',
-          rawTimeStr: '2026-01-10 14:00-16:00',
-        ),
-      ];
-      await cache.save('2025-2026-1', items);
-
-      final loaded = await cache.load('2025-2026-1');
-      expect(loaded, isNotNull);
-      expect(loaded!.items.length, equals(1));
-      expect(loaded.items.first.courseName, equals('线性代数'));
-
-      final all = await cache.loadAll();
-      expect(all.length, equals(1));
-
-      await cache.clear();
-      expect(await cache.load('2025-2026-1'), isNull);
-    });
-
-    test('GradesCache read / write / clear operations', () async {
-      final cache = InMemoryGradesCache();
-      expect(await cache.load('2025-2026-1'), isNull);
-
-      final items = [
-        const GradeItem(
+      final gradesCache = InMemoryGradesCache();
+      expect(await gradesCache.load('2025-2026-1'), isNull);
+      await gradesCache.save('2025-2026-1', const [
+        GradeItem(
           courseName: 'C语言程序设计',
           rawScore: '92',
           credit: 3.0,
           gradePoint: 4.0,
         ),
-      ];
-      await cache.save('2025-2026-1', items, isNotEvaluated: false);
-
-      final loaded = await cache.load('2025-2026-1');
-      expect(loaded, isNotNull);
-      expect(loaded!.items.length, equals(1));
-      expect(loaded.items.first.courseName, equals('C语言程序设计'));
-      expect(loaded.isNotEvaluated, isFalse);
-
-      await cache.clear();
-      expect(await cache.load('2025-2026-1'), isNull);
+      ], isNotEvaluated: false);
+      final loadedGrades = await gradesCache.load('2025-2026-1');
+      expect(loadedGrades?.items.single.courseName, equals('C语言程序设计'));
+      expect(loadedGrades?.isNotEvaluated, isFalse);
+      await gradesCache.clear();
+      expect(await gradesCache.load('2025-2026-1'), isNull);
     });
   });
 
@@ -140,29 +121,47 @@ void main() {
       } catch (_) {}
     });
 
-    test('FileExamCache persists to disk and recovers', () async {
-      final file = File('${tempDir.path}/exam_cache.json');
-      final cache = FileExamCache.fromFile(file);
+    test(
+      'FileExamCache and FileGradesCache persist to disk and recover',
+      () async {
+        final examFile = File('${tempDir.path}/exam_cache.json');
+        final examCache = FileExamCache.fromFile(examFile);
+        expect(await examCache.load('2025-2026-2'), isNull);
 
-      expect(await cache.load('2025-2026-2'), isNull);
+        await examCache.save('2025-2026-2', const [
+          ExamItem(courseName: '数据结构', rawTimeStr: '2026-06-18 09:00-11:00'),
+        ]);
+        expect(examFile.existsSync(), isTrue);
 
-      await cache.save('2025-2026-2', [
-        const ExamItem(
-          courseName: '数据结构',
-          rawTimeStr: '2026-06-18 09:00-11:00',
-        ),
-      ]);
+        final reloadedExamCache = FileExamCache.fromFile(examFile);
+        expect(
+          (await reloadedExamCache.load('2025-2026-2'))
+              ?.items
+              .single
+              .courseName,
+          equals('数据结构'),
+        );
+        await reloadedExamCache.clear();
+        expect(examFile.existsSync(), isFalse);
 
-      expect(file.existsSync(), isTrue);
+        final gradesFile = File('${tempDir.path}/grades_cache.json');
+        final gradesCache = FileGradesCache.fromFile(gradesFile);
+        await gradesCache.save('2025-2026-1', const [
+          GradeItem(
+            courseName: '大学英语',
+            rawScore: '85',
+            credit: 4.0,
+            gradePoint: 3.5,
+          ),
+        ], isNotEvaluated: true);
 
-      final reloadedCache = FileExamCache.fromFile(file);
-      final loaded = await reloadedCache.load('2025-2026-2');
-      expect(loaded, isNotNull);
-      expect(loaded!.items.first.courseName, equals('数据结构'));
-
-      await reloadedCache.clear();
-      expect(file.existsSync(), isFalse);
-    });
+        final reloadedGrades = await FileGradesCache.fromFile(gradesFile)
+            .load('2025-2026-1');
+        expect(reloadedGrades, isNotNull);
+        expect(reloadedGrades!.isNotEvaluated, isTrue);
+        expect(reloadedGrades.items.single.courseName, equals('大学英语'));
+      },
+    );
 
     test('FileExamCache handles corrupted json gracefully', () async {
       final file = File('${tempDir.path}/corrupt_exam_cache.json');
@@ -173,26 +172,6 @@ void main() {
       expect(loaded, isNull);
       final all = await cache.loadAll();
       expect(all, isEmpty);
-    });
-
-    test('FileGradesCache persists to disk and recovers', () async {
-      final file = File('${tempDir.path}/grades_cache.json');
-      final cache = FileGradesCache.fromFile(file);
-
-      await cache.save('2025-2026-1', [
-        const GradeItem(
-          courseName: '大学英语',
-          rawScore: '85',
-          credit: 4.0,
-          gradePoint: 3.5,
-        ),
-      ], isNotEvaluated: true);
-
-      final reloadedCache = FileGradesCache.fromFile(file);
-      final loaded = await reloadedCache.load('2025-2026-1');
-      expect(loaded, isNotNull);
-      expect(loaded!.isNotEvaluated, isTrue);
-      expect(loaded.items.first.courseName, equals('大学英语'));
     });
 
     test('并发保存多个学期的考试与成绩缓存时不互相覆盖', () async {

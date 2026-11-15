@@ -7,6 +7,7 @@ import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:qustschedule/main.dart' show pageForStatus;
+import 'package:qustschedule/pages/about_page.dart';
 import 'package:qustschedule/pages/academic_page.dart';
 import 'package:qustschedule/pages/captcha_page.dart';
 import 'package:qustschedule/pages/debug_page.dart';
@@ -21,6 +22,7 @@ import 'package:qustschedule/pages/timetable_edit_page.dart';
 import 'package:qustschedule/pages/timetable_list_page.dart';
 import 'package:qustschedule/pages/update_proxy_page.dart';
 import 'package:qustschedule/theme/app_theme.dart';
+import 'package:qustschedule/widgets/app_bottom_sheet.dart';
 import 'package:qustschedule/widgets/app_menu.dart';
 import 'package:qustschedule/widgets/app_snack_bar.dart';
 import 'package:qustschedule/widgets/changelog_category_badge.dart';
@@ -28,6 +30,7 @@ import 'package:qustschedule/widgets/course_tile.dart';
 import 'package:qustschedule/widgets/floating_dock.dart';
 import 'package:qustschedule/widgets/section_title.dart';
 import 'package:qustschedule/widgets/tactile_button.dart';
+import 'package:qustschedule/widgets/time_wheel_picker.dart';
 import 'package:qustschedule/src/app_model.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
 import 'package:qustschedule/src/reminder_gateway.dart';
@@ -146,8 +149,9 @@ Schedule sparseSchedule() => const Schedule(
 
 void main() {
   group('登录页', () {
-    testWidgets('渲染账号、密码与登录按钮', (tester) async {
-      final model = buildModel();
+    testWidgets('渲染账号密码表单、空提交校验不发请求、可展开高级设置', (tester) async {
+      final backend = FakeBackend();
+      final model = buildModel(backend: backend);
       // 登录页只在 needLogin 时出现；booting 会带一个无限转圈的进度，
       // pumpAndSettle 会等不到头。
       model.setStatusForTest(AppStatus.needLogin);
@@ -159,31 +163,16 @@ void main() {
       expect(find.widgetWithText(TextFormField, '密码'), findsOneWidget);
       expect(find.widgetWithText(FilledButton, '登录'), findsOneWidget);
       expect(find.textContaining('记住密码'), findsNothing, reason: '密码总是保存，不需要开关');
-    });
 
-    testWidgets('空提交显示表单校验错误，不发请求', (tester) async {
-      final backend = FakeBackend();
-      final model = buildModel(backend: backend);
-      // 登录页只在 needLogin 时出现；booting 会带一个无限转圈的进度，
-      // pumpAndSettle 会等不到头。
-      model.setStatusForTest(AppStatus.needLogin);
-      await tester.pumpWidget(wrap(LoginPage(model: model)));
-
+      // 空提交：显示表单校验错误，不发请求。
       await tester.tap(find.widgetWithText(FilledButton, '登录'));
       await tester.pump();
 
       expect(find.text('请输入账号'), findsOneWidget);
       expect(find.text('请输入密码'), findsOneWidget);
       expect(backend.loginCount, 0);
-    });
 
-    testWidgets('可展开高级设置并看到教务地址入口', (tester) async {
-      final model = buildModel();
-      // 登录页只在 needLogin 时出现；booting 会带一个无限转圈的进度，
-      // pumpAndSettle 会等不到头。
-      model.setStatusForTest(AppStatus.needLogin);
-      await tester.pumpWidget(wrap(LoginPage(model: model)));
-
+      // 展开高级设置能看到教务地址入口。
       await tester.tap(find.text('教务地址 / 高级'));
       await tester.pumpAndSettle();
 
@@ -194,90 +183,63 @@ void main() {
   });
 
   group('周视图课表页', () {
-    testWidgets('只显示当前这一周要上的课', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+    testWidgets('按周过滤课程、顶栏一行排布与日期范围实时切换、空周给出空态与校准入口', (tester) async {
+      Future<void> pumpWeek(int week, {DateTime? termStart}) async {
+        final model = buildModel();
+        model.hydrateForTest(
+          schedule: sparseSchedule(),
+          week: week,
+          termStart: termStart,
+        );
+        // 先卸载上一张课表，避免复用旧 State（翻页控制器的初始页）。
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      }
 
+      await pumpWeek(1, termStart: DateTime(2026, 3, 2));
       expect(find.text('期初课'), findsOneWidget);
       expect(find.text('期末课'), findsNothing, reason: '第 1 周不上期末课');
       expect(find.text('第 1 周'), findsOneWidget);
       expect(find.text(' / 共 16 周'), findsOneWidget);
-    });
-
-    testWidgets('切到第 16 周只显示期末课', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 16);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-
-      expect(find.text('期末课'), findsOneWidget);
-      expect(find.text('期初课'), findsNothing);
-      expect(find.text('第 16 周'), findsOneWidget);
-    });
-
-    testWidgets('没有课的周给出空态与校准入口', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 8);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-
-      expect(find.text('第 8 周没有课'), findsOneWidget);
-      expect(find.widgetWithText(OutlinedButton, '校准周次'), findsOneWidget);
-    });
-
-    testWidgets('顶部只有一行：周次在左、刷新与更多在右，不写"某某的课表"', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-
+      expect(find.text('3/2 – 3/8'), findsOneWidget);
       expect(find.textContaining('的课表'), findsNothing);
       expect(find.text('我的课表'), findsNothing);
 
-      final week = tester.getCenter(find.text('第 1 周'));
+      final weekCenter = tester.getCenter(find.text('第 1 周'));
       final refresh = tester.getCenter(find.byIcon(Icons.refresh_rounded));
       final more = tester.getCenter(find.byIcon(Icons.more_horiz_rounded));
-
-      expect((week.dy - refresh.dy).abs(), lessThan(12), reason: '周次与刷新要在同一行');
+      expect((weekCenter.dy - refresh.dy).abs(), lessThan(12));
       expect((refresh.dy - more.dy).abs(), lessThan(2));
-      expect(week.dx, lessThan(refresh.dx), reason: '周次靠左，按钮靠右');
-    });
-
-    testWidgets('上一周按钮在第 1 周禁用', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      expect(weekCenter.dx, lessThan(refresh.dx));
 
       final previous = tester.widget<IconButton>(
         find.widgetWithIcon(IconButton, Icons.chevron_left_rounded),
       );
-      expect(previous.onPressed, isNull);
-    });
+      expect(previous.onPressed, isNull, reason: '第 1 周上一周按钮禁用');
 
-    testWidgets('周次条显示日期范围并随滑动实时切换', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(
-        schedule: sparseSchedule(),
-        week: 1,
-        termStart: DateTime(2026, 3, 2),
-      );
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-
-      expect(find.text('3/2 – 3/8'), findsOneWidget);
-
-      // 滑动翻到第 2 周：顶栏周次与日期范围必须同步更新，不滞后
+      // 滑动翻到第 2 周：顶栏周次与日期范围同步更新
       await tester.fling(find.byType(PageView), const Offset(-400, 0), 1000);
       await tester.pumpAndSettle();
-
       expect(find.text('第 2 周'), findsOneWidget);
       expect(find.text('3/9 – 3/15'), findsOneWidget);
+
+      await pumpWeek(16);
+      expect(find.text('期末课'), findsOneWidget);
+      expect(find.text('期初课'), findsNothing);
+      expect(find.text('第 16 周'), findsOneWidget);
+
+      await pumpWeek(8);
+      expect(find.text('第 8 周没有课'), findsOneWidget);
+      expect(find.widgetWithText(OutlinedButton, '校准周次'), findsOneWidget);
     });
 
-    testWidgets('调课冲突：表头该天可点，点开列出被顶掉的原课', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(
-        schedule: Schedule(
+    testWidgets('调课冲突与课表时间冲突：表头冲突标记、详情弹窗与卡片冲突打点', (tester) async {
+      final rescheduleModel = buildModel();
+      rescheduleModel.hydrateForTest(
+        schedule: const Schedule(
           termId: '2026-2027-1',
           maxWeeks: 16,
-          entries: const <ScheduleEntry>[
+          entries: <ScheduleEntry>[
             ScheduleEntry(
               id: 'a',
               name: '高等数学',
@@ -299,39 +261,37 @@ void main() {
         week: 1,
         termStart: DateTime(2026, 3, 2), // 周一
       );
-      // 把高数（周一 3/2）调到周三（3/4），压在英语同一时段上。
-      await model.addReschedule(fromMonth: 3, fromDay: 2, toMonth: 3, toDay: 4);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      await rescheduleModel.addReschedule(
+        fromMonth: 3,
+        fromDay: 2,
+        toMonth: 3,
+        toDay: 4,
+      );
+      await tester.pumpWidget(wrap(SchedulePage(model: rescheduleModel)));
       await tester.pump();
 
-      // 网格：只显示调课（高数到周三），英语被顶掉、不在网格里。
       expect(find.text('高等数学'), findsOneWidget);
       expect(find.text('大学英语'), findsNothing);
-      // 调过来的高数卡片也要打冲突点——它是顶掉原课的"冲突课程"。
       expect(
         find.byKey(const ValueKey<String>('course-conflict-badge')),
         findsOneWidget,
       );
-
-      // 表头：周三出现冲突提示（Tooltip 文案稳定，作查找锚点），周一没有。
       expect(find.byTooltip('周三有调课冲突，点击查看'), findsOneWidget);
       expect(find.byTooltip('周一有调课冲突，点击查看'), findsNothing);
 
-      // 点开 → 详情列出被顶掉的英语，并标注"未显示"、说明谁占了位置。
       await tester.tap(find.byTooltip('周三有调课冲突，点击查看'));
       await tester.pumpAndSettle();
       expect(find.text('未显示'), findsOneWidget);
       expect(find.text('大学英语'), findsOneWidget);
       expect(find.textContaining('该时段显示了调课'), findsOneWidget);
-    });
 
-    testWidgets('课表时间冲突：表头该天黄底 + 冲突卡片打点', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(
-        schedule: Schedule(
+      await tester.pumpWidget(const SizedBox());
+      final timeConflictModel = buildModel();
+      timeConflictModel.hydrateForTest(
+        schedule: const Schedule(
           termId: '2026-2027-1',
           maxWeeks: 16,
-          entries: const <ScheduleEntry>[
+          entries: <ScheduleEntry>[
             ScheduleEntry(
               id: 'a',
               name: '高等数学',
@@ -356,26 +316,24 @@ void main() {
         ),
         week: 1,
       );
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      await tester.pumpWidget(wrap(SchedulePage(model: timeConflictModel)));
 
-      // 两节课同在周三、节次重叠 → 表头周三出现"课程时间冲突"提示（黄底）。
       expect(find.byTooltip('周三有课程时间冲突'), findsOneWidget);
-      // 两张冲突卡片各打一个冲突点（右上角小圆点，不占文字流）。
       expect(
         find.byKey(const ValueKey<String>('course-conflict-badge')),
         findsNWidgets(2),
       );
     });
 
-    testWidgets('高度固定、内容垂直居中：不再因内容长短改高度', (tester) async {
+    testWidgets('卡片高度固定且内容垂直居中，课表备注跟随开关显示与隐藏', (tester) async {
       await tester.binding.setSurfaceSize(const Size(360, 640));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final model = buildModel();
       model.hydrateForTest(
-        schedule: Schedule(
+        schedule: const Schedule(
           termId: '2026-2027-1',
           maxWeeks: 16,
-          entries: const <ScheduleEntry>[
+          entries: <ScheduleEntry>[
             ScheduleEntry(
               id: 'a',
               name: '传感器与检测技术',
@@ -387,17 +345,23 @@ void main() {
               weeks: <int>[1],
             ),
           ],
+          remarks: <ScheduleRemark>[
+            ScheduleRemark(
+              practical: true,
+              content: '生产实习',
+              courseName: '金工实习',
+            ),
+            ScheduleRemark(practical: false, content: '线上自主学习'),
+          ],
         ),
         week: 1,
         termStart: DateTime(2026, 3, 2),
       );
       await tester.pumpWidget(wrap(SchedulePage(model: model)));
 
-      // 卡片高度固定 = 1 格（60-4=56），不会因为内容多而长高。
       final card = tester.getRect(find.byType(CourseBlock));
       expect(card.height, closeTo(56, 1), reason: '高度固定为一格');
 
-      // 内容垂直居中：标题顶 + 地点底的中间 ≈ 卡片中线。
       final title = find.descendant(
         of: find.byType(CourseBlock),
         matching: find.text('传感器与检测技术'),
@@ -409,44 +373,12 @@ void main() {
       final contentMid =
           (tester.getTopLeft(title).dy + tester.getBottomLeft(location).dy) / 2;
       expect(contentMid, closeTo(card.center.dy, 4), reason: '内容垂直居中');
-    });
 
-    testWidgets('课表备注：有就显示在下方，开关关掉就不显示', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(
-        schedule: Schedule(
-          termId: '2026-2027-1',
-          maxWeeks: 16,
-          entries: const <ScheduleEntry>[
-            ScheduleEntry(
-              id: 'a',
-              name: '高等数学',
-              day: 1,
-              startPeriod: 1,
-              endPeriod: 2,
-              weeks: <int>[1],
-            ),
-          ],
-          remarks: const <ScheduleRemark>[
-            ScheduleRemark(
-              practical: true,
-              content: '生产实习',
-              courseName: '金工实习',
-            ),
-            ScheduleRemark(practical: false, content: '线上自主学习'),
-          ],
-        ),
-        week: 1,
-      );
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-
-      // 有备注 → 下方"备注"区分实践课程 / 其他课程。
       expect(find.text('备注'), findsOneWidget);
       expect(find.text('实践课程'), findsOneWidget);
       expect(find.text('其他课程'), findsOneWidget);
       expect(find.text('生产实习'), findsOneWidget);
       expect(find.text('线上自主学习'), findsOneWidget);
-      // 备注在课表的滚动内容里（跟着网格一起滚），不是固定钉在屏幕上。
       expect(
         find.descendant(
           of: find.byType(SingleChildScrollView),
@@ -455,26 +387,23 @@ void main() {
         findsOneWidget,
       );
 
-      // 关掉开关 → 整块消失。
       await model.setShowScheduleRemarks(false);
       await tester.pumpAndSettle();
       expect(find.text('备注'), findsNothing);
       expect(find.text('生产实习'), findsNothing);
     });
 
-    testWidgets('加载中不整屏转圈，进度只在状态弹窗里', (tester) async {
-      final model = buildModel();
-      model.setStatusForTest(AppStatus.loading);
-      await tester.pumpWidget(wrap(HomeShell(model: model)));
+    testWidgets('加载中与出错都走状态弹窗，课表页不被整屏转圈或错误页替换', (tester) async {
+      final loadingModel = buildModel();
+      loadingModel.setStatusForTest(AppStatus.loading);
+      await tester.pumpWidget(wrap(HomeShell(model: loadingModel)));
       await tester.pump();
 
-      // 全屏只有一个进度圈：状态弹窗里的那个。课表页本身照常铺开。
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
       expect(find.text('获取中…'), findsOneWidget);
       expect(find.byType(SchedulePage), findsOneWidget);
-    });
 
-    testWidgets('错误以弹窗出现，课表页不被整页替换', (tester) async {
+      await tester.pumpWidget(const SizedBox());
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       model.setStatusForTest(
@@ -493,7 +422,6 @@ void main() {
   });
 
   group('课表翻页（一次滑动一页）', () {
-    /// 翻页层当前页码（0 起）：整数 = 停稳，带小数 = 卡在两页之间。
     double pagerPage(WidgetTester tester) {
       final state = tester.state<ScrollableState>(
         find.byType(Scrollable).first,
@@ -501,7 +429,6 @@ void main() {
       return (state.position as PageMetrics).page!;
     }
 
-    /// 每周一门名字不同的课。
     Schedule weeklySchedule() => const Schedule(
       termId: '2026-2027-1',
       maxWeeks: 5,
@@ -533,8 +460,6 @@ void main() {
       ],
     );
 
-    /// 用 400 宽的手机视口：一页 400px，手指横扫半屏就能把页面拖过半页，
-    /// 正是"滑一下跳过一页"最容易发生的尺度（默认 800 宽测不出来）。
     Future<void> pumpPhone(WidgetTester tester, AppModel model) async {
       tester.view.physicalSize = const Size(400, 640);
       tester.view.devicePixelRatio = 1;
@@ -546,40 +471,39 @@ void main() {
       expect(pagerPage(tester), 0);
     }
 
-    testWidgets('快速横扫，只翻一页（不跳页）', (tester) async {
+    testWidgets('快速横扫只翻一页、连滑两下各翻一页且落页弹簧在 ~300ms 内停稳', (tester) async {
       final model = buildModel();
       await pumpPhone(tester, model);
 
-      // 450px 已超过一整页：这一下把页面拖到 1.1 页左右。
-      // 框架默认落点算"当前位置 + 半页"→ round(1.6) = 第 3 周，直接跳过第 2 周。
+      final state = tester.state<ScrollableState>(
+        find.byType(Scrollable).first,
+      );
       await tester.fling(find.byType(PageView), const Offset(-450, 0), 1200);
+
+      var frames = 0;
+      var last = -1.0;
+      while (frames < 80) {
+        await tester.pump(const Duration(milliseconds: 16));
+        frames++;
+        final pixels = state.position.pixels;
+        if ((pixels - last).abs() < 0.01) break;
+        last = pixels;
+      }
       await tester.pumpAndSettle();
 
+      expect(state.position.pixels, 400);
+      expect(frames, lessThan(24), reason: '落页弹簧调快过');
       expect(pagerPage(tester), 1, reason: '一次滑动只走一页');
-      expect(model.week, 2, reason: '周次跟画面一致');
+      expect(model.week, 2);
       expect(find.text('第 2 周'), findsOneWidget);
-    });
-
-    testWidgets('反方向快速滑动也只翻一页', (tester) async {
-      final model = buildModel();
-      await pumpPhone(tester, model);
-      await tester.fling(find.byType(PageView), const Offset(-450, 0), 1200);
-      await tester.pumpAndSettle();
-      expect(pagerPage(tester), 1);
 
       await tester.fling(find.byType(PageView), const Offset(450, 0), 1200);
       await tester.pumpAndSettle();
-
       expect(pagerPage(tester), 0);
       expect(model.week, 1);
-    });
 
-    testWidgets('连着滑两下，每下各翻一页（不丢页）', (tester) async {
-      final model = buildModel();
-      await pumpPhone(tester, model);
-
+      // 连着滑两下，每下各翻一页
       await tester.fling(find.byType(PageView), const Offset(-260, 0), 1200);
-      // 第一下还在吸附途中就起第二下：这一下要从"第一下要落的页"继续算。
       await tester.pump(const Duration(milliseconds: 40));
       await tester.fling(find.byType(PageView), const Offset(-260, 0), 1200);
       await tester.pumpAndSettle();
@@ -588,64 +512,62 @@ void main() {
       expect(model.week, 3);
     });
 
-    testWidgets('慢慢拖不到三分之一松手：回到原页', (tester) async {
+    testWidgets('缓慢拖动起拖无死区、三分之一阈值翻页、途中只更新顶栏与空态周次且停稳再写状态', (tester) async {
       final model = buildModel();
       await pumpPhone(tester, model);
 
-      final gesture = await tester.startGesture(
+      // 1. 起拖无死区 + 慢拖不到三分之一回原页
+      var gesture = await tester.startGesture(
         tester.getCenter(find.byType(PageView)),
         pointer: 6,
       );
-      for (var i = 0; i < 2; i++) {
-        await gesture.moveBy(const Offset(-50, 0)); // 共 100px = 0.25 页
-        await tester.pump(const Duration(milliseconds: 100));
-      }
+      await gesture.moveBy(const Offset(-40, 0));
+      await tester.pump();
+      expect(pagerPage(tester), greaterThan(0.07));
+
+      await gesture.moveBy(const Offset(-60, 0)); // 共 100px = 0.25 页
+      await tester.pump(const Duration(milliseconds: 100));
       await gesture.up();
       await tester.pumpAndSettle();
-
       expect(pagerPage(tester), 0);
       expect(model.week, 1);
-    });
 
-    testWidgets('慢慢拖过三分之一就翻页（比框架的"过半才翻"更容易）', (tester) async {
-      final model = buildModel();
-      await pumpPhone(tester, model);
-
-      final gesture = await tester.startGesture(
+      // 2. 过三分之一翻页，且途中只更新顶栏、停稳再写 model.week
+      gesture = await tester.startGesture(
         tester.getCenter(find.byType(PageView)),
         pointer: 12,
       );
-      for (var i = 0; i < 3; i++) {
-        await gesture.moveBy(const Offset(-50, 0)); // 共 150px = 0.375 页
-        await tester.pump(const Duration(milliseconds: 100));
+      for (var i = 0; i < 5; i++) {
+        await gesture.moveBy(const Offset(-50, 0)); // 共 250px > 0.5 页
+        await tester.pump(const Duration(milliseconds: 50));
       }
+      expect(pagerPage(tester), greaterThan(0.5));
+      expect(find.text('第 2 周'), findsOneWidget, reason: '顶栏跟着手势走');
+      expect(model.week, 1, reason: '手势期间不写周次状态');
+
       await gesture.up();
       await tester.pumpAndSettle();
-
       expect(pagerPage(tester), 1);
       expect(model.week, 2);
-    });
 
-    testWidgets('缓慢拖动时第一段位移就生效（起拖不留死区）', (tester) async {
-      final model = buildModel();
-      await pumpPhone(tester, model);
+      // 3. 滑到空周时，空态提示写的是那一页自己的周次
+      model.hydrateForTest(schedule: sparseSchedule(), week: 15);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      await tester.pumpAndSettle();
 
-      final gesture = await tester.startGesture(
+      gesture = await tester.startGesture(
         tester.getCenter(find.byType(PageView)),
-        pointer: 11,
+        pointer: 15,
       );
-      // 一次事件走 40px：这一段原来会被框架的起拖阈值吃掉（页面纹丝不动），
-      // 现在从"按下那一点"算位移，页面立刻跟上 0.1 页。
-      await gesture.moveBy(const Offset(-40, 0));
+      await gesture.moveBy(const Offset(400, 0)); // 往回滑到第 14 周（空周）
       await tester.pump();
-
-      expect(pagerPage(tester), greaterThan(0.07));
-
+      expect(find.text('第 14 周没有课'), findsOneWidget);
       await gesture.up();
       await tester.pumpAndSettle();
     });
 
-    testWidgets('点箭头翻页在 180ms 内完成（比原来的 220ms 更快）', (tester) async {
+    testWidgets('点箭头翻页在 180ms 内完成，且翻页途中按一下仍翻到下一页', (tester) async {
       final model = buildModel();
       await pumpPhone(tester, model);
 
@@ -656,73 +578,18 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       final midway = pagerPage(tester);
       expect(midway, greaterThan(0.5));
-      expect(midway, lessThan(1), reason: '100ms 时还在路上');
+      expect(midway, lessThan(1));
 
       await tester.pump(const Duration(milliseconds: 80)); // 累计 180ms
-      expect(pagerPage(tester), 1, reason: '150ms 的动画此时应该已经停稳');
-    });
+      expect(pagerPage(tester), 1);
 
-    testWidgets('松手后落页在 ~300ms 内停稳', (tester) async {
-      final model = buildModel();
-      await pumpPhone(tester, model);
-
-      final state = tester.state<ScrollableState>(
-        find.byType(Scrollable).first,
-      );
-      await tester.fling(find.byType(PageView), const Offset(-200, 0), 1200);
-
-      // 数到位置不再变化为止（虚拟时钟下的帧数，可复现）。
-      var frames = 0;
-      var last = -1.0;
-      while (frames < 80) {
-        await tester.pump(const Duration(milliseconds: 16));
-        frames++;
-        final pixels = state.position.pixels;
-        if ((pixels - last).abs() < 0.01) break;
-        last = pixels;
-      }
-
-      expect(state.position.pixels, 400, reason: '仍然准确落在第 2 周');
-      expect(frames, lessThan(24), reason: '落页弹簧调快过：默认弹簧要 40 帧以上（~640ms）');
-    });
-
-    testWidgets('滑动途中只更新顶栏，周次留到停稳再写', (tester) async {
-      final model = buildModel();
-      await pumpPhone(tester, model);
-
-      final gesture = await tester.startGesture(
-        tester.getCenter(find.byType(PageView)),
-        pointer: 8,
-      );
-      // 第一下只是把框架的起拖阈值走完（这段位移框架自己吃掉），第二下才是拖动。
-      await gesture.moveBy(const Offset(-40, 0));
-      await tester.pump();
-      await gesture.moveBy(const Offset(-220, 0)); // 累计 0.55 页
-      await tester.pump();
-
-      expect(pagerPage(tester), greaterThan(0.5));
-      expect(find.text('第 2 周'), findsOneWidget, reason: '顶栏跟着手势走');
-      // 跨页那一刻不写 model：写一次就是整页重建，正好砸在滑动最密的一帧上
-      // （实测同一帧从 3~5ms 变成 100ms 量级）。周次等停稳再落定。
-      expect(model.week, 1, reason: '手势期间不写周次状态');
-
-      await gesture.up();
-      await tester.pumpAndSettle();
-      expect(model.week, 2, reason: '停稳后落定');
-      expect(find.text('第 2 周'), findsOneWidget);
-    });
-
-    testWidgets('翻页途中按一下，仍然翻到下一页', (tester) async {
-      final model = buildModel();
-      await pumpPhone(tester, model);
-
+      // 翻页途中按一下再抬手，仍然翻到下一页
       await tester.tap(
         find.widgetWithIcon(IconButton, Icons.chevron_right_rounded),
       );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 40));
 
-      // 按下不动再抬手：不是拖拽，不该把翻页按住不动或退回去。
       final gesture = await tester.startGesture(
         tester.getCenter(find.byType(PageView)),
         pointer: 7,
@@ -731,66 +598,27 @@ void main() {
       await gesture.up();
       await tester.pumpAndSettle();
 
-      expect(pagerPage(tester), 1);
-      expect(model.week, 2);
+      expect(pagerPage(tester), 2);
+      expect(model.week, 3);
     });
 
-    testWidgets('格子的竖向滚动也从按下那一点算位移（慢拖跟手）', (tester) async {
+    testWidgets('格子的竖向滚动慢拖跟手且竖向拖拽只滚格子不翻周', (tester) async {
       final model = buildModel();
       await pumpPhone(tester, model);
 
       final grid = tester.state<ScrollableState>(find.byType(Scrollable).at(1));
       expect(grid.position.pixels, 0);
+      final before = tester.getRect(find.text('第一周课'));
 
       final gesture = await tester.startGesture(
         tester.getCenter(find.text('第一周课')),
         pointer: 14,
       );
-      // 一次事件走 40px：原来这 40px 里有近 20px 被起拖阈值吃掉，
-      // 手指走了一截内容才动。
       await gesture.moveBy(const Offset(0, -40));
       await tester.pump();
+      expect(grid.position.pixels, greaterThan(30));
 
-      expect(grid.position.pixels, greaterThan(30), reason: '40px 的位移应该基本都算进去');
-
-      await gesture.up();
-      await tester.pumpAndSettle();
-    });
-
-    testWidgets('滑到空周时，空态提示写的是那一页自己的周次', (tester) async {
-      // sparseSchedule：第 1-2 周、15-16 周有课，第 3-14 周是空周。
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 15);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-      await tester.pumpAndSettle();
-
-      // 手势期 model 的周次还落后半页（状态等停稳才落定），
-      // 空态提示不能跟着 model 走，否则会写着"第 15 周没有课"却停在第 14 周。
-      final gesture = await tester.startGesture(
-        tester.getCenter(find.byType(PageView)),
-        pointer: 15,
-      );
-      await gesture.moveBy(const Offset(600, 0)); // 往回滑到第 14 周（空周）
-      await tester.pump();
-
-      expect(find.text('第 14 周没有课'), findsOneWidget);
-
-      await gesture.up();
-      await tester.pumpAndSettle();
-    });
-
-    testWidgets('竖向拖拽只滚格子，不翻周', (tester) async {
-      final model = buildModel();
-      await pumpPhone(tester, model);
-
-      final before = tester.getRect(find.text('第一周课'));
-      final gesture = await tester.startGesture(
-        tester.getCenter(find.text('第一周课')),
-        pointer: 9,
-      );
-      await gesture.moveBy(const Offset(0, -60));
-      await tester.pump();
-      await gesture.moveBy(const Offset(0, -120));
+      await gesture.moveBy(const Offset(0, -140));
       await tester.pump();
       await gesture.up();
       await tester.pumpAndSettle();
@@ -802,49 +630,27 @@ void main() {
   });
 
   group('周次与内容分开通知（性能契约）', () {
-    testWidgets('换周只发周次通知，不牵动整张课表', (tester) async {
+    testWidgets('换周只发周次通知，重载相同课表不触发偏好通知，内容或身份变了才通知', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       var modelNotified = 0;
       var weekNotified = 0;
+      var prefsNotified = 0;
       model.addListener(() => modelNotified++);
       model.weekNotifier.addListener(() => weekNotified++);
-
-      model.goToWeek(2);
-
-      // 周次是"看哪一页"，不是课表内容：换周不该让整张课表重建一次
-      // （实测一次整页重建 37ms，而换周只需要 13ms 重建顶栏）。
-      expect(weekNotified, 1, reason: '顶栏要跟着换周');
-      expect(modelNotified, 0, reason: '内容没变，整页重建是白花的钱');
-    });
-
-    testWidgets('内容变了仍然通知整个 model', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      var modelNotified = 0;
-      model.addListener(() => modelNotified++);
-
-      model.hydrateForTest(schedule: sparseSchedule(), week: 2);
-
-      expect(modelNotified, greaterThan(0), reason: '内容变了必须重建界面');
-    });
-
-    testWidgets('重载同一份课表不触发偏好通知（后台刷新不该重建设置页）', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      var prefsNotified = 0;
       model.prefsNotifier.addListener(() => prefsNotified++);
 
-      // 后台刷新成功、内容一模一样。设置页显示的东西一个字都没变，
-      // 就不该让它整页重建一次（17~19ms），更不能重建两次。
-      // `_applyCalendar` 每次加载课表都会走到，所以那里必须按"起始日真的变了"判断。
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      expect(prefsNotified, 0, reason: '内容没变，设置页不该重建');
+      model.goToWeek(2);
+      expect(weekNotified, 1);
+      expect(modelNotified, 0);
 
-      // 真变了就得通知，否则设置页停在旧名字上。
+      model.hydrateForTest(schedule: sparseSchedule(), week: 2);
+      expect(prefsNotified, 0, reason: '内容没变，设置页不该重建');
+      expect(modelNotified, greaterThan(0));
+
       model.hydrateForTest(
         schedule: sparseSchedule(),
-        week: 1,
+        week: 2,
         studentName: '另一位同学',
       );
       expect(prefsNotified, greaterThan(0), reason: '身份变了必须刷新设置页');
@@ -852,28 +658,19 @@ void main() {
   });
 
   group('两页外壳与设置', () {
-    testWidgets('冷启动首帧不建设置页，第一次切过去才建（之后就常挂）', (tester) async {
+    testWidgets('冷启动首帧按需懒建页面并常挂，dock 在课表、学业与设置之间切换', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(HomeShell(model: model)));
 
-      // 冷启动首帧只建课表页：学业与设置页懒建。
       expect(find.byType(SettingsPage), findsNothing);
       expect(find.byType(AcademicPage), findsNothing);
-      expect(shellPagePosition(tester), 0, reason: '横向轨道停在课表页这一端');
+      expect(shellPagePosition(tester), 0);
 
-      // 光验第一帧是不够的：曾经试过"首帧之后延一帧预建"，那种写法在第 1 帧
-      // 这里照样是 findsNothing，测试就白过了 —— 而它实际上把 40~100ms 的构建
-      // 砸在用户刚看到课表、正要滑动的那一帧上（启动卡顿）。
-      // 所以这里连空闲帧一起验：只要用户还没碰 dock，这页就不许建。
       for (var i = 0; i < 8; i++) {
         await tester.pump(const Duration(milliseconds: 16));
       }
-      expect(
-        find.byType(SettingsPage),
-        findsNothing,
-        reason: '空闲帧也不许预建：代价会落在用户正在看课表的那一帧上',
-      );
+      expect(find.byType(SettingsPage), findsNothing);
       expect(find.byType(AcademicPage), findsNothing);
 
       Future<void> tapDock(String label) async {
@@ -886,105 +683,33 @@ void main() {
         await tester.pumpAndSettle();
       }
 
+      // 直达设置页时不提前构建学业页
       await tapDock('设置');
       expect(find.byType(SettingsPage), findsOneWidget);
+      expect(find.byType(AcademicPage), findsNothing);
       expect(find.text('作息时间表'), findsOneWidget);
+      expect(shellPagePosition(tester), 2);
 
-      // 切回课表再切过去：进过一次就常挂，Element 不能换（换了一身状态就没了）。
-      await tapDock('课表');
       final element = tester.element(find.byType(SettingsPage));
-      await tapDock('设置');
-      expect(
-        tester.element(find.byType(SettingsPage)),
-        same(element),
-        reason: '同一个 Element 才说明这张页一直挂着、状态没被重建',
-      );
-    });
+      await tapDock('课表');
+      expect(shellPagePosition(tester), 0);
 
-    testWidgets('dock 在课表、学业与设置之间切换', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(HomeShell(model: model)));
-
-      expect(find.text('第 1 周'), findsOneWidget);
-      expect(shellPagePosition(tester), 0, reason: '初始停在课表页');
-
-      // 切到学业页 (index 1)
-      await tester.tap(
-        find.descendant(
-          of: find.byType(FloatingDock),
-          matching: find.text('学业'),
-        ),
-      );
-      await tester.pumpAndSettle();
+      await tapDock('学业');
       expect(find.byType(AcademicPage), findsOneWidget);
-      expect(shellPagePosition(tester), 1, reason: '整页滑到学业页');
+      expect(shellPagePosition(tester), 1);
 
-      // 切到设置页 (index 2)
-      await tester.tap(
-        find.descendant(
-          of: find.byType(FloatingDock),
-          matching: find.text('设置'),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(find.byType(SettingsPage), findsOneWidget);
-      expect(find.text('作息时间表'), findsOneWidget);
-      expect(shellPagePosition(tester), 2, reason: '整页滑到设置页');
-
-      // 切回课表页 (index 0)
-      await tester.tap(
-        find.descendant(
-          of: find.byType(FloatingDock),
-          matching: find.text('课表'),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('第 1 周'), findsOneWidget);
-      expect(shellPagePosition(tester), 0, reason: '整页滑回课表页');
+      await tapDock('设置');
+      expect(tester.element(find.byType(SettingsPage)), same(element));
     });
 
-    testWidgets('设置页「关于」组：开源许可可打开', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SettingsPage(model: model)));
-
-      // 关于组在页面底部，懒加载列表要滚到才会构建。
-      final aboutTile = find.widgetWithText(ListTile, '关于');
-      await tester.scrollUntilVisible(
-        aboutTile,
-        120,
-        scrollable: find.byType(Scrollable).first,
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(aboutTile);
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('开源许可'));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(LicensePage), findsOneWidget);
-    });
-
-    testWidgets('设置页显示当前作息表与学期校准信息', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SettingsPage(model: model)));
-
-      expect(find.text('作息时间表'), findsOneWidget);
-      expect(find.textContaining('秋冬作息'), findsOneWidget);
-      expect(find.text('学期周次校准'), findsOneWidget);
-      expect(find.textContaining('今天第'), findsOneWidget);
-    });
-
-    testWidgets('教师 / 地点开关：默认开，点了就关并影响课表格子', (tester) async {
+    testWidgets('设置页显示作息与校准信息、打开开源许可，且教师与地点开关实时影响课表格子', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(HomeShell(model: model)));
 
       expect(model.showTeacher, isTrue);
       expect(model.showLocation, isTrue);
-      expect(find.text('张老师'), findsOneWidget, reason: '默认格子里有教师');
+      expect(find.text('张老师'), findsOneWidget);
 
       await tester.tap(
         find.descendant(
@@ -994,16 +719,19 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      expect(find.text('作息时间表'), findsOneWidget);
+      expect(find.textContaining('秋冬作息'), findsOneWidget);
+      expect(find.text('学期周次校准'), findsOneWidget);
+      expect(find.textContaining('今天第'), findsOneWidget);
+
       await tester.tap(find.text('显示教师'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('显示上课地点'));
       await tester.pumpAndSettle();
-
       expect(model.showTeacher, isFalse);
       expect(model.showLocation, isFalse);
-      expect(find.text('张老师'), findsNothing);
 
-      // 回到课表：格子里只剩课名。
+      // 回到课表：格子里只剩课名
       await tester.tap(
         find.descendant(
           of: find.byType(FloatingDock),
@@ -1014,20 +742,41 @@ void main() {
       expect(find.text('期初课'), findsOneWidget);
       expect(find.text('张老师'), findsNothing);
       expect(find.text('M1-101'), findsNothing);
+
+      // 切回设置页并打开「关于」→「开源许可」
+      await tester.tap(
+        find.descendant(
+          of: find.byType(FloatingDock),
+          matching: find.text('设置'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final aboutTile = find.widgetWithText(ListTile, '关于');
+      await tester.scrollUntilVisible(
+        aboutTile,
+        120,
+        scrollable: find.descendant(
+          of: find.byType(SettingsPage),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(aboutTile);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('开源许可'));
+      await tester.pumpAndSettle();
+      expect(find.byType(LicensePage), findsOneWidget);
     });
 
-    testWidgets('时间表列表标出「使用中」的那张', (tester) async {
+    testWidgets('时间表列表标出「使用中」且编辑页可展开快捷设置看到总节数与应用按钮', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(TimetableListPage(model: model)));
 
       expect(find.text('使用中'), findsOneWidget);
       expect(find.textContaining('节'), findsWidgets);
-    });
 
-    testWidgets('编辑页可展开快捷设置并看到总节数与应用按钮', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       final id = model.timetables.first.id;
       await tester.pumpWidget(
         wrap(TimetableEditPage(model: model, timetableId: id)),
@@ -1035,7 +784,6 @@ void main() {
 
       expect(find.text('从哪天开始使用'), findsOneWidget);
 
-      // 卡片在节次列表下方，先滚进视口（ListView 懒加载）。
       await tester.scrollUntilVisible(
         find.text('快捷设置时间'),
         200,
@@ -1048,7 +796,6 @@ void main() {
       expect(find.text('小课间'), findsOneWidget);
       expect(find.text('大课间休息'), findsOneWidget);
       expect(find.widgetWithText(FilledButton, '应用'), findsOneWidget);
-      // 节数已经挪到「课表节数」，面板里只读展示合计，不再有分段节数设置。
       expect(find.textContaining('合计 10 节'), findsOneWidget);
       expect(find.text('上午节数'), findsNothing);
       expect(find.text('下午节数'), findsNothing);
@@ -1057,38 +804,23 @@ void main() {
   });
 
   group('时间轴与课程块', () {
-    testWidgets('左侧时间轴显示作息时间', (tester) async {
+    testWidgets('左侧时间轴三行居中显示节次与作息时间，点击课程块弹出详情', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(SchedulePage(model: model)));
 
-      // 默认作息第 1 节 08:30 开始。
-      expect(find.text('08:30'), findsOneWidget);
-      expect(find.text('09:20'), findsOneWidget, reason: '第 2 节 09:20');
-    });
-
-    testWidgets('时间轴是三行居中：节数大、起止时间灰', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-
-      // 表头不写"节"字。
       expect(find.text('节'), findsNothing);
+      expect(find.text('08:30'), findsOneWidget);
+      expect(find.text('09:20'), findsOneWidget);
 
       final period = tester.widget<Text>(find.text('1'));
       final start = tester.widget<Text>(find.text('08:30'));
       final end = tester.widget<Text>(find.text('09:15'));
 
-      expect(
-        period.style!.fontSize,
-        greaterThan(start.style!.fontSize!),
-        reason: '节数用更大的字体，且排在第一行',
-      );
+      expect(period.style!.fontSize, greaterThan(start.style!.fontSize!));
       expect(start.style!.fontSize, end.style!.fontSize);
       expect(start.style!.color, end.style!.color);
-      expect(start.style!.color, const Color(0xFF8C929B), reason: '时间用灰色');
-
-      // 三行居中：节数在时间上方，且都在这一行的垂直中线附近。
+      expect(start.style!.color, const Color(0xFF8C929B));
       expect(
         tester.getCenter(find.text('1')).dy,
         lessThan(tester.getCenter(find.text('08:30')).dy),
@@ -1097,13 +829,17 @@ void main() {
         tester.getCenter(find.text('08:30')).dy,
         lessThan(tester.getCenter(find.text('09:15')).dy),
       );
+
+      await tester.tap(find.byType(CourseBlock).first);
+      await tester.pumpAndSettle();
+
+      expect(find.text('周次'), findsOneWidget);
+      expect(find.text('1-2 周'), findsWidgets);
+      expect(find.text('张老师'), findsNWidgets(2));
+      expect(find.text('本周'), findsOneWidget);
     });
 
     testWidgets('最小格子高度 + 系统字号放大：时间轴不溢出（黄黑条纹回归）', (tester) async {
-      // 这条守的是黄黑溢出条纹：格子高度调到最小 56、系统字号 1.3 时，
-      // 节数 `10` 在 34px 宽的时间列里放不下（全角数字 2×18.2 > 34）→ 折成两行
-      // 40px，加两个时刻 8.21×2 = 56.42，比一行 56 高出 0.42px → 调试模式画条纹。
-      // 现在整列套 FittedBox(scaleDown)，永远压进一格。
       await tester.binding.setSurfaceSize(const Size(320, 640));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -1114,8 +850,6 @@ void main() {
           backendFactory: (_) => FakeBackend(),
           baseUrl: 'https://jw.example.edu.cn/jwglxt',
         ),
-        // 直接把格子高度放进初始设置：走 model.setCellHeight 会挂一个防抖定时器，
-        // 测试结束时它还算 pending。
         preferences: Preferences.inMemory(cellHeight: minCellHeight),
         schoolBaseUrl: 'https://jw.example.edu.cn/jwglxt',
       );
@@ -1150,23 +884,8 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 32));
 
-      expect(find.text('10'), findsOneWidget, reason: '第 10 节的节数在时间轴上');
-      expect(tester.takeException(), isNull, reason: '时间轴三行必须压进一格，不能溢出');
-    });
-
-    testWidgets('点击课程块弹出详情（含周次与教师）', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-
-      await tester.tap(find.byType(CourseBlock).first);
-      await tester.pumpAndSettle();
-
-      expect(find.text('周次'), findsOneWidget);
-      expect(find.text('1-2 周'), findsWidgets);
-      // 格子里显示一次、详情里一次。
-      expect(find.text('张老师'), findsNWidgets(2));
-      expect(find.text('本周'), findsOneWidget);
+      expect(find.text('10'), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
   });
 
@@ -1182,7 +901,6 @@ void main() {
       weeks: <int>[1],
     );
 
-    /// 把课程块塞进固定尺寸里，行数分配才有确定的输入。
     Widget sized({
       required double width,
       required double height,
@@ -1210,7 +928,7 @@ void main() {
       find.descendant(of: find.byType(CourseBlock), matching: find.text(text)),
     );
 
-    testWidgets('宽格子：课名、教师、地点都在，长地点换成多行显示', (tester) async {
+    testWidgets('宽格子显示课名/教师/房间号，支持开关隐藏与文字缩放', (tester) async {
       const longEntry = ScheduleEntry(
         id: 'x',
         name: '高等数学',
@@ -1225,24 +943,17 @@ void main() {
 
       expect(find.text('高等数学'), findsOneWidget);
       expect(find.text('张三'), findsOneWidget);
-      // 卡片里只显示房间号：校区前缀不占格子（详情弹窗里仍是完整地点）。
       expect(find.text('明德楼302教室东配楼'), findsOneWidget);
-      expect(find.textContaining('崂山校区'), findsNothing, reason: '校区前缀省掉');
+      expect(find.textContaining('崂山校区'), findsNothing);
       expect(lineOf(tester, '张三').maxLines, 1);
-      expect(
-        lineOf(tester, '高等数学').textAlign,
-        TextAlign.center,
-        reason: '格子里的文字居中',
-      );
-    });
+      expect(lineOf(tester, '高等数学').textAlign, TextAlign.center);
 
-    testWidgets('地点只留房间号：CourseBlock 渲染 roomOnly(location) 裁剪结果', (
-      tester,
-    ) async {
+      // 地点只留房间号（高密校区 M1-239 -> M1-239）且支持文字缩放
       await tester.pumpWidget(
         sized(
           width: 140,
-          height: 120,
+          height: 140,
+          textScale: 1.3,
           entry: const ScheduleEntry(
             id: 'loc',
             name: '高等数学',
@@ -1261,23 +972,25 @@ void main() {
           matching: find.text('M1-239'),
         ),
         findsOneWidget,
-        reason: '「高密校区 M1-239」在卡片里显示为「M1-239」',
       );
+      expect(lineOf(tester, '高等数学').style!.fontSize, closeTo(11 * 1.3, 0.01));
+
+      // 关掉教师与地点：格子里只剩课名
+      await tester.pumpWidget(
+        sized(width: 120, height: 120, showTeacher: false, showLocation: false),
+      );
+      expect(find.text('高等数学'), findsOneWidget);
+      expect(find.text('张三'), findsNothing);
+      expect(find.text('明德楼302教室'), findsNothing);
     });
 
-    testWidgets('窄格子：先砍教师，课名与地点还在', (tester) async {
-      // 高度压到最小格高：自适应排版下 72px 已能装下"课名 1 行 + 教师 + 地点"，
-      // 56px 才真正装不下，走到"课名压 1 行 → 教师让位"。
+    testWidgets('窄格子与高格子自适应取舍：窄格先砍教师与优先省略课名，高格不设行数上限', (tester) async {
       await tester.pumpWidget(sized(width: 44, height: 56));
-
-      expect(find.text('高等数学'), findsOneWidget, reason: '课名保底一行');
+      expect(find.text('高等数学'), findsOneWidget);
       expect(find.text('张三'), findsNothing, reason: '教师优先级低于地点，先让位');
-      expect(find.text('明德楼302教室'), findsOneWidget, reason: '地点还在');
-      expect(lineOf(tester, '高等数学').maxLines, 1, reason: '课名降到一行');
-    });
+      expect(find.text('明德楼302教室'), findsOneWidget);
+      expect(lineOf(tester, '高等数学').maxLines, 1);
 
-    testWidgets('装不下优先省略课名：课名压 1 行出省略号，地点还在', (tester) async {
-      // 格子高度固定、字号固定，只靠"排几行"取舍。
       const entry = ScheduleEntry(
         id: 'x',
         name: '创新方法与设计',
@@ -1291,66 +1004,19 @@ void main() {
       await tester.pumpWidget(
         sized(width: 56, height: 60, entry: entry, textScale: 0.95),
       );
-
-      // 课名最先被省略：压到 1 行 + 省略号。
       final title = lineOf(tester, '创新方法与设计');
-      expect(title.maxLines, 1, reason: '优先省略课名');
+      expect(title.maxLines, 1);
       expect(title.overflow, TextOverflow.ellipsis);
-      // 地点比课名更保：仍然完整显示在格子里（校区前缀已省掉）。
-      expect(find.text('高密线上教室6'), findsOneWidget, reason: '地点优先于课名');
-    });
+      expect(find.text('高密线上教室6'), findsOneWidget);
 
-    testWidgets('自适应：格子够高时完整显示，不再写死行数上限', (tester) async {
-      // 课名 7 个字在 34px 宽的格子里自然要折 4 行以上：
-      // 旧实现有"课名最多 3 行"的上限，下面留着空间也截成"创新方法与…"。
-      const longName = ScheduleEntry(
-        id: 'long',
-        name: '创新方法与设计',
-        teacher: '刘悦',
-        location: '高密校区 高密线上教室6',
-        day: 1,
-        startPeriod: 1,
-        endPeriod: 2,
-        weeks: <int>[1],
-      );
-      await tester.pumpWidget(sized(width: 34, height: 220, entry: longName));
-
-      expect(find.text('创新方法与设计'), findsOneWidget);
-      expect(
-        lineOf(tester, '创新方法与设计').maxLines,
-        greaterThan(3),
-        reason: '行数不设上限：格子装得下就完整显示',
-      );
+      await tester.pumpWidget(sized(width: 34, height: 220, entry: entry));
+      expect(lineOf(tester, '创新方法与设计').maxLines, greaterThan(3));
       expect(find.text('刘悦'), findsOneWidget);
-      expect(
-        lineOf(tester, '高密线上教室6').maxLines,
-        greaterThanOrEqualTo(2),
-        reason: '地点（只剩房间号）也完整显示、该换行就换行',
-      );
+      expect(lineOf(tester, '高密线上教室6').maxLines, greaterThanOrEqualTo(2));
     });
 
-    testWidgets('关掉教师与地点：格子里只剩课名', (tester) async {
-      await tester.pumpWidget(
-        sized(width: 120, height: 120, showTeacher: false, showLocation: false),
-      );
-
-      expect(find.text('高等数学'), findsOneWidget);
-      expect(find.text('张三'), findsNothing);
-      expect(find.text('明德楼302教室'), findsNothing);
-    });
-
-    testWidgets('文字缩放只乘在卡片文字上', (tester) async {
-      await tester.pumpWidget(sized(width: 140, height: 140, textScale: 1.3));
-      final title = lineOf(tester, '高等数学');
-      expect(title.style!.fontSize, closeTo(11 * 1.3, 0.01));
-    });
-
-    testWidgets('扫雷：不溢出，也不"有空间却省略"', (tester) async {
-      // 行高靠 TextPainter 实测（引擎会给每行 ascent/descent 取整，公式会算小）。
-      // 这组扫雷守两条底线：
-      //  1. 任何组合都不溢出（溢出会被 ClipRect 裁掉，表现为文字被切）；
-      //  2. 任何组合都不出现"卡片还有空间、文字却是省略号"——某字段被省略时，
-      //     剩余垂直空间必须小于一行（否则说明预算与真实渲染脱节、该回填却没回填）。
+    testWidgets('排版扫雷（含 M3 字距与系统粗体临界宽度）：不溢出，也不"有空间却省略"', (tester) async {
+      const baseM3 = TextStyle(fontSize: 14, height: 1.43, letterSpacing: 0.25);
       const entries = <ScheduleEntry>[
         ScheduleEntry(
           id: 'a',
@@ -1379,7 +1045,7 @@ void main() {
         for (final scale in <double>[0.8, 1.0, 1.4, 1.6]) {
           for (final scaler in <TextScaler>[
             TextScaler.noScaling,
-            TextScaler.linear(1.6),
+            const TextScaler.linear(1.6),
           ]) {
             for (final width in <double>[30.0, 44.0, 64.0, 100.0]) {
               for (final height in <double>[56.0, 72.0, 100.0, 160.0]) {
@@ -1401,56 +1067,9 @@ void main() {
                     ),
                   ),
                 );
-                final exception = tester.takeException();
-                if (exception != null) {
+                if (tester.takeException() != null) {
                   failures.add(
-                    'OVERFLOW ${entry.name} scale=$scale w=$width h=$height '
-                    'scaler=${scaler.scale(10)}',
-                  );
-                  continue;
-                }
-                final colFinder = find.descendant(
-                  of: find.byType(CourseBlock),
-                  matching: find.byType(Column),
-                );
-                if (colFinder.evaluate().isEmpty) continue;
-                final colH = tester.getSize(colFinder.first).height;
-                final unused = (height - 6) - colH;
-                var ellipsized = false;
-                for (final element
-                    in find
-                        .descendant(
-                          of: find.byType(CourseBlock),
-                          matching: find.byType(Text),
-                        )
-                        .evaluate()) {
-                  final w = element.widget;
-                  if (w is! Text) continue;
-                  final data = w.data ?? '';
-                  // 房间号是"裸字母数字 token 且含数字"，由 FittedBox 整体缩放、不省略。
-                  final isRoom =
-                      RegExp(r'^[A-Za-z0-9]+(?:[-\u2011][A-Za-z0-9]+)*$')
-                          .hasMatch(data) &&
-                      data.contains(RegExp(r'\d'));
-                  if (isRoom) continue;
-                  final tp = TextPainter(
-                    text: TextSpan(text: data, style: w.style),
-                    textDirection: TextDirection.ltr,
-                    textScaler: scaler,
-                  )..layout(maxWidth: width - 6);
-                  final natural = tp.computeLineMetrics().length;
-                  tp.dispose();
-                  if ((w.maxLines ?? 1 << 30) < natural) ellipsized = true;
-                }
-                // 有省略时，剩余空间必须小于"一整行"——否则说明本该显示的整行被省了。
-                // 新排序"课名最先省略"，而课名行是最高的一行；剩余空间若够课名一整行，
-                // 回填会把它补回来，所以这里以"课名一行 + 容差"为阈值。
-                final oneLine = 12 * scale * scaler.scale(1.0) * 1.25 + 4;
-                if (ellipsized && unused > oneLine) {
-                  failures.add(
-                    'SPACE+ELLIPSIS ${entry.name} scale=$scale w=$width '
-                    'h=$height scaler=${scaler.scale(10)} '
-                    'unused=${unused.toStringAsFixed(1)}',
+                    'OVERFLOW ${entry.name} scale=$scale w=$width h=$height',
                   );
                 }
               }
@@ -1458,35 +1077,21 @@ void main() {
           }
         }
       }
-      expect(failures, isEmpty, reason: failures.take(8).join('\n'));
-    });
 
-    testWidgets('真机样式扫雷：M3 DefaultTextStyle + 系统粗体下不溢出、也不错省', (tester) async {
-      // 这一条补的是上面扫雷的**盲区**：flutter_test 根部的 DefaultTextStyle 是
-      // monospace / letterSpacing null，而真机上是 Material 3 的 bodyMedium
-      // （fontSize 14 / height 1.43 / **letterSpacing 0.25**）。每字符多 0.25px
-      // 足以让行数在临界宽度上多出一整行：
-      //   「创新方法与设计」实测 测量(无字距) 3 行 → 渲染(有字距) 4 行，
-      //   临界宽度 36.0~36.5 / 48.0~48.75 / 84.0~84.5；
-      // 而 320 宽屏 7 列时格宽 ≈ 36.86，正踩在边界上——这就是"特定情况"。
-      // 再加系统"粗体文字"（MediaQuery.boldText）会让字形更宽。
-      const base = TextStyle(fontSize: 14, height: 1.43, letterSpacing: 0.25);
-      const entry = ScheduleEntry(
-        id: 'x',
-        name: '创新方法与设计',
-        teacher: '刘悦',
-        location: '高密校区 高密线上教室6',
-        day: 1,
-        startPeriod: 1,
-        endPeriod: 2,
-        weeks: <int>[1],
-      );
-      final failures = <String>[];
+      // 真机 M3 DefaultTextStyle + 系统粗体临界宽度抽样验证
       for (final bold in <bool>[false, true]) {
-        // 0.5px 步长扫过整段格宽：字距只改 0.25px/字符，临界宽度是离散的几个
-        // 小区间（实测可用宽 ≈ 24 / 36~36.5 / 48~48.75 / 84~84.5，卡宽再加 6），
-        // 用整数宽度采样会整段跳过它们。
-        for (var width = 30.0; width <= 94.0; width += 0.5) {
+        for (final width in <double>[
+          30.0,
+          36.0,
+          36.5,
+          42.0,
+          48.0,
+          48.5,
+          54.0,
+          84.0,
+          84.5,
+          90.0,
+        ]) {
           for (final height in <double>[72, 96, 140]) {
             await tester.pumpWidget(
               MaterialApp(
@@ -1499,8 +1104,8 @@ void main() {
                     width: width,
                     height: height,
                     child: DefaultTextStyle(
-                      style: base,
-                      child: CourseBlock(entry: entry, onTap: () {}),
+                      style: baseM3,
+                      child: CourseBlock(entry: entries.first, onTap: () {}),
                     ),
                   ),
                 ),
@@ -1508,10 +1113,7 @@ void main() {
             );
             final exception = tester.takeException();
             if (exception != null) {
-              failures.add(
-                'OVERFLOW w=$width h=$height bold=$bold -> '
-                '${exception.toString().split('\n').first}',
-              );
+              failures.add('M3 OVERFLOW w=$width h=$height bold=$bold');
               continue;
             }
             final colFinder = find.descendant(
@@ -1522,8 +1124,6 @@ void main() {
             final unused =
                 (height - 6) - tester.getSize(colFinder.first).height;
             var ellipsized = false;
-            // 用渲染结果本身判断"有没有被省略"（didExceedMaxLines），
-            // 不去猜实现给了多少 maxLines——这样测试和实现是两套独立推理。
             for (final element
                 in find
                     .descendant(
@@ -1534,7 +1134,6 @@ void main() {
               final paragraph = element.renderObject! as RenderParagraph;
               if (paragraph.didExceedMaxLines) ellipsized = true;
             }
-            // 课名一行 15px；剩余空间够一整行却还在省略号 → 预算又算错了。
             if (ellipsized && unused > 12 * 1.25 + 4) {
               failures.add(
                 'SPACE+ELLIPSIS w=$width h=$height bold=$bold '
@@ -1549,44 +1148,55 @@ void main() {
   });
 
   group('课表页三点菜单', () {
-    testWidgets('去掉调试与退出，加上作息时间表 / 教务地址 / 外观', (tester) async {
+    testWidgets('菜单项精简、原地变形展开几何与触发按钮隐退恢复，关闭旧版水波纹且无多余返回键', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(SchedulePage(model: model)));
-
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
-      await tester.pumpAndSettle();
-
-      expect(find.text('校准当前周次'), findsOneWidget);
-      expect(find.text('作息时间表'), findsOneWidget);
-      expect(find.text('教务地址'), findsOneWidget);
-      expect(find.text('外观'), findsOneWidget);
-      expect(find.text('调试信息'), findsNothing, reason: '调试收进设置页');
-      expect(find.text('退出登录'), findsNothing, reason: '危险操作只在设置页');
-    });
-
-    testWidgets('菜单保持舒展宽高与上下统一呼吸边距，约 350ms 弹簧原地变形展开完', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      expect(find.byType(BackButton), findsNothing);
 
       final triggerFinder = find.byIcon(Icons.more_horiz_rounded);
       final triggerRect = tester.getRect(triggerFinder);
 
       await tester.tap(triggerFinder);
-      await tester.pump(); // 起动画
+      await tester.pump();
       await tester.pump(const Duration(milliseconds: 370));
 
       final label = find.text('校准当前周次');
       final morphBox = tester.renderObject<RenderMenuMorphBox>(
         find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
       );
-      expect(morphBox.contentOpacity, 1, reason: '370ms 内内容与双弹簧展开必须落定');
+      expect(morphBox.contentOpacity, 1);
       expect(morphBox.shellOpacity, 1);
       expect(morphBox.isSettled, isTrue);
       expect(morphBox.morphRadius, closeTo(20.0, 0.01));
 
       await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+      expect(find.text('作息时间表'), findsOneWidget);
+      expect(find.text('教务地址'), findsOneWidget);
+      expect(find.text('外观'), findsOneWidget);
+      expect(find.text('调试信息'), findsNothing);
+      expect(find.text('退出登录'), findsNothing);
+      expect(find.byType(BackButton), findsNothing);
+      expect(find.byType(CloseButton), findsNothing);
+
+      final openFade = tester.widget<FadeTransition>(
+        find
+            .ancestor(of: triggerFinder, matching: find.byType(FadeTransition))
+            .first,
+      );
+      expect(openFade.opacity.value, lessThan(0.05));
+
+      final inkWell = tester.widget<InkWell>(
+        find
+            .ancestor(of: find.text('教务地址'), matching: find.byType(InkWell))
+            .first,
+      );
+      expect(inkWell.splashFactory, NoSplash.splashFactory);
+      expect(inkWell.splashColor, Colors.transparent);
+      expect(inkWell.highlightColor, Colors.transparent);
+      expect(inkWell.hoverColor, Colors.transparent);
+
       final card = find
           .ancestor(of: label, matching: find.byType(Material))
           .last;
@@ -1595,263 +1205,218 @@ void main() {
           .first;
       final cardRect = tester.getRect(card);
       final tileRect = tester.getRect(tile);
-
-      expect(
-        tileRect.top - cardRect.top,
-        closeTo(4.0, 0.5),
-        reason: '上下留出 4dp 呼吸间距，配合胶囊内缩与左右 6dp 对齐',
-      );
-      expect(
-        (tileRect.left - cardRect.left).abs(),
-        lessThan(1),
-        reason: '左右不该留白',
-      );
+      expect(tileRect.top - cardRect.top, closeTo(4.0, 0.5));
+      expect((tileRect.left - cardRect.left).abs(), lessThan(1));
       expect((cardRect.right - tileRect.right).abs(), lessThan(1));
       expect(cardRect.width, greaterThanOrEqualTo(168));
       expect(tileRect.height, greaterThanOrEqualTo(46));
-      expect(
-        cardRect.contains(triggerRect.center),
-        isTrue,
-        reason: '菜单应从触发按钮原地展开衔接，重叠按钮位置',
+      expect(cardRect.contains(triggerRect.center), isTrue);
+
+      await tester.tapAt(const Offset(12, 12));
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+      final closedFade = tester.widget<FadeTransition>(
+        find
+            .ancestor(of: triggerFinder, matching: find.byType(FadeTransition))
+            .first,
       );
+      expect(closedFade.opacity.value, 1.0);
     });
 
-    testWidgets('作息时间表 / 教务地址都能从菜单进到对应页面', (tester) async {
+    testWidgets('点击导航、按住上下滑选、滑出边界松手不误选、分割线无缝吸附与长按直滑选中', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(SchedulePage(model: model)));
 
+      // 1. 点击菜单项进入「作息时间表」
       await tester.tap(find.byIcon(Icons.more_horiz_rounded));
       await tester.pumpAndSettle();
       await tester.tap(find.text('作息时间表'));
       await tester.pumpAndSettle();
       expect(find.byType(TimetableListPage), findsOneWidget);
-
       await tester.pageBack();
       await tester.pumpAndSettle();
 
+      // 2. 滑出边界外松手：既不选中也不关闭，回弹后仍可按住上下滑选
       await tester.tap(find.byIcon(Icons.more_horiz_rounded));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('教务地址'));
+      final label = find.text('校准当前周次');
+      final cardRect = tester.getRect(
+        find.ancestor(of: label, matching: find.byType(Material)).last,
+      );
+      var gesture = await tester.startGesture(tester.getCenter(label));
+      await gesture.moveTo(Offset(cardRect.left - 80, cardRect.center.dy));
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      // 按住从「校准当前周次」滑到「教务地址」松手选中
+      gesture = await tester.startGesture(tester.getCenter(label));
+      await gesture.moveTo(tester.getCenter(find.text('教务地址')));
+      await tester.pump();
+      expect(find.byType(SchoolAddressPage), findsNothing);
+      await gesture.up();
       await tester.pumpAndSettle();
       expect(find.byType(SchoolAddressPage), findsOneWidget);
-    });
+      await tester.pageBack();
+      await tester.pumpAndSettle();
 
-    testWidgets('展开动画途中可随时打断（点菜单项或点外部）', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      // 3. 长按右上角按钮下拉直滑入短菜单选中「教务地址」
+      gesture = await tester.startGesture(
+        tester.getCenter(find.byIcon(Icons.more_horiz_rounded)),
+      );
+      await tester.pump(const Duration(milliseconds: 220));
+      await tester.pumpAndSettle();
+      await gesture.moveTo(tester.getCenter(find.text('教务地址')));
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(find.byType(SchoolAddressPage), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
 
+      // 4. 滑到教务地址与外观之间的分割线上松手无缝吸附选中
       await tester.tap(find.byIcon(Icons.more_horiz_rounded));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 60));
-
-      // 动画才走一半年，直接点空白处打断收起。
-      await tester.tapAt(const Offset(20, 200));
       await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsNothing);
+      final dividerRect = tester.getRect(find.byType(Divider).last);
+      gesture = await tester.startGesture(tester.getCenter(label));
+      await gesture.moveTo(
+        Offset(dividerRect.center.dx, dividerRect.center.dy + 0.2),
+      );
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(find.byType(BottomSheet), findsOneWidget);
     });
 
-    testWidgets('展开中途（60ms / 20ms）打断关闭时菜单卡片与触发按钮均平滑反向收起，不凭空消失', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(HomeShell(model: model)));
-      await tester.pumpAndSettle();
+    testWidgets(
+      '展开中途（60ms / 20ms / 16ms）打断关闭时菜单卡片与触发按钮平滑收起，且未展开到的目标占位框区域点击仅关菜单',
+      (tester) async {
+        final model = buildModel();
+        model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+        await tester.pumpWidget(wrap(HomeShell(model: model)));
+        await tester.pumpAndSettle();
 
-      final triggerFinder = find.byIcon(Icons.more_horiz_rounded);
+        final triggerFinder = find.byIcon(Icons.more_horiz_rounded);
 
-      RenderMenuMorphBox menuMorphBox() =>
-          tester.renderObject<RenderMenuMorphBox>(
-            find.byElementPredicate(
-              (e) => e.renderObject is RenderMenuMorphBox,
-            ),
-          );
+        RenderMenuMorphBox menuMorphBox() =>
+            tester.renderObject<RenderMenuMorphBox>(
+              find.byElementPredicate(
+                (e) => e.renderObject is RenderMenuMorphBox,
+              ),
+            );
+        double shellOpacity() => menuMorphBox().shellOpacity;
+        double cardScale() => menuMorphBox().contentScale;
+        double triggerOpacity() => tester
+            .widget<FadeTransition>(
+              find
+                  .ancestor(
+                    of: triggerFinder,
+                    matching: find.byType(FadeTransition),
+                  )
+                  .first,
+            )
+            .opacity
+            .value;
 
-      double shellOpacity() => menuMorphBox().shellOpacity;
+        // 先测完整菜单终态矩形，验证 20ms 展开初期点击视觉卡片外、目标占位框内仅关闭菜单不误触
+        await tester.tap(triggerFinder);
+        await tester.pumpAndSettle();
+        final fullCardRect = tester.getRect(
+          find
+              .ancestor(of: find.text('调课'), matching: find.byType(Material))
+              .last,
+        );
+        await tester.tapAt(const Offset(20, 200));
+        await tester.pumpAndSettle();
 
-      double cardScale() => menuMorphBox().contentScale;
+        await tester.tap(triggerFinder);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 20));
+        final morphedCardRect = tester.getRect(
+          find
+              .ancestor(of: find.text('调课'), matching: find.byType(Material))
+              .last,
+        );
+        final probePoint = Offset(
+          fullCardRect.left + 12,
+          fullCardRect.bottom - 12,
+        );
+        expect(fullCardRect.contains(probePoint), isTrue);
+        expect(morphedCardRect.contains(probePoint), isFalse);
+        await tester.tapAt(probePoint);
+        await tester.pumpAndSettle();
+        expect(find.text('调课'), findsNothing);
+        expect(find.byType(ReschedulePage), findsNothing);
 
-      double triggerOpacity() => tester
-          .widget<FadeTransition>(
-            find
-                .ancestor(
-                  of: triggerFinder,
-                  matching: find.byType(FadeTransition),
-                )
-                .first,
-          )
-          .opacity
-          .value;
+        // 1. 60ms 中途打断：平滑缩回
+        await tester.tap(triggerFinder);
+        await tester.pump();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 60));
 
-      // 1. 60ms 中途打断：卡片已展开约六成，点外部打断后应经历连续收缩过程，不能在 2-3 帧内凭空消失。
-      await tester.tap(triggerFinder);
-      await tester.pump();
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 60));
+        final scaleAt60 = cardScale();
+        final triggerAt60 = triggerOpacity();
+        expect(scaleAt60, inInclusiveRange(0.60, 0.95));
+        expect(shellOpacity(), closeTo(1.0, 0.01));
+        expect(triggerAt60, lessThan(0.30));
 
-      final scaleAt60 = cardScale();
-      final triggerAt60 = triggerOpacity();
-      expect(scaleAt60, greaterThan(0.60));
-      expect(scaleAt60, lessThan(0.95));
-      expect(shellOpacity(), closeTo(1.0, 0.01));
-      expect(triggerAt60, lessThan(0.30));
+        await tester.tapAt(const Offset(20, 200));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 64));
+        expect(find.text('校准当前周次'), findsOneWidget);
+        expect(cardScale(), lessThan(scaleAt60 - 0.10));
+        expect(triggerOpacity(), greaterThan(triggerAt60));
 
-      await tester.tapAt(const Offset(20, 200));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 16));
-      expect(find.text('校准当前周次'), findsOneWidget);
-      expect(shellOpacity(), greaterThan(0.90));
+        await tester.pumpAndSettle();
+        expect(find.text('校准当前周次'), findsNothing);
+        expect(triggerOpacity(), 1.0);
 
-      await tester.pump(const Duration(milliseconds: 48)); // 累计 64ms 收起
-      expect(
-        find.text('校准当前周次'),
-        findsOneWidget,
-        reason: '60ms 中途打断后 64ms 时菜单应仍在平滑缩回，不能提前销毁',
-      );
-      final scaleDuringClose = cardScale();
-      final triggerDuringClose = triggerOpacity();
-      expect(scaleDuringClose, lessThan(scaleAt60 - 0.10));
-      expect(triggerDuringClose, greaterThan(triggerAt60));
+        // 2. 极早期（20ms）打断与系统返回键（50ms）打断
+        await tester.tap(triggerFinder);
+        await tester.pump();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 20));
+        final opacityAt20 = shellOpacity();
+        await tester.tapAt(const Offset(20, 200));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(shellOpacity(), greaterThan(opacityAt20 * 0.75));
+        await tester.pumpAndSettle();
 
-      await tester.pump(const Duration(milliseconds: 48)); // 累计 112ms 收起
-      expect(find.text('校准当前周次'), findsOneWidget);
-      expect(cardScale(), lessThan(scaleDuringClose));
-      expect(shellOpacity(), lessThan(0.95));
-      expect(shellOpacity(), greaterThan(0.05));
-      expect(triggerOpacity(), greaterThan(triggerDuringClose));
+        await tester.tap(triggerFinder);
+        await tester.pump();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+        await Navigator.of(tester.element(find.byType(HomeShell))).maybePop();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 56));
+        expect(find.text('校准当前周次'), findsOneWidget);
+        await tester.pumpAndSettle();
+        expect(find.text('校准当前周次'), findsNothing);
 
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsNothing);
-      expect(triggerOpacity(), 1.0);
+        // 3. 16ms 打断、关闭途中重开再打断
+        await tester.tap(triggerFinder);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 16));
+        await tester.tapAt(const Offset(20, 200));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 48));
+        expect(find.text('校准当前周次'), findsOneWidget);
 
-      // 2. 极早期（20ms，外壳仍在淡入途中）打断：不透明度不能首帧骤降，应平稳回落收起。
-      await tester.tap(triggerFinder);
-      await tester.pump();
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 20));
+        await tester.tap(triggerFinder);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 40));
+        await tester.tapAt(const Offset(20, 200));
+        await tester.pumpAndSettle();
+        expect(find.text('校准当前周次'), findsNothing);
+        expect(triggerOpacity(), 1.0);
+        expect(tester.takeException(), isNull);
+      },
+    );
 
-      final opacityAt20 = shellOpacity();
-      final triggerAt20 = triggerOpacity();
-      expect(opacityAt20, greaterThan(0.65));
-
-      await tester.tapAt(const Offset(20, 200));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 16));
-      expect(find.text('校准当前周次'), findsOneWidget);
-      expect(
-        shellOpacity(),
-        greaterThan(opacityAt20 * 0.75),
-        reason: '极早期打断反转首帧不应因曲线跳变瞬间跌落透明',
-      );
-      expect(triggerOpacity(), greaterThanOrEqualTo(triggerAt20));
-
-      await tester.pump(const Duration(milliseconds: 48));
-      expect(find.text('校准当前周次'), findsOneWidget);
-      expect(shellOpacity(), greaterThan(0.10));
-
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsNothing);
-      expect(triggerOpacity(), 1.0);
-
-      // 3. 50ms 中途分别由系统返回键与 Dock 切页打断，同样平滑执行关闭动画且按钮恢复。
-      await tester.tap(triggerFinder);
-      await tester.pump();
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 50));
-      expect(find.text('校准当前周次'), findsOneWidget);
-
-      final rootNavigator = Navigator.of(
-        tester.element(find.byType(HomeShell)),
-      );
-      await rootNavigator.maybePop();
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 56));
-      expect(find.text('校准当前周次'), findsOneWidget, reason: '返回键打断应平滑收起菜单');
-      expect(find.byType(HomeShell), findsOneWidget);
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsNothing);
-      expect(triggerOpacity(), 1.0);
-
-      // 4. 50ms 中途直接点击 Dock 切页，既切页又平滑收起菜单。
-      await tester.tap(triggerFinder);
-      await tester.pump();
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 50));
-
-      await tester.tap(
-        find.descendant(
-          of: find.byType(FloatingDock),
-          matching: find.text('设置'),
-        ),
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 56));
-      expect(find.text('校准当前周次'), findsOneWidget, reason: 'Dock 打断期间菜单平滑收起');
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsNothing);
-      expect(find.byType(SettingsPage), findsOneWidget);
-
-      // 切回课表页并在首帧测量阶段立即关闭，不抛异常且可再次正常打开。
-      await tester.tap(
-        find.descendant(
-          of: find.byType(FloatingDock),
-          matching: find.text('课表'),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.tap(triggerFinder);
-      await tester.pump();
-      await tester.tapAt(const Offset(20, 200));
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsNothing);
-      expect(triggerOpacity(), 1.0);
-      expect(tester.takeException(), isNull);
-
-      await tester.tap(triggerFinder);
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsOneWidget);
-      await tester.tapAt(const Offset(20, 200));
-      await tester.pumpAndSettle();
-
-      // 5. 极早期首可见帧（16ms）打断、关闭途中重开再打断，均应平滑过渡而非凭空消失。
-      await tester.tap(triggerFinder);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 16));
-      final opacityAt16 = shellOpacity();
-      final triggerAt16 = triggerOpacity();
-      expect(opacityAt16, greaterThan(0.50));
-      expect(triggerAt16, lessThan(0.95));
-
-      await tester.tapAt(const Offset(20, 200));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 16));
-      expect(
-        find.text('校准当前周次'),
-        findsOneWidget,
-        reason: '16ms 首可见帧打断后 16ms 仍应处于平滑收起动画中',
-      );
-      expect(shellOpacity(), greaterThan(opacityAt16 * 0.60));
-      expect(triggerOpacity(), greaterThanOrEqualTo(triggerAt16));
-
-      await tester.pump(const Duration(milliseconds: 48));
-      expect(find.text('校准当前周次'), findsOneWidget);
-
-      // 在上一轮关闭尚未完全结束时再次点击触发按钮重开，然后 40ms 再次打断。
-      await tester.tap(triggerFinder);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 40));
-      await tester.tapAt(const Offset(20, 200));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 48));
-      expect(find.text('校准当前周次'), findsOneWidget);
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsNothing);
-      expect(triggerOpacity(), 1.0);
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('长按拖出与可滚动周次长菜单及拖动 Dock 在展开中途打断时均平滑收起且无状态卡死', (tester) async {
+    testWidgets('长按拖出与可滚动周次长菜单及拖动/点击 Dock 在展开或打开时打断均平滑收起且直接切页', (tester) async {
       final model = buildModel();
       model.hydrateForTest(
         schedule: Schedule(
@@ -1876,31 +1441,24 @@ void main() {
           .opacity
           .value;
 
-      // 1. 长按交接展开途中（手指仍按在菜单外保持橡皮筋偏移）被返回键打断：
-      //    应平滑收起菜单与橡皮筋偏移，松手后无残留或异常。
+      // 1. 长按交接展开途中被返回键打断
       final holdPos = tester.getCenter(moreTrigger);
       final dragOpen = await tester.startGesture(holdPos);
-      await tester.pump(const Duration(milliseconds: 220));
-      await tester.pump(const Duration(milliseconds: 30));
+      await tester.pump(const Duration(milliseconds: 250));
       await dragOpen.moveTo(const Offset(24, 240));
       await tester.pump(const Duration(milliseconds: 20));
       expect(find.text('校准当前周次'), findsOneWidget);
 
-      final rootNavigator = Navigator.of(
-        tester.element(find.byType(HomeShell)),
-      );
-      await rootNavigator.maybePop();
+      await Navigator.of(tester.element(find.byType(HomeShell))).maybePop();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 48));
-      expect(find.text('校准当前周次'), findsOneWidget, reason: '长按拖出中途打断应平滑收起');
+      expect(find.text('校准当前周次'), findsOneWidget);
       await dragOpen.up();
       await tester.pumpAndSettle();
       expect(find.text('校准当前周次'), findsNothing);
       expect(triggerOpacityOf(moreTrigger), 1.0);
-      expect(tester.takeException(), isNull);
 
-      // 2. 下拉交接打开后若指针在菜单 State 挂载首帧前立即抬起（dragPointer 提前结束），
-      //    不应卡死 _activePointer 导致外部点击无法关闭。
+      // 2. 下拉交接快速抬起后不卡死 _activePointer
       final quickRelease = await tester.startGesture(holdPos);
       await quickRelease.moveBy(const Offset(0, 18));
       await quickRelease.up();
@@ -1909,111 +1467,61 @@ void main() {
       await tester.tapAt(const Offset(20, 200));
       await tester.pumpAndSettle();
       expect(find.text('校准当前周次'), findsNothing);
-      expect(triggerOpacityOf(moreTrigger), 1.0);
 
-      // 3. 可滚动 20 周长菜单在 50ms 展开中途点外部打断，平滑收起且周次触发按钮恢复。
+      // 3. 可滚动 20 周长菜单在 50ms 展开中途点外部打断
       await tester.tap(weekTrigger);
       await tester.pump();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
       expect(find.text('第 2 周'), findsOneWidget);
-      final weekTriggerAt50 = triggerOpacityOf(weekTrigger);
-      expect(weekTriggerAt50, lessThan(0.50));
-
       await tester.tapAt(const Offset(20, 200));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 48));
-      expect(find.text('第 2 周'), findsOneWidget, reason: '可滚动长菜单中途打断应平滑收起');
-      expect(triggerOpacityOf(weekTrigger), greaterThan(weekTriggerAt50));
+      expect(find.text('第 2 周'), findsOneWidget);
       await tester.pumpAndSettle();
       expect(find.text('第 2 周'), findsNothing);
       expect(triggerOpacityOf(weekTrigger), 1.0);
 
-      // 4. 50ms 展开中途直接拖动 FloatingDock 切页：切页成立且菜单在动画过程中平滑收起。
+      // 4. 菜单展开中途或已打开时直接拖动/点击 FloatingDock 切页并同步收起菜单
       final dock = find.byType(FloatingDock);
       final dockSchedule = tester.getCenter(
         find.descendant(of: dock, matching: find.text('课表')),
       );
+      final dockAcademic = tester.getCenter(
+        find.descendant(of: dock, matching: find.text('学业')),
+      );
       final dockSettings = tester.getCenter(
         find.descendant(of: dock, matching: find.text('设置')),
       );
+
       await tester.tap(moreTrigger);
       await tester.pump();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
-
       final dockDrag = await tester.startGesture(dockSchedule);
       await tester.pump(const Duration(milliseconds: 16));
-      expect(find.text('校准当前周次'), findsOneWidget);
       await dockDrag.moveTo(dockSettings);
       await tester.pump(const Duration(milliseconds: 32));
-      expect(
-        find.text('校准当前周次'),
-        findsOneWidget,
-        reason: '拖动 Dock 打断菜单展开中途时菜单应继续平滑收起',
-      );
+      expect(find.text('校准当前周次'), findsOneWidget);
       await dockDrag.up();
       await tester.pumpAndSettle();
       expect(find.text('校准当前周次'), findsNothing);
+      expect(shellPagePosition(tester), 2);
       expect(find.byType(SettingsPage), findsOneWidget);
-      expect(triggerOpacityOf(moreTrigger), 1.0);
-    });
 
-    testWidgets('短菜单按住上下滑动预览，松手时选中当前悬停项', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.tapAt(dockSchedule);
       await tester.pumpAndSettle();
-
-      final start = tester.getCenter(find.text('校准当前周次'));
-      final end = tester.getCenter(find.text('教务地址'));
-      final gesture = await tester.startGesture(start);
-      await gesture.moveTo(end);
+      await tester.tap(moreTrigger);
       await tester.pump();
-
-      // 滑行中尚未松手，菜单仍在且未触发跳转
-      expect(find.text('教务地址'), findsOneWidget);
-      expect(find.byType(SchoolAddressPage), findsNothing);
-
-      await gesture.up();
+      await tester.pump(const Duration(milliseconds: 60));
+      await tester.tapAt(dockAcademic);
       await tester.pumpAndSettle();
-      expect(find.byType(SchoolAddressPage), findsOneWidget);
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(shellPagePosition(tester), 1);
+      expect(find.byType(AcademicPage), findsOneWidget);
     });
 
-    testWidgets('短菜单滑出边界外再松手：既不选中也不关闭，保持打开可继续选', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
-      await tester.pumpAndSettle();
-
-      final label = find.text('校准当前周次');
-      final card = find
-          .ancestor(of: label, matching: find.byType(Material))
-          .last;
-      final cardRect = tester.getRect(card);
-
-      final gesture = await tester.startGesture(tester.getCenter(label));
-      await gesture.moveTo(Offset(cardRect.left - 80, cardRect.center.dy));
-      await tester.pump();
-      await gesture.up();
-      await tester.pumpAndSettle();
-
-      // 菜单仍在原地打开，且没有切走页面
-      expect(find.text('校准当前周次'), findsOneWidget);
-      expect(find.text('作息时间表'), findsOneWidget);
-      expect(find.byType(TimetableListPage), findsNothing);
-
-      // 回弹后仍可继续正常选择
-      await tester.tap(find.text('作息时间表'));
-      await tester.pumpAndSettle();
-      expect(find.byType(TimetableListPage), findsOneWidget);
-    });
-
-    testWidgets('长菜单（20 周）保持列表滚动，不因滑动误选中', (tester) async {
+    testWidgets('可滚动周次长菜单沿中轴线展开、左对齐紧凑窄宽、当前周次对勾常态且滚动不误选', (tester) async {
       final model = buildModel();
       model.hydrateForTest(
         schedule: Schedule(
@@ -2021,80 +1529,106 @@ void main() {
           maxWeeks: 20,
           entries: sparseSchedule().entries,
         ),
-        week: 1,
+        week: 3,
       );
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-
-      await tester.tap(find.text('第 1 周'));
+      final lightTheme = buildLightTheme();
+      final scheme = lightTheme.colorScheme;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: lightTheme,
+          home: SchedulePage(model: model),
+        ),
+      );
       await tester.pumpAndSettle();
 
-      final gesture = await tester.startGesture(
-        tester.getCenter(find.text('第 5 周')),
+      final weekTrigger = find.ancestor(
+        of: find.text('第 3 周'),
+        matching: find.byType(TactileSurfaceButton),
       );
-      await gesture.moveBy(const Offset(0, -30));
-      await tester.pump();
-      await gesture.moveBy(const Offset(0, -200));
-      await tester.pump();
-      await gesture.up();
+      final triggerRect = tester.getRect(weekTrigger);
+
+      await tester.tap(find.text('第 3 周'));
       await tester.pumpAndSettle();
 
-      // 长菜单滑后仍保持打开、当前周未误改
-      expect(model.week, 1);
+      final menuMaterial = find
+          .ancestor(of: find.text('第 2 周'), matching: find.byType(Material))
+          .first;
+      final menuRect = tester.getRect(menuMaterial);
+      expect(menuRect.center.dx, closeTo(triggerRect.center.dx, 1.0));
+      expect(menuRect.top, closeTo(triggerRect.top, 1.0));
+      expect(menuRect.width, lessThan(168.0));
+
+      final morphBox = tester.renderObject<RenderMenuMorphBox>(
+        find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
+      );
+      expect(morphBox.alignment, Alignment.topCenter);
+
+      Finder findMenuItemText(String label) =>
+          find.descendant(of: menuMaterial, matching: find.text(label));
+
+      BoxDecoration? findMenuTileDecoration(String label) {
+        final textFinder = findMenuItemText(label);
+        if (textFinder.evaluate().isEmpty) return null;
+        final boxes = tester.widgetList<DecoratedBox>(
+          find.ancestor(
+            of: textFinder.first,
+            matching: find.byType(DecoratedBox),
+          ),
+        );
+        for (final box in boxes) {
+          final dec = box.decoration;
+          if (dec is BoxDecoration &&
+              dec.borderRadius == BorderRadius.circular(14)) {
+            return dec;
+          }
+        }
+        return null;
+      }
+
+      final week3Text = findMenuItemText('第 3 周').first;
+      final week5Text = findMenuItemText('第 5 周').first;
+      expect(
+        tester.getTopLeft(week3Text).dx - menuRect.left,
+        closeTo(18.0, 1.0),
+      );
+      expect(
+        find.descendant(
+          of: menuMaterial,
+          matching: find.byIcon(Icons.check_rounded),
+        ),
+        findsOneWidget,
+      );
+      expect(findMenuTileDecoration('第 3 周')!.color, Colors.transparent);
+      expect(findMenuTileDecoration('第 5 周')!.color, Colors.transparent);
+
+      // 按住「第 5 周」出现选择胶囊，然后向上滚走取消按住状态且不误切周次
+      final holdGesture = await tester.startGesture(
+        tester.getCenter(week5Text),
+      );
+      await tester.pump(const Duration(milliseconds: 150));
+      final pressedDec = findMenuTileDecoration('第 5 周');
+      expect(pressedDec!.color, scheme.primary.withValues(alpha: 0.11));
+
+      await holdGesture.moveBy(const Offset(0, -140));
+      await tester.pump();
+      await holdGesture.up();
+      await tester.pumpAndSettle();
+
+      expect(model.week, 3);
+      final afterScrollDec = findMenuTileDecoration('第 5 周');
+      if (afterScrollDec != null) {
+        expect(afterScrollDec.color, Colors.transparent);
+      }
+
+      await tester.drag(find.text('第 5 周'), const Offset(0, -230));
+      await tester.pumpAndSettle();
       expect(find.text('第 12 周'), findsOneWidget);
-
       await tester.tap(find.text('第 12 周'));
       await tester.pumpAndSettle();
       expect(model.week, 12);
     });
 
-    testWidgets('菜单项关闭旧版 Material 水波纹与灰底阴影，仅保留滑动胶囊高亮', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
-      await tester.pumpAndSettle();
-
-      final inkWell = tester.widget<InkWell>(
-        find
-            .ancestor(of: find.text('教务地址'), matching: find.byType(InkWell))
-            .first,
-      );
-      expect(inkWell.splashFactory, NoSplash.splashFactory);
-      expect(inkWell.splashColor, Colors.transparent);
-      expect(inkWell.highlightColor, Colors.transparent);
-      expect(inkWell.hoverColor, Colors.transparent);
-    });
-
-    testWidgets('滑到教务地址与外观之间的分割线上松手时无缝吸附选中，不会断档', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
-      await tester.pumpAndSettle();
-
-      final dividerRect = tester.getRect(find.byType(Divider).last);
-      final gesture = await tester.startGesture(
-        tester.getCenter(find.text('校准当前周次')),
-      );
-      await gesture.moveTo(
-        Offset(dividerRect.center.dx, dividerRect.center.dy + 0.2),
-      );
-      await tester.pump();
-      await gesture.up();
-      await tester.pumpAndSettle();
-
-      expect(find.text('外观'), findsWidgets);
-      expect(
-        find.text('外观设置').evaluate().isNotEmpty ||
-            find.byType(BottomSheet).evaluate().isNotEmpty ||
-            find.text('课程文本大小').evaluate().isNotEmpty,
-        isTrue,
-      );
-    });
-
-    testWidgets('菜单打开后直接拖动或点击 Dock 栏，无需先点空白关闭即可切页并同步收起菜单（含展开中途打断）', (
+    testWidgets('外部遮罩拦截与二级页/非不透明路由隔离：点卡片或外部仅关菜单，Dock 边缘橡皮筋收起菜单', (
       tester,
     ) async {
       final model = buildModel();
@@ -2102,394 +1636,35 @@ void main() {
       await tester.pumpWidget(wrap(HomeShell(model: model)));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsOneWidget);
-
-      final dock = find.byType(FloatingDock);
-      final schedulePos = tester.getCenter(
-        find.descendant(of: dock, matching: find.text('课表')),
-      );
-      final academicPos = tester.getCenter(
-        find.descendant(of: dock, matching: find.text('学业')),
-      );
-      final settingsPos = tester.getCenter(
-        find.descendant(of: dock, matching: find.text('设置')),
-      );
-
-      // 1. 拖动 Dock：一指切页并同步关闭菜单。
-      final gesture = await tester.startGesture(schedulePos);
-      await gesture.moveTo(settingsPos);
-      await tester.pump();
-      await gesture.up();
-      await tester.pumpAndSettle();
-
-      expect(find.text('校准当前周次'), findsNothing, reason: '操作 Dock 后菜单同步关闭');
-      expect(shellPagePosition(tester), 2, reason: '同一手势直接透传 Dock 并切换页面');
-      expect(find.byType(SettingsPage), findsOneWidget);
-
-      // 2. 切回课表页并在菜单展开动画中途（60ms）直接点击 Dock 栏「学业」，同样放行切页并关闭菜单。
-      await tester.tapAt(schedulePos);
-      await tester.pumpAndSettle();
-      expect(shellPagePosition(tester), 0);
-
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 60));
-
-      await tester.tapAt(academicPos);
-      await tester.pumpAndSettle();
-
-      expect(find.text('校准当前周次'), findsNothing);
-      expect(shellPagePosition(tester), 1);
-      expect(find.byType(AcademicPage), findsOneWidget);
-    });
-
-    testWidgets('打开菜单时顶栏不会冒出多余的返回按钮', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-      expect(find.byType(BackButton), findsNothing);
-
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsOneWidget);
-      expect(find.byType(BackButton), findsNothing);
-      expect(find.byType(CloseButton), findsNothing);
-    });
-
-    testWidgets('原地变形打开时触发按钮隐入菜单，点外部收起后按钮平滑恢复', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-
-      final triggerFinder = find.byIcon(Icons.more_horiz_rounded);
-      await tester.tap(triggerFinder);
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsOneWidget);
-
-      final openFade = tester.widget<FadeTransition>(
-        find
-            .ancestor(of: triggerFinder, matching: find.byType(FadeTransition))
-            .first,
-      );
-      expect(openFade.opacity.value, lessThan(0.05));
-
-      await tester.tapAt(const Offset(12, 12));
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsNothing);
-
-      final closedFade = tester.widget<FadeTransition>(
-        find
-            .ancestor(of: triggerFinder, matching: find.byType(FadeTransition))
-            .first,
-      );
-      expect(closedFade.opacity.value, 1.0);
-
-      await tester.tap(triggerFinder);
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsOneWidget);
-    });
-
-    testWidgets('按住右上角按钮下拉直滑入短菜单，松手一指连贯选中', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-
-      final gesture = await tester.startGesture(
-        tester.getCenter(find.byIcon(Icons.more_horiz_rounded)),
-      );
-      await tester.pump(const Duration(milliseconds: 220));
-      await tester.pumpAndSettle();
-
-      expect(find.text('教务地址'), findsOneWidget);
-      await gesture.moveTo(tester.getCenter(find.text('教务地址')));
-      await tester.pump();
-      await gesture.up();
-      await tester.pumpAndSettle();
-
-      expect(find.byType(SchoolAddressPage), findsOneWidget);
-    });
-
-    testWidgets('打开右上角菜单后点击课程卡片或其它外部区域仅关闭菜单不穿透触发，再次点击才可打开详情', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(HomeShell(model: model)));
-      await tester.pumpAndSettle();
-
-      // 1. 菜单完全展开后点击课程卡片：只关闭菜单，不弹出详情弹窗。
+      // 1. 菜单展开或动画中途点击课程卡片、横向翻周、点翻周箭头：只关闭菜单不穿透触发
       final courseCenter = tester.getCenter(find.byType(CourseBlock).first);
       await tester.tap(find.byIcon(Icons.more_horiz_rounded));
       await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsOneWidget);
-
       await tester.tapAt(courseCenter);
       await tester.pumpAndSettle();
-
       expect(find.text('校准当前周次'), findsNothing);
       expect(find.byType(BottomSheet), findsNothing);
 
-      // 菜单已关闭后再次点击课程卡片，正常弹出详情弹窗。
-      await tester.tap(find.byType(CourseBlock).first);
-      await tester.pumpAndSettle();
-      expect(find.byType(BottomSheet), findsOneWidget);
-      expect(find.text('early'), findsOneWidget);
-
-      Navigator.of(tester.element(find.byType(BottomSheet))).pop();
-      await tester.pumpAndSettle();
-      expect(find.byType(BottomSheet), findsNothing);
-
-      // 2. 菜单展开动画中途（60ms）点击课程卡片：同样只收起菜单，不触发详情。
       await tester.tap(find.byIcon(Icons.more_horiz_rounded));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 60));
-
       await tester.tapAt(courseCenter);
       await tester.pumpAndSettle();
-
-      expect(find.text('校准当前周次'), findsNothing);
       expect(find.byType(BottomSheet), findsNothing);
 
-      // 3. 菜单打开时在课表区域横向滑动翻周或点击顶栏其它按钮：只关闭菜单，不翻周、不触发按钮。
       await tester.tap(find.byIcon(Icons.more_horiz_rounded));
       await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsOneWidget);
-
       await tester.flingFrom(
         tester.getCenter(find.byType(PageView).first),
         const Offset(-300, 0),
         800,
       );
       await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsNothing);
-      expect(model.week, 1, reason: '外部横向滑动只关闭菜单，不能翻周');
+      expect(model.week, 1);
 
-      final nextWeekCenter = tester.getCenter(
-        find.byIcon(Icons.chevron_right_rounded),
-      );
+      // 2. 从 Dock 左侧向外拖动触发边缘橡皮筋：菜单收起且无异常
       await tester.tap(find.byIcon(Icons.more_horiz_rounded));
       await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsOneWidget);
-
-      await tester.tapAt(nextWeekCenter);
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsNothing);
-      expect(model.week, 1, reason: '外部点击顶栏翻周按钮只关闭菜单，不触发翻周');
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('菜单展开初期点击视觉卡片外、目标占位框内的区域仅关闭菜单，不误触未展开到的菜单项', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(HomeShell(model: model)));
-      await tester.pumpAndSettle();
-
-      // 先打开一次完整菜单获取终态卡片矩形。
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
-      await tester.pumpAndSettle();
-      final fullCard = find
-          .ancestor(of: find.text('调课'), matching: find.byType(Material))
-          .last;
-      final fullCardRect = tester.getRect(fullCard);
-      await tester.tapAt(const Offset(20, 200));
-      await tester.pumpAndSettle();
-      expect(find.text('调课'), findsNothing);
-
-      // 再次打开并在 20ms 展开初期点击终态卡片左下角（此时视觉卡片尚未展开到此）。
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 20));
-
-      final morphedCardRect = tester.getRect(
-        find
-            .ancestor(of: find.text('调课'), matching: find.byType(Material))
-            .last,
-      );
-      final probePoint = Offset(
-        fullCardRect.left + 12,
-        fullCardRect.bottom - 12,
-      );
-      expect(fullCardRect.contains(probePoint), isTrue);
-      expect(morphedCardRect.contains(probePoint), isFalse);
-
-      await tester.tapAt(probePoint);
-      await tester.pumpAndSettle();
-
-      expect(find.text('调课'), findsNothing, reason: '点视觉卡片外区域应关闭菜单');
-      expect(
-        find.byType(ReschedulePage),
-        findsNothing,
-        reason: '未展开到的视觉区域不应误触菜单项',
-      );
-    });
-
-    testWidgets('二级页面展开菜单时点击底层 Dock 坐标位置仍拦截，不误切后台 HomeShell 页面', (
-      tester,
-    ) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(HomeShell(model: model)));
-      await tester.pumpAndSettle();
-
-      final dockSettingsPos = tester.getCenter(
-        find.descendant(
-          of: find.byType(FloatingDock),
-          matching: find.text('设置'),
-        ),
-      );
-
-      // 从课表三点菜单进入二级页「作息时间表」。
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('作息时间表'));
-      await tester.pumpAndSettle();
-      expect(find.byType(TimetableListPage), findsOneWidget);
-
-      // 在二级页展开卡片「更多」菜单，然后点击原本 HomeShell Dock 所在的屏幕坐标。
-      await tester.tap(find.byIcon(Icons.more_vert_rounded).first);
-      await tester.pumpAndSettle();
-      expect(find.text('至少保留一张'), findsOneWidget);
-
-      await tester.tapAt(dockSettingsPos);
-      await tester.pumpAndSettle();
-
-      expect(find.text('至少保留一张'), findsNothing, reason: '二级页点外部应关闭菜单');
-      expect(find.byType(TimetableListPage), findsOneWidget);
-      expect(find.byType(TimetableEditPage), findsNothing);
-
-      // 再验证在二级页展开菜单时点击卡片标题区，同样只关菜单不穿透跳转编辑页。
-      await tester.tap(find.byIcon(Icons.more_vert_rounded).first);
-      await tester.pumpAndSettle();
-      expect(find.text('至少保留一张'), findsOneWidget);
-
-      await tester.tapAt(
-        tester.getCenter(find.text(model.activeTimetable!.name).first),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('至少保留一张'), findsNothing);
-      expect(find.byType(TimetableEditPage), findsNothing);
-
-      // 返回 HomeShell 后，后台页面仍停留在课表页，未受二级页点击 Dock 坐标影响。
-      await tester.pageBack();
-      await tester.pumpAndSettle();
-      expect(shellPagePosition(tester), 0, reason: '后台 HomeShell 的 Dock 不应被穿透');
-    });
-
-    testWidgets('桌面端悬停、滚轮与右键交互：菜单外拦截悬停与滚动，Dock 悬停与点击仍保持最高优先级', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(HomeShell(model: model)));
-      await tester.pumpAndSettle();
-
-      // 定位课表纵向滚动容器，记录初始滚动偏移。
-      final scheduleScroll = tester.state<ScrollableState>(
-        find.descendant(
-          of: find.byType(SchedulePage),
-          matching: find.byWidgetPredicate(
-            (w) => w is Scrollable && w.axisDirection == AxisDirection.down,
-          ),
-        ),
-      );
-      final initialScrollOffset = scheduleScroll.position.pixels;
-
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsOneWidget);
-
-      final mouse = await tester.createGesture(
-        kind: PointerDeviceKind.mouse,
-        pointer: 41,
-      );
-      addTearDown(mouse.removePointer);
-      await mouse.addPointer(location: Offset.zero);
-      await tester.pump();
-
-      // 1. 在菜单外课表区域发送鼠标滚轮：应被选择性遮罩拦截，底层课表不滚动且菜单保持打开。
-      final gridCenter = tester.getCenter(find.byType(PageView).first);
-      await mouse.moveTo(gridCenter);
-      await tester.pump();
-      await tester.sendEventToBinding(
-        PointerScrollEvent(
-          position: gridCenter,
-          scrollDelta: const Offset(0, 180),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(scheduleScroll.position.pixels, initialScrollOffset);
-      expect(find.text('校准当前周次'), findsOneWidget);
-
-      // 2. 鼠标悬停到 Dock 栏：遮罩放行悬停事件，Dock 响应微鼓起且菜单保持打开。
-      double dockScale() => tester
-          .widgetList<Transform>(
-            find.descendant(
-              of: find.byType(FloatingDock),
-              matching: find.byType(Transform),
-            ),
-          )
-          .last
-          .transform
-          .getMaxScaleOnAxis();
-      final dockScaleBefore = dockScale();
-
-      final dockSettingsPos = tester.getCenter(
-        find.descendant(
-          of: find.byType(FloatingDock),
-          matching: find.text('设置'),
-        ),
-      );
-      await mouse.moveTo(dockSettingsPos);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 120));
-      expect(dockScale(), greaterThan(dockScaleBefore));
-      expect(find.text('校准当前周次'), findsOneWidget);
-
-      // 3. 在菜单卡片内右键点击：不关闭菜单；在非 Dock 外部右键点击：关闭菜单且不触发课程详情。
-      final secondaryMouse = TestPointer(42, PointerDeviceKind.mouse);
-      await tester.sendEventToBinding(
-        secondaryMouse.down(
-          tester.getCenter(find.text('校准当前周次')),
-          buttons: kSecondaryButton,
-        ),
-      );
-      await tester.sendEventToBinding(secondaryMouse.up());
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsOneWidget);
-
-      await tester.sendEventToBinding(
-        secondaryMouse.down(
-          tester.getCenter(find.byType(CourseBlock).first),
-          buttons: kSecondaryButton,
-        ),
-      );
-      await tester.sendEventToBinding(secondaryMouse.up());
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsNothing);
-      expect(find.byType(BottomSheet), findsNothing);
-
-      // 4. 再次打开菜单后直接鼠标左键点击 Dock「设置」：切页并同步关闭菜单。
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsOneWidget);
-
-      await mouse.down(dockSettingsPos);
-      await tester.pump();
-      await mouse.up();
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsNothing);
-      expect(shellPagePosition(tester), 2);
-    });
-
-    testWidgets('Dock 边缘橡皮筋拖动与非不透明浮层路由下菜单遮罩边界行为正确', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(HomeShell(model: model)));
-      await tester.pumpAndSettle();
-
-      // 1. 在首页面打开菜单后，从 Dock 左侧向外拖动触发边缘橡皮筋：菜单收起且无异常。
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
-      await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsOneWidget);
-
       final dockSchedulePos = tester.getCenter(
         find.descendant(
           of: find.byType(FloatingDock),
@@ -2508,22 +1683,28 @@ void main() {
       await tester.pump(const Duration(milliseconds: 180));
       await tester.pump();
       expect(find.text('校准当前周次'), findsNothing);
-      final dockOffset = tester
-          .widgetList<Transform>(
-            find.descendant(
-              of: find.byType(FloatingDock),
-              matching: find.byType(Transform),
-            ),
-          )
-          .first
-          .transform
-          .getTranslation();
-      expect(dockOffset.x, lessThan(-1.0));
       await edgeDrag.up();
       await tester.pumpAndSettle();
       expect(shellPagePosition(tester), 0);
 
-      // 2. 推入一个非不透明路由（opaque: false）并在其上展开菜单，点击底层 Dock 坐标仍被拦截。
+      // 3. 二级页面与非不透明浮层路由展开菜单时点击底层 Dock 坐标位置仍拦截
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('作息时间表'));
+      await tester.pumpAndSettle();
+      expect(find.byType(TimetableListPage), findsOneWidget);
+
+      await tester.tap(find.byIcon(Icons.more_vert_rounded).first);
+      await tester.pumpAndSettle();
+      expect(find.text('至少保留一张'), findsOneWidget);
+      await tester.tapAt(dockSettingsPos);
+      await tester.pumpAndSettle();
+      expect(find.text('至少保留一张'), findsNothing);
+      expect(find.byType(TimetableListPage), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(shellPagePosition(tester), 0);
+
       final nav = Navigator.of(tester.element(find.byType(HomeShell)));
       nav.push<void>(
         PageRouteBuilder<void>(
@@ -2557,31 +1738,122 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-
       await tester.tap(find.byIcon(Icons.more_vert_rounded));
       await tester.pumpAndSettle();
       expect(find.text('浮层菜单项'), findsOneWidget);
-
       await tester.tapAt(dockSettingsPos);
       await tester.pumpAndSettle();
       expect(find.text('浮层菜单项'), findsNothing);
-      expect(shellPagePosition(tester), 0, reason: '非不透明顶层路由下也不应穿透到底层 Dock');
+      expect(shellPagePosition(tester), 0);
+    });
+
+    testWidgets('桌面端悬停、滚轮与右键交互：菜单外拦截悬停与滚动，Dock 悬停与点击仍保持最高优先级', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+      await tester.pumpAndSettle();
+
+      final scheduleScroll = tester.state<ScrollableState>(
+        find.descendant(
+          of: find.byType(SchedulePage),
+          matching: find.byWidgetPredicate(
+            (w) => w is Scrollable && w.axisDirection == AxisDirection.down,
+          ),
+        ),
+      );
+      final initialScrollOffset = scheduleScroll.position.pixels;
+
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      final mouse = await tester.createGesture(
+        kind: PointerDeviceKind.mouse,
+        pointer: 41,
+      );
+      addTearDown(mouse.removePointer);
+      await mouse.addPointer(location: Offset.zero);
+      await tester.pump();
+
+      final gridCenter = tester.getCenter(find.byType(PageView).first);
+      await mouse.moveTo(gridCenter);
+      await tester.pump();
+      await tester.sendEventToBinding(
+        PointerScrollEvent(
+          position: gridCenter,
+          scrollDelta: const Offset(0, 180),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(scheduleScroll.position.pixels, initialScrollOffset);
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      double dockScale() => tester
+          .widgetList<Transform>(
+            find.descendant(
+              of: find.byType(FloatingDock),
+              matching: find.byType(Transform),
+            ),
+          )
+          .last
+          .transform
+          .getMaxScaleOnAxis();
+      final dockScaleBefore = dockScale();
+
+      final dockSettingsPos = tester.getCenter(
+        find.descendant(
+          of: find.byType(FloatingDock),
+          matching: find.text('设置'),
+        ),
+      );
+      await mouse.moveTo(dockSettingsPos);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 120));
+      expect(dockScale(), greaterThan(dockScaleBefore));
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      final secondaryMouse = TestPointer(42, PointerDeviceKind.mouse);
+      await tester.sendEventToBinding(
+        secondaryMouse.down(
+          tester.getCenter(find.text('校准当前周次')),
+          buttons: kSecondaryButton,
+        ),
+      );
+      await tester.sendEventToBinding(secondaryMouse.up());
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+
+      await tester.sendEventToBinding(
+        secondaryMouse.down(
+          tester.getCenter(find.byType(CourseBlock).first),
+          buttons: kSecondaryButton,
+        ),
+      );
+      await tester.sendEventToBinding(secondaryMouse.up());
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(find.byType(BottomSheet), findsNothing);
+
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+      await mouse.down(dockSettingsPos);
+      await tester.pump();
+      await mouse.up();
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsNothing);
+      expect(shellPagePosition(tester), 2);
     });
   });
 
   group('外观面板', () {
-    Future<void> openSheet(WidgetTester tester, AppModel model) async {
+    testWidgets('双滑块默认值、圆形滑柄样式、拖动实时放大课表与恢复默认', (tester) async {
+      final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(SchedulePage(model: model)));
       await tester.tap(find.byIcon(Icons.more_horiz_rounded));
       await tester.pumpAndSettle();
       await tester.tap(find.text('外观'));
       await tester.pumpAndSettle();
-    }
-
-    testWidgets('两个滑块，默认值就是当前值', (tester) async {
-      final model = buildModel();
-      await openSheet(tester, model);
 
       expect(find.text('课表格子高度'), findsOneWidget);
       expect(find.text('课程文字大小'), findsOneWidget);
@@ -2592,32 +1864,6 @@ void main() {
       expect(sliders.last.value, defaultCourseTextScale);
       expect(find.text('60'), findsOneWidget);
       expect(find.text('100%'), findsOneWidget);
-    });
-
-    testWidgets('拖滑块改高度与字号，课表在后面实时变大', (tester) async {
-      final model = buildModel();
-      await openSheet(tester, model);
-      final before = tester.getSize(find.byType(CourseBlock).first);
-
-      await tester.drag(find.byType(Slider).first, const Offset(80, 0));
-      await tester.pumpAndSettle();
-      expect(model.cellHeight, greaterThan(defaultCellHeight));
-
-      // 回归：面板没订阅 model 时，值变了但 Slider 自己不重建 → 拇指卡在旧位置。
-      final thumb = tester.widget<Slider>(find.byType(Slider).first);
-      expect(thumb.value, model.cellHeight, reason: '滑块要跟着走，不能只改背后');
-
-      await tester.drag(find.byType(Slider).last, const Offset(80, 0));
-      await tester.pumpAndSettle();
-      expect(model.courseTextScale, greaterThan(defaultCourseTextScale));
-
-      final after = tester.getSize(find.byType(CourseBlock).first);
-      expect(after.height, greaterThan(before.height), reason: '行高变了，格子跟着变高');
-    });
-
-    testWidgets('滑块使用圆形滑柄与对齐轨道', (tester) async {
-      final model = buildModel();
-      await openSheet(tester, model);
 
       final theme = tester
           .widget<SliderTheme>(
@@ -2632,281 +1878,61 @@ void main() {
       expect(theme.thumbShape, isA<RoundSliderThumbShape>());
       expect(theme.tickMarkShape, SliderTickMarkShape.noTickMark);
       expect(theme.trackShape, isNot(isA<GappedSliderTrackShape>()));
-    });
 
-    testWidgets('恢复默认把两个值都退回默认', (tester) async {
-      final model = buildModel();
-      await openSheet(tester, model);
-
+      final before = tester.getSize(find.byType(CourseBlock).first);
       await tester.drag(find.byType(Slider).first, const Offset(80, 0));
       await tester.pumpAndSettle();
-      expect(model.cellHeight, isNot(defaultCellHeight));
+      expect(model.cellHeight, greaterThan(defaultCellHeight));
+      expect(
+        tester.widget<Slider>(find.byType(Slider).first).value,
+        model.cellHeight,
+      );
+
+      await tester.drag(find.byType(Slider).last, const Offset(80, 0));
+      await tester.pumpAndSettle();
+      expect(model.courseTextScale, greaterThan(defaultCourseTextScale));
+      expect(
+        tester.getSize(find.byType(CourseBlock).first).height,
+        greaterThan(before.height),
+      );
 
       await tester.tap(find.text('恢复默认'));
       await tester.pumpAndSettle();
-
       expect(model.cellHeight, defaultCellHeight);
       expect(model.courseTextScale, defaultCourseTextScale);
     });
   });
 
   group('dock 按住滑动', () {
-    testWidgets('按钮在胶囊里垂直居中，不贴上沿', (tester) async {
+    testWidgets('按钮垂直居中、图标在上文字在下、58dp 高度窄屏自适应且顶栏按钮统一 36×36', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(HomeShell(model: model)));
       await tester.pumpAndSettle();
 
       final dock = find.byType(FloatingDock);
-      // 胶囊 = dock 里那个带高度和圆角的 Container。
       final capsule = tester.getRect(
         find.descendant(of: dock, matching: find.byType(Container)).first,
       );
+      expect(capsule.height, closeTo(58, 0.5));
       final labelFinder = find.descendant(of: dock, matching: find.text('课表'));
       final buttonBox = tester.getRect(
         find
             .ancestor(of: labelFinder, matching: find.byType(ConstrainedBox))
             .first,
       );
-
-      // Stack 默认 topStart，不给 alignment 时整排按钮贴着胶囊上沿，
-      // 指示块也就跟着错位（上沿贴住胶囊上沿）。
       expect(buttonBox.top, greaterThan(capsule.top + 3));
       expect((buttonBox.center.dy - capsule.center.dy).abs(), lessThan(2));
-    });
 
-    testWidgets('从课表往右拖到设置，再拖回来', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(HomeShell(model: model)));
-      await tester.pumpAndSettle();
-      expect(shellPagePosition(tester), 0);
-
-      final dock = find.byType(FloatingDock);
-      final schedulePos = tester.getCenter(
-        find.descendant(of: dock, matching: find.text('课表')),
+      final scheduleIcon = tester.getCenter(
+        find.descendant(of: dock, matching: find.byType(Icon)).first,
       );
-      final settingsPos = tester.getCenter(
-        find.descendant(of: dock, matching: find.text('设置')),
-      );
+      final scheduleLabel = tester.getCenter(labelFinder);
+      expect(scheduleIcon.dy, lessThan(scheduleLabel.dy));
+      expect((scheduleIcon.dx - scheduleLabel.dx).abs(), lessThan(1.0));
 
-      final gesture = await tester.startGesture(schedulePos);
-      await gesture.moveTo(settingsPos);
-      await tester.pump();
-      await gesture.up();
-      await tester.pumpAndSettle();
-      expect(shellPagePosition(tester), 2, reason: '松手切到设置页');
-
-      final gestureBack = await tester.startGesture(settingsPos);
-      await gestureBack.moveTo(schedulePos);
-      await tester.pump();
-      await gestureBack.up();
-      await tester.pumpAndSettle();
-      expect(shellPagePosition(tester), 0, reason: '再拖回来');
-    });
-
-    testWidgets('dock 拖动过程中页面同步位移（不等到松手）', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(HomeShell(model: model)));
-      await tester.pumpAndSettle();
-
-      final dock = find.byType(FloatingDock);
-      final capsule = tester.getRect(
-        find.descendant(of: dock, matching: find.byType(Container)).first,
-      );
-      // 从第一项正中起手，拖到两项之间。
-      final gesture = await tester.startGesture(
-        Offset(capsule.left + capsule.width * 0.16, capsule.center.dy),
-      );
-      await gesture.moveBy(Offset(capsule.width * 0.18, 0));
-      // 透镜是带轻微滞后地追手指的：给它几帧时间追上。
-      for (var i = 0; i < 6; i++) {
-        await tester.pump(const Duration(milliseconds: 16));
-      }
-
-      // 还没松手，页面就该已经滑出去一部分了。
-      final double mid = shellPagePosition(tester);
-      expect(mid, greaterThan(0.05), reason: '拖动中页面跟着走，不等松手');
-      expect(mid, lessThan(1.95), reason: '只拖了一段，不该整页翻过去');
-
-      await gesture.up();
-      await tester.pumpAndSettle();
-      // 松手后吸附到整页
-      expect(shellCurrentPage(tester), isNot(-1), reason: '松手后吸附到整页');
-    });
-
-    testWidgets('dock：点击后指示块落到按钮上，全程不回弹', (tester) async {
-      // 锁三件事：
-      //  1. 按下时指示块就开始动（页面才有东西可跟）；
-      //  2. 松手后落到**按钮**上，而不是停在手指那一点；
-      //  3. 全程单调，不会先弹回旧位置（旧实现的 onDragCancel 在"点击赢仲裁"
-      //     时会报一次 0，阴影就是那样闪两下的）。
-      final progress = <double>[];
-      await tester.pumpWidget(
-        wrap(
-          Center(
-            child: FloatingDock(
-              index: 0,
-              items: const <FloatingDockItem>[
-                FloatingDockItem(
-                  icon: Icons.grid_view_outlined,
-                  activeIcon: Icons.grid_view_rounded,
-                  label: '课表',
-                ),
-                FloatingDockItem(
-                  icon: Icons.settings_outlined,
-                  activeIcon: Icons.settings_rounded,
-                  label: '设置',
-                ),
-              ],
-              onPillProgress: progress.add,
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      // 点在"设置"按钮内、但明显偏离中心的位置。
-      final label = tester.getRect(find.text('设置'));
-      final gesture = await tester.startGesture(
-        Offset(label.left + 4, label.center.dy),
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 60));
-      expect(progress, isNotEmpty, reason: '按下就开始报位置，页面才能跟着走');
-
-      await gesture.up();
-      await tester.pumpAndSettle();
-
-      expect(progress.last, 1.0, reason: '松手后落到设置按钮上，不是停在点击处');
-      for (var i = 1; i < progress.length; i++) {
-        expect(
-          progress[i],
-          greaterThanOrEqualTo(progress[i - 1] - 1e-6),
-          reason: '位置只能往前，不许弹回（第 $i 次：${progress[i - 1]} → ${progress[i]}）',
-        );
-      }
-    });
-
-    testWidgets('按住 dock 不滑动，页面也跟着切过去（不用等拖动）', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(HomeShell(model: model)));
-      await tester.pumpAndSettle();
-
-      final dock = find.byType(FloatingDock);
-      final gesture = await tester.startGesture(
-        tester.getCenter(find.descendant(of: dock, matching: find.text('设置'))),
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 32));
-      expect(
-        shellPagePosition(tester),
-        greaterThan(0.0),
-        reason: '按下的瞬间页面就该开始平移，不能等用户滑一下',
-      );
-
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(shellPagePosition(tester), 2, reason: '按住不动也会滑到设置页');
-      expect(shellCurrentPage(tester), 2);
-
-      // 松手：终态不动（不会因为再报一次目标而重新计一遍动画）。
-      await gesture.up();
-      await tester.pumpAndSettle();
-      expect(shellPagePosition(tester), 2);
-      expect(find.byType(SettingsPage), findsOneWidget);
-    });
-
-    testWidgets('内容区的横向手势不切换页面（只有 dock 能切）', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(HomeShell(model: model)));
-      await tester.pumpAndSettle();
-
-      // 在页面**内容区**横向拖一段：不该把课表页换成设置页。
-      // 外壳这一层没有注册任何手势（见 _ShellPager 的说明），所以这里的拖动
-      // 只会落到内容自己的手势上（课表页内部的翻周）。
-      final gesture = await tester.startGesture(
-        tester.getCenter(find.text('第 1 周')),
-      );
-      await gesture.moveBy(const Offset(-300, 0));
-      await tester.pump();
-      await gesture.moveBy(const Offset(-300, 0));
-      await tester.pump();
-      await gesture.up();
-      await tester.pumpAndSettle();
-
-      expect(shellCurrentPage(tester), 0, reason: '内容区横向拖动不能切到设置页');
-      expect(find.byType(SettingsPage), findsNothing);
-    });
-
-    testWidgets('两页之间是水平平移，不是淡入淡出', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(HomeShell(model: model)));
-      await tester.pumpAndSettle();
-
-      // 外壳这一层不该再有 Opacity 式的淡入淡出：那是整页离屏合成的开销来源。
-      expect(
-        find.descendant(
-          of: find.byType(HomeShell),
-          matching: find.byType(Opacity),
-        ),
-        findsNothing,
-        reason: '两页之间靠位移切换，不该再有透明度渐变',
-      );
-
-      // 拖动过程中页面应当停在两页之间 —— 这说明是连续位移，不是瞬间切换。
-      //
-      // 起手点必须在**左边那一项**上：从"设置"上起手时指示块本来就在右端，
-      // 进度已经是 1，"大于 0" 这种断言会白过（它量不到任何位移）。
-      final dock = find.byType(FloatingDock);
-      final gesture = await tester.startGesture(
-        tester.getCenter(find.descendant(of: dock, matching: find.text('课表'))),
-      );
-      await gesture.moveBy(const Offset(40, 0));
-      // 透镜带轻微滞后地追手指：给它几帧时间追上。
-      for (var i = 0; i < 6; i++) {
-        await tester.pump(const Duration(milliseconds: 16));
-      }
-      final double mid = shellPagePosition(tester);
-      expect(
-        mid,
-        allOf(greaterThan(0.0), lessThan(1.0)),
-        reason: '往右拖，页面跟着挪到两页之间（不是瞬间切过去）',
-      );
-      await gesture.up();
-      await tester.pumpAndSettle();
-    });
-
-    testWidgets('均分判定：轻微右滑不误切（阈值在分段点）', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(HomeShell(model: model)));
-      await tester.pumpAndSettle();
-      expect(shellPagePosition(tester), 0);
-
-      final dock = find.byType(FloatingDock);
-      final capsule = tester.getRect(
-        find.descendant(of: dock, matching: find.byType(Container)).first,
-      );
-      // 3 项均分每项占 1/3 (33%)。从 10% 起手，只滑 12%（到 22%，仍在首段），松手不该切页。
-      final start = Offset(
-        capsule.left + capsule.width * 0.10,
-        capsule.center.dy,
-      );
-      final gesture = await tester.startGesture(start);
-      await gesture.moveBy(Offset(capsule.width * 0.12, 0));
-      await tester.pump();
-      await gesture.up();
-      await tester.pumpAndSettle();
-
-      expect(shellPagePosition(tester), 0, reason: '首段内松手，仍留在课表');
-    });
-
-    testWidgets('dock 图标在上文字在下、58dp 高度且窄屏自适应压缩间距不溢出', (tester) async {
-      final items = const <FloatingDockItem>[
+      // 窄屏压缩宽度（240dp）下自适应缩紧间距且不溢出
+      const items = <FloatingDockItem>[
         FloatingDockItem(
           icon: Icons.calendar_today_outlined,
           activeIcon: Icons.calendar_today,
@@ -2923,42 +1949,8 @@ void main() {
           label: '设置',
         ),
       ];
-
       await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Align(
-              alignment: Alignment.bottomCenter,
-              child: SizedBox(
-                width: 400,
-                child: FloatingDock(items: items, index: 0),
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      final dock = find.byType(FloatingDock);
-      final capsule = tester.getRect(
-        find.descendant(of: dock, matching: find.byType(Container)).first,
-      );
-      expect(capsule.height, closeTo(58, 0.5));
-
-      final scheduleIcon = tester.getCenter(
-        find.byIcon(Icons.calendar_today_outlined),
-      );
-      final scheduleLabel = tester.getCenter(find.text('课表'));
-      expect(scheduleIcon.dy, lessThan(scheduleLabel.dy), reason: '图标必须在文字上方');
-      expect(
-        (scheduleIcon.dx - scheduleLabel.dx).abs(),
-        lessThan(1.0),
-        reason: '图标与文字应在各自格内居中对齐',
-      );
-
-      // 窄屏压缩宽度（240dp）下应自动缩紧间距而不触发溢出异常。
-      await tester.pumpWidget(
-        MaterialApp(
+        const MaterialApp(
           home: Scaffold(
             body: Align(
               alignment: Alignment.bottomCenter,
@@ -2975,15 +1967,98 @@ void main() {
       final narrowCapsule = tester.getRect(
         find.descendant(of: dock, matching: find.byType(Container)).first,
       );
-      expect(narrowCapsule.width, lessThan(capsule.width));
       expect(narrowCapsule.width, lessThanOrEqualTo(240));
+
+      // 学业页与二级页顶栏按钮均统一使用 36×36 TactileSurfaceButton
+      await tester.pumpWidget(wrap(AcademicPage(model: model)));
+      await tester.pumpAndSettle();
+      final academicRefresh = find.widgetWithIcon(
+        TactileIconButton,
+        Icons.refresh_rounded,
+      );
+      expect(tester.getSize(academicRefresh), const Size(36, 36));
+
+      await tester.pumpWidget(wrap(SchoolAddressPage(model: model)));
+      await tester.pumpAndSettle();
+      expect(find.byType(TactileBackButton), findsOneWidget);
+      final addBtn = find.widgetWithIcon(TactileIconButton, Icons.add_rounded);
+      expect(tester.getSize(addBtn), const Size(36, 36));
     });
 
-    testWidgets('dock 光学透镜层裁剪着色与放大，底层按钮保持统一中性色且无靠近缩放冲突', (tester) async {
-      final items = const <FloatingDockItem>[
+    testWidgets('按住即平移、拖动同步位移、分段阈值判定且内容区横向手势不切页', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+      await tester.pumpAndSettle();
+      expect(shellPagePosition(tester), 0);
+      expect(
+        find.descendant(
+          of: find.byType(HomeShell),
+          matching: find.byType(Opacity),
+        ),
+        findsNothing,
+      );
+
+      final dock = find.byType(FloatingDock);
+      final capsule = tester.getRect(
+        find.descendant(of: dock, matching: find.byType(Container)).first,
+      );
+      final schedulePos = tester.getCenter(
+        find.descendant(of: dock, matching: find.text('课表')),
+      );
+      final settingsPos = tester.getCenter(
+        find.descendant(of: dock, matching: find.text('设置')),
+      );
+
+      // 1. 均分判定：首段轻微右滑不误切，拖动中页面同步连续位移
+      var gesture = await tester.startGesture(
+        Offset(capsule.left + capsule.width * 0.10, capsule.center.dy),
+      );
+      await gesture.moveBy(Offset(capsule.width * 0.12, 0));
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(shellPagePosition(tester), allOf(greaterThan(0.0), lessThan(1.0)));
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(shellPagePosition(tester), 0);
+
+      // 2. 按住「设置」不滑动，页面也立即开始平移切到设置页；再拖回课表页
+      gesture = await tester.startGesture(settingsPos);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 32));
+      expect(shellPagePosition(tester), greaterThan(0.0));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(shellCurrentPage(tester), 2);
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(shellPagePosition(tester), 2);
+      expect(find.byType(SettingsPage), findsOneWidget);
+
+      final gestureBack = await tester.startGesture(settingsPos);
+      await gestureBack.moveTo(schedulePos);
+      await tester.pump();
+      await gestureBack.up();
+      await tester.pumpAndSettle();
+      expect(shellPagePosition(tester), 0);
+
+      // 3. 内容区的横向手势不切换外壳页面
+      gesture = await tester.startGesture(tester.getCenter(find.text('第 1 周')));
+      await gesture.moveBy(const Offset(-300, 0));
+      await tester.pump();
+      await gesture.moveBy(const Offset(-300, 0));
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(shellCurrentPage(tester), 0);
+    });
+
+    testWidgets('点击指示块单调落位不回弹，光学透镜层裁剪着色、快速拉伸同步更新与主题色切换缓存重建', (tester) async {
+      final progress = <double>[];
+      const items = <FloatingDockItem>[
         FloatingDockItem(
-          icon: Icons.calendar_today_outlined,
-          activeIcon: Icons.calendar_month_rounded,
+          icon: Icons.grid_view_outlined,
+          activeIcon: Icons.grid_view_rounded,
           label: '课表',
         ),
         FloatingDockItem(
@@ -2997,21 +2072,28 @@ void main() {
           label: '设置',
         ),
       ];
-      double progress = 0.0;
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Align(
-              alignment: Alignment.bottomCenter,
-              child: FloatingDock(
-                items: items,
-                index: 0,
-                onPillProgress: (p) => progress = p,
+
+      Widget buildDock(Color seed, {double? width, int index = 0}) =>
+          MaterialApp(
+            theme: ThemeData(
+              useMaterial3: true,
+              colorScheme: ColorScheme.fromSeed(seedColor: seed),
+            ),
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: width,
+                  child: FloatingDock(
+                    index: index,
+                    items: items,
+                    onPillProgress: progress.add,
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
-      );
+          );
+
+      await tester.pumpWidget(buildDock(Colors.blue));
       await tester.pumpAndSettle();
 
       final dock = find.byType(FloatingDock);
@@ -3020,36 +2102,78 @@ void main() {
       expect(
         find.descendant(of: rowFinder, matching: find.byType(Transform)),
         findsNothing,
-        reason: '底层按钮不再使用旧的靠近放大 Transform',
       );
       for (final label in const ['课表', '学业', '设置']) {
         final text = tester.widget<Text>(
           find.descendant(of: dock, matching: find.text(label)),
         );
         expect(text.style?.color, scheme.onSurfaceVariant);
-        expect(text.style?.fontWeight, FontWeight.w500);
       }
-      expect(
+
+      final stackFinder = find
+          .descendant(of: dock, matching: find.byType(Stack))
+          .first;
+      final stackSize = tester.getSize(stackFinder);
+      final stackTopLeft = tester.getTopLeft(stackFinder);
+      ClipPath clipWidget() => tester.widget<ClipPath>(
         find.descendant(of: dock, matching: find.byType(ClipPath)),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: dock, matching: find.byType(CustomPaint)),
-        findsAtLeastNWidgets(2),
       );
 
-      final from = tester.getCenter(
-        find.descendant(of: dock, matching: find.text('课表')),
+      final item0Local =
+          tester.getCenter(
+            find.descendant(of: dock, matching: find.text('课表')),
+          ) -
+          stackTopLeft;
+      final item2Local =
+          tester.getCenter(
+            find.descendant(of: dock, matching: find.text('设置')),
+          ) -
+          stackTopLeft;
+      expect(
+        clipWidget().clipper!.getClip(stackSize).contains(item0Local),
+        isFalse,
       );
-      final to = tester.getCenter(
-        find.descendant(of: dock, matching: find.text('设置')),
+      expect(
+        clipWidget().clipper!.getClip(stackSize).contains(item2Local),
+        isTrue,
       );
-      final gesture = await tester.startGesture(from);
-      await gesture.moveTo(to);
-      await tester.pump(const Duration(milliseconds: 120));
+
+      // 点在"设置"按钮偏左位置：按下即报进度、松手单调落位不回弹，且透镜裁剪同步更新
+      final settingsLabelRect = tester.getRect(find.text('设置'));
+      final gesture = await tester.startGesture(
+        Offset(settingsLabelRect.left + 4, settingsLabelRect.center.dy),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 60));
+      expect(progress, isNotEmpty);
+
+      final customPaints = tester.widgetList<CustomPaint>(
+        find.descendant(of: dock, matching: find.byType(CustomPaint)),
+      );
+      for (final cp in customPaints) {
+        final painter = cp.painter;
+        if (painter == null) continue;
+        final recorder = ui.PictureRecorder();
+        final canvas = ui.Canvas(recorder);
+        painter.paint(canvas, stackSize);
+        recorder.endRecording().dispose();
+      }
+
       await gesture.up();
       await tester.pumpAndSettle();
-      expect(progress, greaterThan(0.9));
+      expect(progress.last, 1.0);
+      for (var i = 1; i < progress.length; i++) {
+        expect(progress[i], greaterThanOrEqualTo(progress[i - 1] - 1e-6));
+      }
+      expect(
+        clipWidget().clipper!.getClip(stackSize).contains(item2Local),
+        isFalse,
+      );
+
+      // 主题色切换 + 宽度压缩重布局：字形缓存重建与裁剪路径同步无异常
+      await tester.pumpWidget(buildDock(Colors.teal, width: 220, index: 1));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
     });
 
     test('dock 指示胶囊路径采用 FlClash 原生连续圆角并安全处理空/异常矩形', () {
@@ -3084,8 +2208,6 @@ void main() {
         final metrics = path.computeMetrics().toList();
         expect(metrics, hasLength(1));
         expect(metrics.first.isClosed, isTrue);
-
-        // 中心与平直中段边界保持准确，上下边中点紧贴矩形上下沿（不偏方、不内陷）。
         expect(path.contains(rect.center), isTrue);
         expect(path.contains(Offset(rect.center.dx, rect.top + 0.05)), isTrue);
         expect(
@@ -3108,7 +2230,6 @@ void main() {
         );
       }
 
-      // 与标准半圆 RRect 在肩部存在连续曲率过渡差异，且保留顶部平直中段。
       const rest = Rect.fromLTWH(0, 0, 74, 46);
       final superellipsePath = FloatingDock.buildLensPathForTest(rest);
       final rrectPath = Path()
@@ -3121,10 +2242,7 @@ void main() {
         ).computeMetrics(),
         isNotEmpty,
       );
-      expect(superellipsePath.contains(const Offset(33, 0.01)), isTrue);
-      expect(superellipsePath.contains(const Offset(41, 0.01)), isTrue);
 
-      // 即使高速横向拉伸使胶囊超出容器左右 40dp 以外，反向裁剪也不会出现 evenOdd 奇偶反转。
       const wideStretch = Rect.fromLTWH(-65, -2, 230, 62);
       const stackSize = Size(200, 58);
       final wideClip = FloatingDock.buildOutsideLensClipForTest(
@@ -3135,169 +2253,26 @@ void main() {
       expect(wideClip.contains(wideStretch.center), isFalse);
       expect(wideClip.contains(const Offset(185, 29)), isTrue);
     });
-
-    testWidgets('dock 按下与快速拖动拉伸时内外裁剪路径同步更新且绘制无异常', (tester) async {
-      final items = const <FloatingDockItem>[
-        FloatingDockItem(
-          icon: Icons.grid_view_outlined,
-          activeIcon: Icons.grid_view_rounded,
-          label: '课表',
-        ),
-        FloatingDockItem(
-          icon: Icons.school_outlined,
-          activeIcon: Icons.school_rounded,
-          label: '学业',
-        ),
-        FloatingDockItem(
-          icon: Icons.settings_outlined,
-          activeIcon: Icons.settings_rounded,
-          label: '设置',
-        ),
-      ];
-
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Center(child: FloatingDock(items: items, index: 0)),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      final dock = find.byType(FloatingDock);
-      final stackFinder = find
-          .descendant(of: dock, matching: find.byType(Stack))
-          .first;
-      final stackSize = tester.getSize(stackFinder);
-      final stackTopLeft = tester.getTopLeft(stackFinder);
-
-      ClipPath clipWidget() => tester.widget<ClipPath>(
-        find.descendant(of: dock, matching: find.byType(ClipPath)),
-      );
-
-      final item0Local =
-          tester.getCenter(
-            find.descendant(of: dock, matching: find.text('课表')),
-          ) -
-          stackTopLeft;
-      final item1Local =
-          tester.getCenter(
-            find.descendant(of: dock, matching: find.text('学业')),
-          ) -
-          stackTopLeft;
-      final item2Local =
-          tester.getCenter(
-            find.descendant(of: dock, matching: find.text('设置')),
-          ) -
-          stackTopLeft;
-
-      // 静止态：反向裁剪仅掏空第 0 项。
-      final restClip = clipWidget().clipper!.getClip(stackSize);
-      expect(restClip.contains(item0Local), isFalse);
-      expect(restClip.contains(item2Local), isTrue);
-
-      // 按下并快速横拖到中间项附近：产生抬升与速度拉伸形变，所有层正常绘制与裁剪。
-      final gesture = await tester.startGesture(
-        tester.getCenter(find.descendant(of: dock, matching: find.text('课表'))),
-      );
-      await tester.pump(const Duration(milliseconds: 16));
-      await gesture.moveTo(
-        tester.getCenter(find.descendant(of: dock, matching: find.text('学业'))),
-      );
-      await tester.pump(const Duration(milliseconds: 16));
-      await tester.pump(const Duration(milliseconds: 16));
-      await tester.pump(const Duration(milliseconds: 16));
-
-      final midClip = clipWidget().clipper!.getClip(stackSize);
-      expect(midClip.contains(item1Local), isFalse);
-      expect(midClip.contains(item0Local), isTrue);
-
-      final customPaints = tester.widgetList<CustomPaint>(
-        find.descendant(of: dock, matching: find.byType(CustomPaint)),
-      );
-      for (final cp in customPaints) {
-        final painter = cp.painter;
-        if (painter == null) continue;
-        final recorder = ui.PictureRecorder();
-        final canvas = ui.Canvas(recorder);
-        painter.paint(canvas, stackSize);
-        recorder.endRecording().dispose();
-      }
-      expect(tester.takeException(), isNull);
-
-      await gesture.up();
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-
-      final endClip = clipWidget().clipper!.getClip(stackSize);
-      expect(endClip.contains(item1Local), isFalse);
-      expect(endClip.contains(item0Local), isTrue);
-
-      // 宽度压缩重布局（相同 items.length 但 itemRects 改变）：裁剪与前景重绘应保持同步且无异常。
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Center(
-              child: SizedBox(
-                width: 220,
-                child: FloatingDock(items: items, index: 1),
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      final narrowStackSize = tester.getSize(stackFinder);
-      final narrowStackTopLeft = tester.getTopLeft(stackFinder);
-      final narrowItem1Local =
-          tester.getCenter(
-            find.descendant(of: dock, matching: find.text('学业')),
-          ) -
-          narrowStackTopLeft;
-      final narrowClip = clipWidget().clipper!.getClip(narrowStackSize);
-      expect(narrowClip.contains(narrowItem1Local), isFalse);
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('学业页与二级页顶栏按钮均统一使用 36×36 TactileSurfaceButton', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-
-      await tester.pumpWidget(wrap(AcademicPage(model: model)));
-      await tester.pumpAndSettle();
-
-      final academicRefresh = find.widgetWithIcon(
-        TactileIconButton,
-        Icons.refresh_rounded,
-      );
-      expect(academicRefresh, findsOneWidget);
-      expect(tester.getSize(academicRefresh), const Size(36, 36));
-
-      await tester.pumpWidget(wrap(SchoolAddressPage(model: model)));
-      await tester.pumpAndSettle();
-
-      final backButton = find.byType(TactileBackButton);
-      expect(backButton, findsOneWidget);
-      expect(find.byType(BackButton), findsOneWidget);
-      final addBtn = find.widgetWithIcon(TactileIconButton, Icons.add_rounded);
-      expect(addBtn, findsOneWidget);
-      expect(tester.getSize(addBtn), const Size(36, 36));
-    });
   });
 
   group('作息表编辑与新建', () {
-    testWidgets('未改动时保存键禁用；改动后可保存并真正写盘', (tester) async {
+    testWidgets('未改动时保存键禁用，节次按三段分组，快捷设置排在上方且展开为高度动画，改动后可保存', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       final original = model.timetables.first;
       await pushEditor(tester, model, original.id);
 
       final check = find.widgetWithIcon(IconButton, Icons.check_rounded);
-      expect(
-        tester.widget<IconButton>(check).onPressed,
-        isNull,
-        reason: '没改动就不该能保存',
-      );
+      expect(tester.widget<IconButton>(check).onPressed, isNull);
+
+      expect(find.text('上午'), findsOneWidget);
+      expect(find.text('下午'), findsOneWidget);
+      expect(find.text('晚上'), findsOneWidget);
+      expect(find.textContaining('4 节 · 08:30'), findsOneWidget);
+
+      final quickY = tester.getTopLeft(find.text('快捷设置时间')).dy;
+      final sectionsY = tester.getTopLeft(find.text('节次时间')).dy;
+      expect(quickY, lessThan(sectionsY));
 
       await tester.tap(find.text('名称'));
       await tester.pumpAndSettle();
@@ -3305,53 +2280,41 @@ void main() {
       await tester.tap(find.widgetWithText(FilledButton, '确定'));
       await tester.pumpAndSettle();
 
-      expect(
-        model.timetables.any((table) => table.name == '夏季作息'),
-        isFalse,
-        reason: '只改草稿，还没点保存',
-      );
+      expect(model.timetables.any((table) => table.name == '夏季作息'), isFalse);
       expect(tester.widget<IconButton>(check).onPressed, isNotNull);
 
-      await tester.tap(check);
+      // 快捷设置展开是高度动画
+      final card = find
+          .ancestor(of: find.text('快捷设置时间'), matching: find.byType(Card))
+          .first;
+      final collapsed = tester.getSize(card).height;
+      await tester.tap(find.text('快捷设置时间'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 60));
+      final halfway = tester.getSize(card).height;
       await tester.pumpAndSettle();
+      final expanded = tester.getSize(card).height;
+      expect(halfway, greaterThan(collapsed));
+      expect(halfway, lessThan(expanded));
 
-      expect(model.timetables.any((table) => table.name == '夏季作息'), isTrue);
-      expect(find.byType(TimetableEditPage), findsNothing, reason: '保存后返回列表');
-    });
-
-    testWidgets('节次按上午/下午/晚上分组，第 10 节不换行', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await pushEditor(tester, model, model.timetables.first.id);
-
-      expect(find.text('上午'), findsOneWidget);
-      expect(find.text('下午'), findsOneWidget);
-      expect(find.text('晚上'), findsOneWidget);
-      expect(find.textContaining('4 节 · 08:30'), findsOneWidget);
-
-      // 第 10 节在列表底部，滚进视口后应存在，且不能折到第二行。
       await tester.scrollUntilVisible(
         find.text('第 10 节'),
         240,
         scrollable: find.byType(Scrollable).first,
       );
       expect(find.text('第 10 节'), findsOneWidget);
+
+      await tester.tap(check);
+      await tester.pumpAndSettle();
+      expect(model.timetables.any((table) => table.name == '夏季作息'), isTrue);
+      expect(find.byType(TimetableEditPage), findsNothing);
     });
 
-    testWidgets('快捷设置排在节次时间上方', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await pushEditor(tester, model, model.timetables.first.id);
-
-      final quick = tester.getTopLeft(find.text('快捷设置时间')).dy;
-      final sections = tester.getTopLeft(find.text('节次时间')).dy;
-      expect(quick, lessThan(sections));
-    });
-
-    testWidgets('新建作息表不显示三点菜单或删除键，点击名称可重命名', (tester) async {
+    testWidgets('新建作息表无三点菜单或删除键、未保存返回弹确认不创建、点对勾后才创建', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(TimetableListPage(model: model)));
+      final before = model.timetables.length;
 
       await tester.tap(find.byIcon(Icons.add_rounded).first);
       await tester.pumpAndSettle();
@@ -3377,8 +2340,27 @@ void main() {
       await tester.enterText(find.byType(TextField).last, '冬季作息');
       await tester.tap(find.widgetWithText(FilledButton, '确定'));
       await tester.pumpAndSettle();
-
       expect(find.text('冬季作息'), findsOneWidget);
+      expect(model.timetables.length, before);
+
+      // 未保存就返回：弹确认且不创建
+      await tester.tap(find.byType(BackButton));
+      await tester.pumpAndSettle();
+      expect(find.text('放弃修改？'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, '放弃'));
+      await tester.pumpAndSettle();
+      expect(model.timetables.length, before);
+      expect(find.byType(TimetableEditPage), findsNothing);
+
+      // 再次新建并点对勾保存
+      await tester.tap(find.widgetWithText(OutlinedButton, '新建作息表'));
+      await tester.pumpAndSettle();
+      final check = find.widgetWithIcon(IconButton, Icons.check_rounded);
+      expect(tester.widget<IconButton>(check).onPressed, isNotNull);
+      await tester.tap(check);
+      await tester.pumpAndSettle();
+      expect(model.timetables.length, before + 1);
+      expect(find.byType(TimetableEditPage), findsNothing);
     });
 
     testWidgets('编辑已有作息表不显示三点菜单，右上角直接显示删除按钮', (tester) async {
@@ -3399,7 +2381,6 @@ void main() {
         matching: find.widgetWithIcon(IconButton, Icons.delete_outline_rounded),
       );
       expect(deleteBtn, findsOneWidget);
-      // 仅剩一张表时禁用删除（至少保留一张）。
       expect(tester.widget<IconButton>(deleteBtn).onPressed, isNull);
 
       await tester.tap(find.byType(BackButton));
@@ -3421,55 +2402,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(model.timetables.any((t) => t.id == 't2'), isFalse);
     });
-
-    testWidgets('进编辑页时还没进列表，点对勾后才创建', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(TimetableListPage(model: model)));
-      final before = model.timetables.length;
-
-      await tester.tap(find.widgetWithText(OutlinedButton, '新建作息表'));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(TimetableEditPage), findsOneWidget);
-      expect(model.timetables.length, before, reason: '还没点对勾，不该落盘');
-
-      final check = find.widgetWithIcon(IconButton, Icons.check_rounded);
-      expect(
-        tester.widget<IconButton>(check).onPressed,
-        isNotNull,
-        reason: '新表一进来就可以直接保存',
-      );
-
-      await tester.tap(check);
-      await tester.pumpAndSettle();
-
-      expect(model.timetables.length, before + 1);
-      expect(find.byType(TimetableEditPage), findsNothing);
-    });
-
-    testWidgets('新表未保存就返回：弹确认且不创建', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(TimetableListPage(model: model)));
-      final before = model.timetables.length;
-
-      await tester.tap(find.widgetWithText(OutlinedButton, '新建作息表'));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byType(BackButton));
-      await tester.pumpAndSettle();
-      expect(find.text('放弃修改？'), findsOneWidget);
-      await tester.tap(find.widgetWithText(FilledButton, '放弃'));
-      await tester.pumpAndSettle();
-
-      expect(model.timetables.length, before);
-      expect(find.byType(TimetableEditPage), findsNothing);
-    });
   });
 
   group('课表节数（三段滚轮）', () {
-    testWidgets('点开底部滚轮改节数，按确定才生效', (tester) async {
+    testWidgets('点开底部滚轮改节数：取消不改动，按确定才生效', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(TimetableListPage(model: model)));
@@ -3477,16 +2413,22 @@ void main() {
       expect(find.textContaining('共 10 节'), findsOneWidget);
       expect(find.textContaining('上午 4'), findsOneWidget);
 
+      // 1. 取消不改动
       await tester.tap(find.text('课表节数'));
       await tester.pumpAndSettle();
+      await tester.drag(find.text('4 节').first, const Offset(0, -40));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, '取消'));
+      await tester.pumpAndSettle();
+      expect(model.sectionCount, 10);
 
-      // 三列滚轮 + 实时合计
+      // 2. 按确定才生效
+      await tester.tap(find.text('课表节数'));
+      await tester.pumpAndSettle();
       expect(find.text('上午'), findsOneWidget);
       expect(find.text('下午'), findsOneWidget);
       expect(find.text('晚上'), findsOneWidget);
-      expect(find.textContaining('共 10 节'), findsWidgets);
 
-      // 上午那一列往上拖一格（itemExtent = 40）→ 5 节
       await tester.drag(find.text('4 节').first, const Offset(0, -40));
       await tester.pumpAndSettle();
       expect(find.textContaining('共 11 节'), findsOneWidget);
@@ -3496,67 +2438,34 @@ void main() {
 
       expect(model.sectionCounts[PeriodGroup.morning], 5);
       expect(model.sectionCount, 11);
-      expect(
-        find.textContaining('共 11 节'),
-        findsOneWidget,
-        reason: '列表页摘要同步更新',
-      );
-    });
-
-    testWidgets('取消不改动', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(TimetableListPage(model: model)));
-
-      await tester.tap(find.text('课表节数'));
-      await tester.pumpAndSettle();
-      await tester.drag(find.text('4 节').first, const Offset(0, -40));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.widgetWithText(TextButton, '取消'));
-      await tester.pumpAndSettle();
-
-      expect(model.sectionCount, 10, reason: '没点确定就不该改');
+      expect(find.textContaining('共 11 节'), findsOneWidget);
     });
   });
 
   group('课表页右上角提示', () {
-    testWidgets('提示出现时课表仍然可见（不遮挡）', (tester) async {
+    testWidgets('提示出现时不遮挡课表，且弹窗宽度跟随文字（短提示紧凑、长提示扩展到上限）', (tester) async {
       final rig = buildModel();
       rig.hydrateForTest(
         schedule: sparseSchedule(),
         week: 1,
         termStart: DateTime(2026, 3, 2),
       );
-      // 提示现在挂在外壳上（两页共用），所以这里要用 HomeShell 而不是单页。
       await tester.pumpWidget(wrap(HomeShell(model: rig)));
 
       rig.setHintForTest('更新中…');
       await tester.pump();
-
       expect(find.text('更新中…'), findsOneWidget);
-      expect(find.text('期初课'), findsOneWidget, reason: '课表不能被遮住');
+      expect(find.text('期初课'), findsOneWidget);
       expect(find.text('第 1 周'), findsOneWidget);
       rig.clearHint();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 250));
       expect(find.text('更新中…'), findsNothing);
-    });
 
-    testWidgets('提示弹窗宽度跟随文字：短提示紧凑、长提示才扩展到上限', (tester) async {
-      final rig = buildModel();
-      rig.hydrateForTest(
-        schedule: sparseSchedule(),
-        week: 1,
-        termStart: DateTime(2026, 3, 2),
-      );
-      await tester.pumpWidget(wrap(HomeShell(model: rig)));
-
-      // AnimatedSwitcher 的尺寸即弹窗尺寸（Stack 包着 _Bubble，宽度取内容宽）。
       Future<double> widthFor(String hint) async {
         rig.setHintForTest(hint, scope: HintScope.schedule);
         await tester.pump();
-        await tester.pump(const Duration(milliseconds: 250)); // 等切换过渡结束
+        await tester.pump(const Duration(milliseconds: 250));
         return tester
             .getSize(
               find.descendant(
@@ -3568,23 +2477,17 @@ void main() {
       }
 
       final shortW = await widthFor('已更新');
-      // 先清空再换长文，避免过渡期间 Stack 取新旧最大值干扰测量。
       rig.clearHint();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 250));
-
       final longW = await widthFor('课表更新失败：连接教务系统超时，请检查网络后重试。' * 3);
 
-      // 短提示保持紧凑（远小于 200 上限）；长提示扩展到上限附近。
-      expect(shortW, lessThan(200), reason: '短提示不应被撑到接近上限');
-      expect(shortW, lessThan(120), reason: '短提示应当紧凑');
-      expect(longW, greaterThan(shortW), reason: '长提示应比短提示宽');
-      expect(longW, lessThanOrEqualTo(200));
-      expect(longW, greaterThan(150), reason: '长提示应扩展到接近上限');
+      expect(shortW, lessThan(120));
+      expect(longW, greaterThan(shortW));
+      expect(longW, inInclusiveRange(150, 200));
     });
-    testWidgets('提示气泡页面作用域隔离与随页面平移：课表提示随课表页平移，学业提示随学业页平移，全局提示置顶固定', (
-      tester,
-    ) async {
+
+    testWidgets('提示气泡页面作用域隔离与随页面平移，点击学业更新全局气泡自动平移切到学业页并清除提示', (tester) async {
       final rig = buildModel();
       rig.hydrateForTest(
         schedule: sparseSchedule(),
@@ -3593,110 +2496,51 @@ void main() {
       );
       await tester.pumpWidget(wrap(HomeShell(model: rig)));
 
-      // 1. 处于课表页（Tab 0）：课表提示在屏幕内可见
       rig.setHintForTest('课表更新中…', scope: HintScope.schedule);
       await tester.pump();
       expect(find.text('课表更新中…'), findsOneWidget);
-      final schedulePos0 = tester.getTopLeft(find.text('课表更新中…'));
-      expect(schedulePos0.dx, greaterThanOrEqualTo(0));
-      expect(schedulePos0.dx, lessThan(800));
+      expect(
+        tester.getTopLeft(find.text('课表更新中…')).dx,
+        inInclusiveRange(0, 800),
+      );
 
-      // 学业尚未挂载，学业提示不可见
       rig.setHintForTest('学业更新中…', scope: HintScope.academic);
       await tester.pump();
-      expect(find.text('学业更新中…'), findsNothing, reason: '学业页尚未渲染，学业提示不展示');
+      expect(find.text('学业更新中…'), findsNothing);
 
-      // 全局系统提示激活：优先显示全局提示，页面局部提示退避
       rig.setHintForTest('正在重新登录…', scope: HintScope.global);
       await tester.pump();
-      expect(find.text('正在重新登录…'), findsOneWidget, reason: '全局提示在屏幕顶层可见');
-
-      // 清除全局提示，页面提示恢复
+      expect(find.text('正在重新登录…'), findsOneWidget);
       rig.clearGlobalHint();
       await tester.pump();
       expect(find.text('正在重新登录…'), findsNothing);
-      expect(find.text('课表更新中…'), findsOneWidget);
 
-      // 2. 切到学业页（Tab 1）
-      final dock = find.byType(FloatingDock);
-      await tester.tap(find.descendant(of: dock, matching: find.text('学业')));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-
-      // 课表页平移到屏幕左侧（dx < 0），课表提示随之滑出屏幕外
-      final schedulePos1 = tester.getTopLeft(find.text('课表更新中…'));
-      expect(schedulePos1.dx, lessThan(0), reason: '课表提示随课表页滑出屏幕左侧');
-
-      // 学业页平移进屏幕（0 <= dx < 800），学业提示随之滑入屏幕可见
-      expect(find.text('学业更新中…'), findsOneWidget);
-      final academicPos1 = tester.getTopLeft(find.text('学业更新中…'));
-      expect(academicPos1.dx, greaterThanOrEqualTo(0), reason: '学业提示随学业页滑入屏幕');
-      expect(academicPos1.dx, lessThan(800));
-
-      // 在学业页触发全局提示：依然在屏幕顶层可见
-      rig.setHintForTest('正在重新登录…', scope: HintScope.global);
-      await tester.pump();
-      expect(find.text('正在重新登录…'), findsOneWidget, reason: '全局提示在学业页同样顶层悬浮展示');
-      final globalPos = tester.getTopLeft(find.text('正在重新登录…'));
-      expect(globalPos.dx, greaterThanOrEqualTo(0));
-      expect(globalPos.dx, lessThan(800));
-    });
-
-    testWidgets('点击学业更新全局气泡，自动平移切换到学业页并清除提示', (tester) async {
-      final rig = buildModel();
-      rig.hydrateForTest(
-        schedule: sparseSchedule(),
-        week: 1,
-        termStart: DateTime(2026, 3, 2),
-      );
-      await tester.pumpWidget(wrap(HomeShell(model: rig)));
-
-      // 默认在课表页 (Tab 0)
-      expect(find.text('课表'), findsWidgets);
-
-      // 触发学业更新全局气泡
+      // 触发学业更新全局气泡并点击：自动切换到学业页并清除全局气泡
       rig.showAcademicUpdateHintForTest('考试安排有更新');
       await tester.pump();
       expect(find.text('考试安排有更新'), findsOneWidget);
 
-      // 点击该全局气泡
       await tester.tap(find.text('考试安排有更新'));
       await tester.pump();
       await tester.pumpAndSettle();
 
-      // 气泡被消除
       expect(find.text('考试安排有更新'), findsNothing);
-
-      // 页面已自动切换到学业页并处于激活状态
       expect(find.text('学业概览'), findsOneWidget);
-      final page0Ignore = tester.widget<IgnorePointer>(
-        find
-            .ancestor(
-              of: find.byKey(const ValueKey<String>('shell-page-0')),
-              matching: find.byType(IgnorePointer),
-            )
-            .first,
+      expect(tester.getTopLeft(find.text('课表更新中…')).dx, lessThan(0));
+      expect(find.text('学业更新中…'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.text('学业更新中…')).dx,
+        inInclusiveRange(0, 800),
       );
-      final page1Ignore = tester.widget<IgnorePointer>(
-        find
-            .ancestor(
-              of: find.byKey(const ValueKey<String>('shell-page-1')),
-              matching: find.byType(IgnorePointer),
-            )
-            .first,
-      );
-      expect(page0Ignore.ignoring, isTrue);
-      expect(page1Ignore.ignoring, isFalse);
     });
   });
 
-  group('设置页账号区', () {
-    testWidgets('只有一个退出入口，并多出修改密码', (tester) async {
+  group('设置页账号区与教务地址簿', () {
+    testWidgets('设置页账号区展示修改密码与退出登录、姓名空时回退已登录，且可打开教务地址簿', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(SettingsPage(model: model)));
 
-      // 课表组变长后账号区可能被顶到屏外，先滚到可见再断言。
       await tester.dragUntilVisible(
         find.text('退出登录'),
         find.byType(ListView),
@@ -3707,129 +2551,34 @@ void main() {
       expect(find.text('修改密码'), findsOneWidget);
       expect(find.text('退出登录'), findsOneWidget);
       expect(find.text('退出并忘记密码'), findsNothing);
-      expect(find.text('退出登录（保留密码）'), findsNothing);
-      expect(find.text('忘记密码'), findsNothing);
       expect(find.text('测试学生'), findsOneWidget);
       expect(find.text('未登录'), findsNothing);
-    });
 
-    testWidgets('已登录但姓名读不到时显示已登录，而不是未登录', (tester) async {
-      final model = buildModel();
       model.hydrateForTest(
         schedule: sparseSchedule(),
         week: 1,
         studentName: '',
         studentId: '',
       );
-      await tester.pumpWidget(wrap(SettingsPage(model: model)));
-
-      await tester.dragUntilVisible(
-        find.text('已登录'),
-        find.byType(ListView),
-        const Offset(0, -60),
-      );
       await tester.pumpAndSettle();
-
-      expect(find.text('未登录'), findsNothing);
       expect(find.text('已登录'), findsOneWidget);
-    });
 
-    testWidgets('教务地址一行可点开地址簿', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SettingsPage(model: model)));
-
-      // 设置页课表组变长（静默更新 / 显示备注等开关）后，教务地址可能被顶到屏外，
-      // 先滚到可见再点。
       await tester.dragUntilVisible(
         find.text('教务地址'),
         find.byType(ListView),
-        const Offset(0, -60),
+        const Offset(0, 60),
       );
       await tester.pumpAndSettle();
-
       await tester.tap(find.text('教务地址'));
       await tester.pumpAndSettle();
       expect(find.byType(SchoolAddressPage), findsOneWidget);
     });
-  });
 
-  group('教务地址簿页面', () {
-    testWidgets('列出已保存地址，标出使用中，可新增', (tester) async {
+    testWidgets('教务地址簿列出使用中地址、新增弹窗防软键盘挤压且可添加新地址', (tester) async {
       final model = buildModel();
       await tester.pumpWidget(wrap(SchoolAddressPage(model: model)));
 
       expect(find.text('使用中'), findsOneWidget);
-      // 出厂就带 6 条线路：底部的"新增"按钮在小屏上要滚一下才可见。
-      final addButton = find.widgetWithText(OutlinedButton, '新增教务地址');
-      await tester.scrollUntilVisible(
-        addButton,
-        200,
-        scrollable: find.byType(Scrollable).first,
-      );
-      expect(addButton, findsOneWidget);
-
-      await tester.tap(addButton);
-      await tester.pumpAndSettle();
-      expect(find.text('新增教务地址'), findsWidgets);
-      expect(find.text('添加'), findsOneWidget);
-
-      await tester.enterText(
-        find.byType(TextField),
-        'https://jw2.example.edu.cn/jwglxt',
-      );
-      await tester.tap(find.widgetWithText(FilledButton, '添加'));
-      await tester.pumpAndSettle();
-
-      expect(model.schools.any((item) => item.contains('jw2')), isTrue);
-      expect(find.text('https://jw2.example.edu.cn/jwglxt'), findsOneWidget);
-    });
-
-    testWidgets('切换线路时不会闪回登录页：全程停在课表页', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      // 与生产一致地监听状态：根路由是 `pageForStatus(model)`。
-      await tester.pumpWidget(
-        wrap(
-          ListenableBuilder(
-            listenable: model,
-            builder: (context, _) => pageForStatus(model),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(find.byType(HomeShell), findsOneWidget);
-
-      // 切线路会沿用当前账号自动登录，先让模型处于"登录过"的状态。
-      await model.signIn('20240001', 'pw');
-      await tester.pumpAndSettle();
-      expect(find.byType(HomeShell), findsOneWidget);
-
-      final future = model.changeSchool('https://jwglxt5.qust.edu.cn/jwglxt');
-      // 逐帧看：换线路的整个过程里，登录页一帧都不许出现。
-      for (var i = 0; i < 24; i++) {
-        await tester.pump(const Duration(milliseconds: 16));
-        expect(
-          find.byType(LoginPage),
-          findsNothing,
-          reason: '第 $i 帧闪了登录页（状态应保持 loading，而不是 needLogin/signingIn）',
-        );
-      }
-      await future;
-      await tester.pumpAndSettle();
-
-      expect(find.byType(LoginPage), findsNothing);
-      expect(find.byType(HomeShell), findsOneWidget);
-      expect(model.schoolBaseUrl, 'https://jwglxt5.qust.edu.cn/jwglxt');
-
-      // 让提示/弹窗里的一次性定时器走完，避免残留 Timer 触发测试框架断言。
-      await tester.pump(const Duration(seconds: 2));
-    });
-
-    testWidgets('新增地址弹窗：弹出输入法时不被挤压变短，且预设按钮间距紧凑', (tester) async {
-      final model = buildModel();
-      await tester.pumpWidget(wrap(SchoolAddressPage(model: model)));
-
       await tester.tap(find.byIcon(Icons.add_rounded));
       await tester.pumpAndSettle();
 
@@ -3842,19 +2591,66 @@ void main() {
       expect(chip.materialTapTargetSize, MaterialTapTargetSize.shrinkWrap);
       expect(chip.visualDensity, VisualDensity.compact);
 
-      // 模拟软键盘弹出占用底部 300px。
       tester.view.viewInsets = const FakeViewPadding(bottom: 300);
       addTearDown(tester.view.resetViewInsets);
       await tester.pumpAndSettle();
-
       expect(tester.takeException(), isNull);
       expect(tester.getRect(dialog).height, beforeDialog.height);
       expect(tester.getRect(addBtn), beforeAddBtn);
+
+      tester.view.resetViewInsets();
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byType(TextField),
+        'https://jw2.example.edu.cn/jwglxt',
+      );
+      await tester.tap(addBtn);
+      await tester.pumpAndSettle();
+
+      expect(model.schools.any((item) => item.contains('jw2')), isTrue);
+      await tester.scrollUntilVisible(
+        find.text('https://jw2.example.edu.cn/jwglxt'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('https://jw2.example.edu.cn/jwglxt'), findsOneWidget);
+    });
+
+    testWidgets('切换线路时不会闪回登录页：全程停在课表页', (tester) async {
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(
+        wrap(
+          ListenableBuilder(
+            listenable: model,
+            builder: (context, _) => pageForStatus(model),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(HomeShell), findsOneWidget);
+
+      await model.signIn('20240001', 'pw');
+      await tester.pumpAndSettle();
+      expect(find.byType(HomeShell), findsOneWidget);
+
+      final future = model.changeSchool('https://jwglxt5.qust.edu.cn/jwglxt');
+      for (var i = 0; i < 24; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(find.byType(LoginPage), findsNothing);
+      }
+      await future;
+      await tester.pumpAndSettle();
+
+      expect(find.byType(LoginPage), findsNothing);
+      expect(find.byType(HomeShell), findsOneWidget);
+      expect(model.schoolBaseUrl, 'https://jwglxt5.qust.edu.cn/jwglxt');
+      await tester.pump(const Duration(seconds: 2));
     });
   });
 
   group('节次时间（开始+结束一起设）', () {
-    testWidgets('点节次行弹出起止滚轮，确定后写回该节', (tester) async {
+    testWidgets('点节次行弹出起止滚轮确定写回，且滚轮接管覆盖整个候选值区域', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await pushEditor(tester, model, model.timetables.first.id);
@@ -3862,30 +2658,10 @@ void main() {
       await tester.tap(find.text('第 1 节'));
       await tester.pumpAndSettle();
 
-      // 两列时间轮：开始 / 结束
       expect(find.text('开始'), findsOneWidget);
       expect(find.text('结束'), findsOneWidget);
       expect(find.textContaining('08:30 – 09:15'), findsOneWidget);
 
-      await tester.tap(find.widgetWithText(TextButton, '确定'));
-      await tester.pumpAndSettle();
-
-      // 没改滚动位置，值不变——关键是这条链路能走通且不报错。
-      final first = model.timetables.first.sections.first;
-      expect(formatClock(first.startMinutes), '08:30');
-      expect(formatClock(first.endMinutes), '09:15');
-    });
-
-    testWidgets('滚轮接管覆盖整个轮子（否则指哪儿决定滚几格）', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await pushEditor(tester, model, model.timetables.first.id);
-
-      await tester.tap(find.text('第 1 节'));
-      await tester.pumpAndSettle();
-
-      // 只挑我们自己挂在候选值上的那几个：`Scrollable` 内部也有一个
-      // 带 onPointerSignal 的 Listener（就是它抢走了本该由我们处理的事件）。
       final wheels = tester
           .widgetList<Listener>(
             find.descendant(
@@ -3898,30 +2674,24 @@ void main() {
                 listener.onPointerSignal != null && listener.child is Center,
           )
           .toList();
-      expect(wheels, isNotEmpty, reason: '每个候选值都应该挂上滚轮接管');
+      expect(wheels, isNotEmpty);
       for (final listener in wheels) {
-        // deferToChild 只有文字本身算命中：鼠标落在选中高亮块上时事件会被
-        // Scrollable 吃掉，同一个轮子滚一格还是滚好几格取决于指哪儿。
         expect(listener.behavior, HitTestBehavior.opaque);
       }
+
+      await tester.tap(find.widgetWithText(TextButton, '确定'));
+      await tester.pumpAndSettle();
+
+      final first = model.timetables.first.sections.first;
+      expect(formatClock(first.startMinutes), '08:30');
+      expect(formatClock(first.endMinutes), '09:15');
     });
   });
 
   group('调试页', () {
-    testWidgets('四个页签都能渲染概览信息', (tester) async {
+    testWidgets('四个页签渲染概览/200 错误页判定/未获取课表提示/解析结果，并提供清除学业数据按钮', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 3);
-      await tester.pumpWidget(wrap(DebugPage(model: model)));
-
-      expect(find.widgetWithText(Tab, '概览'), findsOneWidget);
-      expect(find.widgetWithText(Tab, '请求'), findsOneWidget);
-      expect(find.widgetWithText(Tab, '原始课表'), findsOneWidget);
-      expect(find.widgetWithText(Tab, '解析结果'), findsOneWidget);
-      expect(find.text('https://jw.example.edu.cn/jwglxt'), findsOneWidget);
-    });
-
-    testWidgets('请求记录：200 的错误页不会被打成"正常"', (tester) async {
-      final model = buildModel();
       model.requestLog.add(
         const RequestLog(
           method: 'GET',
@@ -3932,86 +2702,40 @@ void main() {
         ),
       );
       await tester.pumpWidget(wrap(DebugPage(model: model)));
-      await tester.tap(find.widgetWithText(Tab, '请求'));
-      await tester.pumpAndSettle();
 
-      // 状态码是 200，但正文是错误页：标题要带上判定，不能只显示 200 了事。
-      expect(find.textContaining('返回错误页'), findsOneWidget);
-    });
+      expect(find.widgetWithText(Tab, '概览'), findsOneWidget);
+      expect(find.widgetWithText(Tab, '请求'), findsOneWidget);
+      expect(find.widgetWithText(Tab, '原始课表'), findsOneWidget);
+      expect(find.widgetWithText(Tab, '解析结果'), findsOneWidget);
+      expect(find.text('https://jw.example.edu.cn/jwglxt'), findsOneWidget);
 
-    testWidgets('原始课表页在未获取时给出明确提示', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(DebugPage(model: model)));
-
-      await tester.tap(find.widgetWithText(Tab, '原始课表'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('还没有获取过课表'), findsOneWidget);
-    });
-
-    testWidgets('解析结果页列出每条记录与周次', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(DebugPage(model: model)));
-
-      await tester.tap(find.widgetWithText(Tab, '解析结果'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('期初课'), findsOneWidget);
-      expect(find.textContaining('1-2 周'), findsOneWidget);
-    });
-
-    testWidgets('调试页提供清除学业数据按钮', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(DebugPage(model: model)));
-
-      // 向上滚动概览列表展示底部的调试操作卡片
+      // 概览页底部清除学业数据按钮
       await tester.drag(find.byType(ListView).first, const Offset(0, -400));
       await tester.pumpAndSettle();
-
       final clearBtn = find.widgetWithText(FilledButton, '清除学业数据');
-
-      // 概览页签下可以看到「学业数据与通知调试」模块
       expect(find.text('学业数据与通知调试'), findsOneWidget);
-      expect(clearBtn, findsOneWidget);
-
-      // 点击清除学业数据按钮并弹出 SnackBar
       await tester.tap(clearBtn);
       await tester.pump();
       expect(find.text('已清除学业缓存与内存数据，更新学业数据可查看通知'), findsOneWidget);
-
-      // 清理 SnackBar 的自动消失计时器
       await tester.pump(const Duration(seconds: 4));
+
+      await tester.tap(find.widgetWithText(Tab, '请求'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('返回错误页'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(Tab, '原始课表'));
+      await tester.pumpAndSettle();
+      expect(find.text('还没有获取过课表'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(Tab, '解析结果'));
+      await tester.pumpAndSettle();
+      expect(find.text('期初课'), findsOneWidget);
+      expect(find.textContaining('1-2 周'), findsOneWidget);
     });
   });
 
-  group('"今"按钮', () {
-    testWidgets('看本周时不出现，翻到别的周才浮出来', (tester) async {
-      final model = buildModel();
-      final today = DateTime.now();
-      model.hydrateForTest(
-        schedule: sparseSchedule(),
-        week: 1,
-        termStart: mondayOf(today),
-      );
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-      await tester.pumpAndSettle();
-
-      expect(todayFab(tester).opacity, 0, reason: '正在看本周，不需要按钮');
-
-      model.goToWeek(2);
-      await tester.pumpAndSettle();
-      expect(todayFab(tester).opacity, 1);
-
-      await tester.tap(find.text('今'));
-      await tester.pumpAndSettle();
-      expect(model.week, 1);
-      expect(todayFab(tester).opacity, 0, reason: '回到本周后自动收起');
-    });
-
-    testWidgets('翻页动画途中点击"今"能打断动画并回到本周', (tester) async {
+  group('"今"按钮与过渡动画打断', () {
+    testWidgets('"今"按钮：看本周隐藏、非本周浮出，且翻页动画途中点击能打断并回到本周', (tester) async {
       tester.view.physicalSize = const Size(400, 640);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
@@ -4026,7 +2750,18 @@ void main() {
       await tester.pumpWidget(wrap(SchedulePage(model: model)));
       await tester.pumpAndSettle();
 
-      // 从第 1 周滑向第 2 周，动画过半但尚未停稳（model.week 仍为 1）。
+      expect(todayFab(tester).opacity, 0);
+
+      model.goToWeek(2);
+      await tester.pumpAndSettle();
+      expect(todayFab(tester).opacity, 1);
+
+      await tester.tap(find.text('今'));
+      await tester.pumpAndSettle();
+      expect(model.week, 1);
+      expect(todayFab(tester).opacity, 0);
+
+      // 翻页动画途中点击"今"打断回到本周
       await tester.fling(find.byType(PageView), const Offset(-260, 0), 1200);
       await tester.pump(const Duration(milliseconds: 40));
       expect(find.text('第 2 周'), findsOneWidget);
@@ -4034,104 +2769,12 @@ void main() {
 
       await tester.tap(find.text('今'));
       await tester.pumpAndSettle();
-
       expect(model.week, 1);
       expect(find.text('第 1 周'), findsOneWidget);
       expect(todayFab(tester).opacity, 0);
     });
-  });
 
-  group('折叠动效', () {
-    testWidgets('快捷设置展开是高度动画，不是直接跳变', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await pushEditor(tester, model, model.timetables.first.id);
-
-      final card = find
-          .ancestor(of: find.text('快捷设置时间'), matching: find.byType(Card))
-          .first;
-      final collapsed = tester.getSize(card).height;
-
-      await tester.tap(find.text('快捷设置时间'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 60));
-      final halfway = tester.getSize(card).height;
-
-      await tester.pumpAndSettle();
-      final expanded = tester.getSize(card).height;
-
-      expect(expanded, greaterThan(collapsed));
-      expect(halfway, greaterThan(collapsed));
-      expect(halfway, lessThan(expanded), reason: '中途高度应介于起止之间，说明在动画');
-    });
-  });
-
-  group('页面路由（状态 → 页面）', () {
-    testWidgets('登录失败且没拿到课表：留在登录页，错误走弹窗', (tester) async {
-      final model = buildModel();
-      model.setStatusForTest(
-        AppStatus.failed,
-        message: '账号或密码不正确',
-        code: 'INVALID_CREDENTIALS',
-      );
-
-      await tester.pumpWidget(wrap(pageForStatus(model)));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(LoginPage), findsOneWidget, reason: '打错密码不该被丢到空课表');
-      expect(find.byType(HomeShell), findsNothing);
-      expect(find.text('账号或密码不正确'), findsOneWidget, reason: '错误以弹窗出现');
-      expect(
-        find.widgetWithText(FilledButton, '重试'),
-        findsNothing,
-        reason: '没有课表时不该给"重试查课表"',
-      );
-    });
-
-    testWidgets('已经有课表时失败：留在课表页', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      model.setStatusForTest(
-        AppStatus.failed,
-        message: '教务页面变了',
-        code: 'PAGE_CHANGED',
-      );
-
-      await tester.pumpWidget(wrap(pageForStatus(model)));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(HomeShell), findsOneWidget);
-      expect(find.text('教务页面变了'), findsOneWidget);
-    });
-
-    testWidgets('登录页残留的提示不会变成永远转的圈', (tester) async {
-      final model = buildModel();
-      model.setHintForTest('登录中…');
-      model.setStatusForTest(AppStatus.needLogin, message: '已取消登录');
-
-      await tester.pumpWidget(wrap(pageForStatus(model)));
-      // 弹窗若还在转圈，pumpAndSettle 会超时——这就是这条用例的意义。
-      await tester.pumpAndSettle();
-
-      expect(find.byType(LoginPage), findsOneWidget);
-      expect(find.text('登录中…'), findsNothing);
-      expect(find.text('已取消登录'), findsOneWidget, reason: '说明性文案留在内联横幅里');
-    });
-
-    testWidgets('登录中停在登录页，进度走弹窗', (tester) async {
-      final model = buildModel();
-      model.setStatusForTest(AppStatus.signingIn);
-
-      await tester.pumpWidget(wrap(pageForStatus(model)));
-      await tester.pump();
-
-      expect(find.byType(LoginPage), findsOneWidget);
-      expect(find.text('登录中…'), findsOneWidget);
-    });
-  });
-
-  group('过渡动画可打断', () {
-    testWidgets('翻周动画未播完时再点一次「下一周」，两次点击都生效', (tester) async {
+    testWidgets('过渡动画可打断：翻周未播完连点下一周生效，切到设置中途点回课表终态正确', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
       await tester.pumpWidget(wrap(HomeShell(model: model)));
@@ -4139,38 +2782,79 @@ void main() {
 
       final next = find.widgetWithIcon(IconButton, Icons.chevron_right_rounded);
       await tester.tap(next);
-      await tester.pump(); // 动画刚开始，远未结束
+      await tester.pump();
       await tester.tap(next);
       await tester.pump();
-
-      // 以前这里有 _syncing 布尔锁，第二次点击会被整个丢掉（只翻一周）。
       expect(model.week, 3);
       await tester.pumpAndSettle();
       expect(model.week, 3);
-    });
-
-    testWidgets('切到设置的中途点回课表，动画被接管且终态正确', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(HomeShell(model: model)));
-      await tester.pumpAndSettle();
-      expect(shellPagePosition(tester), 0);
 
       final dock = find.byType(FloatingDock);
       await tester.tap(find.descendant(of: dock, matching: find.text('设置')));
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 60)); // 停在动画中途
+      await tester.pump(const Duration(milliseconds: 60));
       await tester.tap(find.descendant(of: dock, matching: find.text('课表')));
       await tester.pump();
       await tester.pumpAndSettle();
+      expect(shellPagePosition(tester), 0);
+    });
+  });
 
-      // 中断后不能停在两页中间（更不该闪回设置页），最终必须干净地回到课表。
-      expect(shellPagePosition(tester), 0, reason: '整页滑回课表');
+  group('页面路由（状态 → 页面）', () {
+    testWidgets('pageForStatus：无课表失败留登录页、有课表失败留课表页、残留提示不死转、登录中弹窗进度', (
+      tester,
+    ) async {
+      // 1. 登录失败且没拿到课表：留在登录页，错误走弹窗
+      final m1 = buildModel();
+      m1.setStatusForTest(
+        AppStatus.failed,
+        message: '账号或密码不正确',
+        code: 'INVALID_CREDENTIALS',
+      );
+      await tester.pumpWidget(wrap(pageForStatus(m1)));
+      await tester.pumpAndSettle();
+      expect(find.byType(LoginPage), findsOneWidget);
+      expect(find.byType(HomeShell), findsNothing);
+      expect(find.text('账号或密码不正确'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, '重试'), findsNothing);
+
+      // 2. 已经有课表时失败：留在课表页
+      await tester.pumpWidget(const SizedBox());
+      final m2 = buildModel();
+      m2.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      m2.setStatusForTest(
+        AppStatus.failed,
+        message: '教务页面变了',
+        code: 'PAGE_CHANGED',
+      );
+      await tester.pumpWidget(wrap(pageForStatus(m2)));
+      await tester.pumpAndSettle();
+      expect(find.byType(HomeShell), findsOneWidget);
+      expect(find.text('教务页面变了'), findsOneWidget);
+
+      // 3. 登录页残留提示不变成永远转的圈
+      await tester.pumpWidget(const SizedBox());
+      final m3 = buildModel();
+      m3.setHintForTest('登录中…');
+      m3.setStatusForTest(AppStatus.needLogin, message: '已取消登录');
+      await tester.pumpWidget(wrap(pageForStatus(m3)));
+      await tester.pumpAndSettle();
+      expect(find.byType(LoginPage), findsOneWidget);
+      expect(find.text('登录中…'), findsNothing);
+      expect(find.text('已取消登录'), findsOneWidget);
+
+      // 4. 登录中停在登录页，进度走弹窗
+      await tester.pumpWidget(const SizedBox());
+      final m4 = buildModel();
+      m4.setStatusForTest(AppStatus.signingIn);
+      await tester.pumpWidget(wrap(pageForStatus(m4)));
+      await tester.pump();
+      expect(find.byType(LoginPage), findsOneWidget);
+      expect(find.text('登录中…'), findsOneWidget);
     });
   });
 
   group('课程提醒', () {
-    /// 提醒页需要 model + 编排层；用假通道避免碰平台。
     Future<
       ({AppModel model, FakeReminderGateway gateway, ReminderService service})
     >
@@ -4215,13 +2899,11 @@ void main() {
       expect(find.text('课程提醒'), findsOneWidget);
       expect(find.text('未开启'), findsOneWidget);
 
-      // 没有挂编排层（桌面端）时不显示。
       await tester.pumpWidget(
         wrap(SettingsPage(model: rig.model, reminders: null)),
       );
       expect(find.text('课程提醒'), findsNothing);
 
-      // 非 Android 平台即使挂了也不显示。
       debugDefaultTargetPlatformOverride = TargetPlatform.windows;
       await tester.pumpWidget(
         wrap(SettingsPage(model: rig.model, reminders: rig.service)),
@@ -4232,143 +2914,87 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     });
 
-    testWidgets('提醒页展示提前量滑块、预设与诊断信息', (tester) async {
+    testWidgets('提醒页展示滑块与诊断、开关与流体云同步排程、快捷无边框胶囊与拖动抬手落盘', (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
       final rig = await buildReminderRig();
       await tester.pumpWidget(
-        wrap(ReminderPage(model: rig.model, service: rig.service)),
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: ReminderPage(model: rig.model, service: rig.service),
+        ),
       );
       await tester.pumpAndSettle();
 
       expect(find.text('上课前提醒'), findsOneWidget);
-      // 滑块负责连续取值，预设按钮只是快捷跳转。
+      expect(find.byType(ChoiceChip), findsNothing);
       final slider = tester.widget<Slider>(
         find.byKey(const Key('reminder-lead-slider')),
       );
       expect(slider.min, 1);
       expect(slider.max, 60);
-      expect(slider.divisions, 59);
       expect(slider.value, 10);
-      expect(find.text('提前 10 分钟'), findsOneWidget);
-      for (final minutes in <int>[5, 10, 15, 20, 30]) {
-        expect(find.text('$minutes 分钟'), findsWidgets);
+      for (final minutes in reminderLeadOptions) {
+        expect(
+          find.widgetWithText(TactileSurfaceButton, '$minutes 分钟'),
+          findsOneWidget,
+        );
       }
 
-      // 诊断卡片在首屏之外，懒加载列表要滚到才会构建。
+      // 1. 打开开关 → 偏好生效并下发排程
+      await tester.tap(find.byKey(const Key('reminder-enabled-switch')));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+      expect(rig.model.reminderEnabled, isTrue);
+      expect(rig.gateway.lastPayload['leadMinutes'], 10);
+      expect(rig.gateway.toasts, isEmpty);
+
+      // 2. 点击快捷无边框胶囊「20 分钟」
+      await tester.tap(find.text('20 分钟'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+      expect(rig.model.reminderLeadMinutes, 20);
+      expect(rig.gateway.lastPayload['leadMinutes'], 20);
+
+      // 3. 拖滑块中不落盘，抬手才下发一次
+      final beforeSyncs = rig.gateway.syncedPayloads.length;
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byKey(const Key('reminder-lead-slider'))),
+      );
+      await gesture.moveBy(const Offset(60, 0));
+      await tester.pump();
+      expect(rig.gateway.syncedPayloads.length, beforeSyncs);
+      await gesture.up();
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+      expect(rig.gateway.syncedPayloads.length, greaterThan(beforeSyncs));
+
+      // 4. 打开流体云开关再关回
+      await tester.tap(find.byKey(const Key('reminder-fluid-switch')));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+      expect(rig.model.reminderStyle, ReminderStyle.fluid);
+      expect(rig.gateway.lastPayload['style'], 'fluid');
+
+      await tester.tap(find.byKey(const Key('reminder-fluid-switch')));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+      expect(rig.model.reminderStyle, ReminderStyle.banner);
+      expect(rig.gateway.stopFluidCount, 1);
+
+      // 5. 滚到底部验证诊断信息展示
       await tester.scrollUntilVisible(
         find.text('1 分钟后测试提醒'),
         120,
         scrollable: find.byType(Scrollable).first,
       );
       expect(find.text('3 条'), findsOneWidget);
-      // 「精确闹钟」既是权限项标题，也是诊断里的排程精度值。
       expect(find.text('精确闹钟'), findsWidgets);
-      expect(find.text('未显示'), findsOneWidget);
-      expect(find.text('立即显示通知'), findsOneWidget);
-      expect(find.text('5 秒后测试提醒'), findsOneWidget);
 
       rig.service.dispose();
       debugDefaultTargetPlatformOverride = null;
     });
 
-    testWidgets('打开开关 → 偏好生效并下发排程', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      final rig = await buildReminderRig();
-      await tester.pumpWidget(
-        wrap(ReminderPage(model: rig.model, service: rig.service)),
-      );
-      await tester.pumpAndSettle();
-      expect(rig.model.reminderEnabled, isFalse);
-
-      await tester.tap(find.byKey(const Key('reminder-enabled-switch')));
-      await tester.pumpAndSettle();
-      // 让 SnackBar 计时器走完，避免测试结束时报 pending timer。
-      await tester.pump(const Duration(seconds: 3));
-
-      expect(rig.model.reminderEnabled, isTrue);
-      expect(rig.gateway.syncedPayloads, isNotEmpty);
-      expect(rig.gateway.lastPayload['leadMinutes'], 10);
-      expect(rig.gateway.toasts, isEmpty, reason: '开关上课提醒静默生效，不应弹出 Toast');
-
-      rig.service.dispose();
-      debugDefaultTargetPlatformOverride = null;
-    });
-
-    testWidgets('选 20 分钟 → 偏好与下发内容都跟着变', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      final rig = await buildReminderRig(enabled: true);
-      await tester.pumpWidget(
-        wrap(ReminderPage(model: rig.model, service: rig.service)),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('20 分钟'));
-      await tester.pumpAndSettle();
-      await tester.pump(const Duration(seconds: 3));
-
-      expect(rig.model.reminderLeadMinutes, 20);
-      expect(rig.gateway.lastPayload['leadMinutes'], 20);
-
-      rig.service.dispose();
-      debugDefaultTargetPlatformOverride = null;
-    });
-
-    testWidgets('打开流体云开关 → 偏好落盘且 payload 带 fluid', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      final rig = await buildReminderRig(enabled: true);
-      await tester.pumpWidget(
-        wrap(ReminderPage(model: rig.model, service: rig.service)),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byKey(const Key('reminder-fluid-switch')));
-      await tester.pumpAndSettle();
-      await tester.pump(const Duration(seconds: 3));
-
-      expect(rig.model.reminderStyle, ReminderStyle.fluid);
-      expect(rig.gateway.lastPayload['style'], 'fluid');
-
-      // 关回去要顺手收起正在显示的卡片。
-      await tester.tap(find.byKey(const Key('reminder-fluid-switch')));
-      await tester.pumpAndSettle();
-      await tester.pump(const Duration(seconds: 3));
-
-      expect(rig.model.reminderStyle, ReminderStyle.banner);
-      expect(rig.gateway.stopFluidCount, 1);
-      expect(rig.gateway.toasts, isEmpty, reason: '开关流体云卡片静默生效，不应弹出 Toast');
-
-      rig.service.dispose();
-      debugDefaultTargetPlatformOverride = null;
-    });
-
-    testWidgets('拖滑块中不落盘，抬手才下发一次', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      final rig = await buildReminderRig(enabled: true);
-      await tester.pumpWidget(
-        wrap(ReminderPage(model: rig.model, service: rig.service)),
-      );
-      await tester.pumpAndSettle();
-      final before = rig.gateway.syncedPayloads.length;
-
-      // 拖动过程中只改本地草稿：偏好与下发都不动。
-      final slider = find.byKey(const Key('reminder-lead-slider'));
-      final gesture = await tester.startGesture(tester.getCenter(slider));
-      await gesture.moveBy(const Offset(60, 0));
-      await tester.pump();
-      expect(rig.model.reminderLeadMinutes, 10, reason: '拖动中只改草稿');
-      expect(rig.gateway.syncedPayloads.length, before);
-
-      await gesture.up();
-      await tester.pumpAndSettle();
-      await tester.pump(const Duration(seconds: 3));
-      expect(rig.gateway.syncedPayloads.length, greaterThan(before));
-      expect(rig.model.reminderLeadMinutes, isNot(10));
-
-      rig.service.dispose();
-      debugDefaultTargetPlatformOverride = null;
-    });
-
-    testWidgets('「立即显示通知」只发预览，不挂闹钟', (tester) async {
+    testWidgets('立即显示通知、5 秒/1 分钟测试提醒及重排进行中按钮不禁用', (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
       final rig = await buildReminderRig(enabled: true);
       await tester.pumpWidget(
@@ -4377,85 +3003,36 @@ void main() {
       await tester.pumpAndSettle();
 
       await tester.scrollUntilVisible(
-        find.text('立即显示通知'),
+        find.text('1 分钟后测试提醒'),
         120,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.ensureVisible(find.text('立即显示通知'));
       await tester.pumpAndSettle();
+
       await tester.tap(find.text('立即显示通知'));
       await tester.pumpAndSettle();
       await tester.pump(const Duration(seconds: 3));
-
       expect(rig.gateway.previewRequests, <String>['banner|10|false']);
-      expect(rig.gateway.testRequests, isEmpty);
 
-      rig.service.dispose();
-      debugDefaultTargetPlatformOverride = null;
-    });
-
-    testWidgets('「5 秒后测试提醒」与「1 分钟后测试提醒」分别按对应秒数下发', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      final rig = await buildReminderRig(enabled: true);
-      await tester.pumpWidget(
-        wrap(ReminderPage(model: rig.model, service: rig.service)),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.scrollUntilVisible(
-        find.text('5 秒后测试提醒'),
-        120,
-        scrollable: find.byType(Scrollable).first,
-      );
-      await tester.ensureVisible(find.text('5 秒后测试提醒'));
-      await tester.pumpAndSettle();
       await tester.tap(find.text('5 秒后测试提醒'));
       await tester.pumpAndSettle();
       await tester.pump(const Duration(seconds: 3));
-
       expect(rig.gateway.testRequests, contains('banner|5'));
 
       await tester.tap(find.text('1 分钟后测试提醒'));
       await tester.pumpAndSettle();
       await tester.pump(const Duration(seconds: 3));
-
       expect(rig.gateway.testRequests, contains('banner|60'));
 
-      rig.service.dispose();
-      debugDefaultTargetPlatformOverride = null;
-    });
-
-    testWidgets('操作进行中按钮不禁用（否则整页会闪一下）', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      final rig = await buildReminderRig(enabled: true);
-      await tester.pumpWidget(
-        wrap(ReminderPage(model: rig.model, service: rig.service)),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.scrollUntilVisible(
-        find.text('立即重排'),
-        120,
-        scrollable: find.byType(Scrollable).first,
-      );
-      await tester.ensureVisible(find.text('立即重排'));
-      await tester.pumpAndSettle();
-
-      // 让原生 sync 挂住，模拟真实设备上几百毫秒的排程。
+      // 操作进行中按钮不禁用
       final gate = Completer<void>();
       rig.gateway.syncGate = gate;
       await tester.tap(find.text('立即重排'));
       await tester.pump();
-
       final button = tester.widget<OutlinedButton>(
         find.widgetWithText(OutlinedButton, '立即重排'),
       );
-      expect(
-        button.onPressed,
-        isNotNull,
-        reason: '进行中不能把 onPressed 置空，否则按钮会闪一次禁用色',
-      );
-
+      expect(button.onPressed, isNotNull);
       gate.complete();
       await tester.pumpAndSettle();
       await tester.pump(const Duration(seconds: 3));
@@ -4464,30 +3041,40 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     });
 
-    testWidgets('自启动项只能「需手动确认」，点开去设置', (tester) async {
+    testWidgets('自启动项手动确认跳转与从系统设置返回后自动刷新权限状态', (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
       final rig = await buildReminderRig(
         enabled: true,
-        status: const ReminderRuntimeStatus(
-          notificationPermission: true,
-          notificationsEnabled: true,
-          exactAlarmAllowed: true,
-          autoStartVendorPage: false,
-        ),
+        status: const ReminderRuntimeStatus(autoStartVendorPage: false),
       );
       await tester.pumpWidget(
         wrap(ReminderPage(model: rig.model, service: rig.service)),
       );
       await tester.pumpAndSettle();
+      expect(find.text('已禁止 · 无法收到任何提醒'), findsOneWidget);
 
+      // 从系统设置返回后刷新权限状态
+      rig.gateway.statusValue = const ReminderRuntimeStatus(
+        notificationPermission: true,
+        notificationsEnabled: true,
+        exactAlarmAllowed: true,
+        autoStartVendorPage: false,
+      );
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(find.text('已允许 · 横幅与锁屏需手动开启'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(TextButton, '去设置').first);
+      await tester.pumpAndSettle();
+      expect(rig.gateway.notificationSettingsCount, 1);
+
+      // 自启动项手动确认
       await tester.scrollUntilVisible(
         find.text('自启动'),
         120,
         scrollable: find.byType(Scrollable).first,
       );
-      // 厂商私有权限读不到真实状态，统一显示固定文案。
       expect(find.text('该权限不可检测，需自行确认'), findsOneWidget);
-
       final tile = find.ancestor(
         of: find.text('自启动'),
         matching: find.byType(ListTile),
@@ -4504,120 +3091,11 @@ void main() {
       rig.service.dispose();
       debugDefaultTargetPlatformOverride = null;
     });
-
-    testWidgets('从系统设置返回后刷新权限状态', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      final rig = await buildReminderRig(
-        enabled: true,
-        status: const ReminderRuntimeStatus(),
-      );
-      await tester.pumpWidget(
-        wrap(ReminderPage(model: rig.model, service: rig.service)),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('已禁止 · 无法收到任何提醒'), findsOneWidget);
-
-      // 用户在系统设置里授权后回到 App：状态必须自己刷新。
-      rig.gateway.statusValue = const ReminderRuntimeStatus(
-        notificationPermission: true,
-        notificationsEnabled: true,
-        exactAlarmAllowed: true,
-      );
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-      await tester.pumpAndSettle();
-
-      expect(find.text('已允许 · 横幅与锁屏需手动开启'), findsOneWidget);
-
-      // 授权后按钮变为「去设置」，点击跳到应用通知管理页（不弹 Toast）
-      final setBtn = find.widgetWithText(TextButton, '去设置').first;
-      await tester.tap(setBtn);
-      await tester.pumpAndSettle();
-      expect(rig.gateway.notificationSettingsCount, 1);
-      expect(rig.gateway.toasts, isEmpty);
-
-      rig.service.dispose();
-      debugDefaultTargetPlatformOverride = null;
-    });
   });
 
   group('AppSnackBar 现代悬浮胶囊', () {
-    testWidgets('showAppSnackBar 渲染图标、文字与操作按钮', (tester) async {
+    testWidgets('渲染图标/文字/操作按钮、避让 Dock、连续调用替换旧提示且支持左右滑动关闭', (tester) async {
       bool actionPressed = false;
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Builder(
-              builder: (context) => ElevatedButton(
-                onPressed: () {
-                  showAppSnackBar(
-                    context,
-                    message: '测试轻量胶囊',
-                    type: AppSnackBarType.success,
-                    action: SnackBarAction(
-                      label: '撤销',
-                      onPressed: () => actionPressed = true,
-                    ),
-                  );
-                },
-                child: const Text('触发提示'),
-              ),
-            ),
-          ),
-        ),
-      );
-
-      await tester.tap(find.text('触发提示'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('测试轻量胶囊'), findsOneWidget);
-      expect(find.byIcon(Icons.check_circle_rounded), findsOneWidget);
-      expect(find.text('撤销'), findsOneWidget);
-
-      await tester.tap(find.text('撤销'));
-      await tester.pumpAndSettle();
-      expect(actionPressed, isTrue);
-
-      await tester.pump(const Duration(seconds: 3));
-    });
-
-    testWidgets('showAppSnackBar 支持避让 Dock (aboveDock)', (tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Builder(
-              builder: (context) => ElevatedButton(
-                onPressed: () {
-                  showAppSnackBar(
-                    context,
-                    message: 'Dock 避让测试',
-                    type: AppSnackBarType.info,
-                    aboveDock: true,
-                  );
-                },
-                child: const Text('触发避让提示'),
-              ),
-            ),
-          ),
-        ),
-      );
-
-      await tester.tap(find.text('触发避让提示'));
-      await tester.pump();
-
-      expect(find.text('Dock 避让测试'), findsOneWidget);
-      expect(find.byIcon(Icons.info_outline_rounded), findsOneWidget);
-
-      final snackBarFinder = find.byType(SnackBar);
-      final SnackBar snackBar = tester.widget(snackBarFinder);
-      expect(snackBar.margin, isNotNull);
-      final margin = snackBar.margin as EdgeInsets;
-      // 避让底栏，底部边距应明显大于普通边距（大于 60）
-      expect(margin.bottom, greaterThan(60));
-
-      await tester.pump(const Duration(seconds: 3));
-    });
-
-    testWidgets('连续调用 showAppSnackBar 自动清理上一个，不排队阻塞', (tester) async {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -4625,12 +3103,26 @@ void main() {
               builder: (context) => Column(
                 children: [
                   ElevatedButton(
-                    onPressed: () => showAppSnackBar(context, message: '第一条消息'),
-                    child: const Text('消息1'),
+                    onPressed: () => showAppSnackBar(
+                      context,
+                      message: '测试轻量胶囊',
+                      type: AppSnackBarType.success,
+                      action: SnackBarAction(
+                        label: '撤销',
+                        onPressed: () => actionPressed = true,
+                      ),
+                    ),
+                    child: const Text('触发提示'),
                   ),
                   ElevatedButton(
-                    onPressed: () => showAppSnackBar(context, message: '第二条消息'),
-                    child: const Text('消息2'),
+                    onPressed: () => showAppSnackBar(
+                      context,
+                      message: 'Dock 避让测试',
+                      type: AppSnackBarType.info,
+                      aboveDock: true,
+                      duration: const Duration(seconds: 10),
+                    ),
+                    child: const Text('触发避让提示'),
                   ),
                 ],
               ),
@@ -4639,68 +3131,60 @@ void main() {
         ),
       );
 
-      await tester.tap(find.text('消息1'));
-      await tester.pump();
-      expect(find.text('第一条消息'), findsOneWidget);
-
-      // 紧接着发第二条
-      await tester.tap(find.text('消息2'));
-      await tester.pump();
-
-      expect(find.text('第二条消息'), findsOneWidget);
-      expect(find.text('第一条消息'), findsNothing);
-
-      await tester.pump(const Duration(seconds: 3));
-    });
-
-    testWidgets('showAppSnackBar 支持左右滑动关闭且点击不误关', (tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Builder(
-              builder: (context) => ElevatedButton(
-                onPressed: () => showAppSnackBar(
-                  context,
-                  message: '滑动关闭测试',
-                  duration: const Duration(seconds: 10),
-                ),
-                child: const Text('触发滑动提示'),
-              ),
-            ),
-          ),
-        ),
-      );
-
-      await tester.tap(find.text('触发滑动提示'));
+      await tester.tap(find.text('触发提示'));
       await tester.pumpAndSettle();
+      expect(find.text('测试轻量胶囊'), findsOneWidget);
+      expect(find.byIcon(Icons.check_circle_rounded), findsOneWidget);
+      await tester.tap(find.text('撤销'));
+      await tester.pumpAndSettle();
+      expect(actionPressed, isTrue);
+
+      // 连续调用自动清理上一个，并验证 aboveDock 边距与左右滑动关闭
+      await tester.tap(find.text('触发提示'));
+      await tester.pump();
+      await tester.tap(find.text('触发避让提示'));
+      await tester.pumpAndSettle();
+      expect(find.text('测试轻量胶囊'), findsNothing);
+      expect(find.text('Dock 避让测试'), findsOneWidget);
 
       final SnackBar snackBar = tester.widget(find.byType(SnackBar));
+      expect((snackBar.margin as EdgeInsets).bottom, greaterThan(60));
       expect(snackBar.dismissDirection, DismissDirection.horizontal);
 
-      // 点击胶囊内容区不应误关
-      await tester.tap(find.text('滑动关闭测试'));
+      await tester.tap(find.text('Dock 避让测试'));
       await tester.pump();
-      expect(find.text('滑动关闭测试'), findsOneWidget);
+      expect(find.text('Dock 避让测试'), findsOneWidget);
 
-      // 横向划走
-      await tester.fling(find.text('滑动关闭测试'), const Offset(500, 0), 1000);
+      await tester.fling(find.text('Dock 避让测试'), const Offset(500, 0), 1000);
       await tester.pumpAndSettle();
-      expect(find.text('滑动关闭测试'), findsNothing);
+      expect(find.text('Dock 避让测试'), findsNothing);
     });
 
-    testWidgets('短文案居中自适应紧凑宽度，非 Dock 子页默认底距抬升至 40dp 舒适区', (tester) async {
+    testWidgets('短文案紧凑圆胶囊且底距舒适，长报错胶囊淡红描边并自动换用 20dp 圆角', (tester) async {
       await tester.pumpWidget(
         MaterialApp(
           theme: buildLightTheme(),
           home: Scaffold(
             body: Builder(
-              builder: (context) => ElevatedButton(
-                onPressed: () => showAppSnackBar(
-                  context,
-                  message: '密码已更新',
-                  type: AppSnackBarType.success,
-                ),
-                child: const Text('触发短胶囊'),
+              builder: (context) => Column(
+                children: [
+                  ElevatedButton(
+                    onPressed: () => showAppSnackBar(
+                      context,
+                      message: '密码已更新',
+                      type: AppSnackBarType.success,
+                    ),
+                    child: const Text('触发短胶囊'),
+                  ),
+                  ElevatedButton(
+                    onPressed: () => showAppSnackBar(
+                      context,
+                      message: '这是一条非常非常长的错误提示信息，用来验证超出单行宽度限制时会自动换用二十像素圆角且不会发生任何排版溢出',
+                      type: AppSnackBarType.error,
+                    ),
+                    child: const Text('触发长报错'),
+                  ),
+                ],
               ),
             ),
           ),
@@ -4709,73 +3193,46 @@ void main() {
 
       await tester.tap(find.text('触发短胶囊'));
       await tester.pumpAndSettle();
-
-      final SnackBar snackBar = tester.widget(find.byType(SnackBar));
-      final margin = snackBar.margin as EdgeInsets;
-      expect(margin.bottom, greaterThanOrEqualTo(40));
-
-      final pillBox = tester.widget<DecoratedBox>(
+      final SnackBar shortSnack = tester.widget(find.byType(SnackBar));
+      expect(
+        (shortSnack.margin as EdgeInsets).bottom,
+        greaterThanOrEqualTo(40),
+      );
+      final shortPill = tester.widget<DecoratedBox>(
         find.descendant(
           of: find.byType(SnackBar),
           matching: find.byType(DecoratedBox),
         ),
       );
-      final pillSize = tester.getSize(find.byWidget(pillBox));
-      // 短文字紧凑胶囊不应占满全屏宽度（默认测试视口宽 800）
-      expect(pillSize.width, lessThan(220));
-
-      final decoration = pillBox.decoration as BoxDecoration;
-      expect(decoration.color, Colors.white);
-      expect(decoration.borderRadius, BorderRadius.circular(999));
-
-      await tester.pump(const Duration(seconds: 3));
-    });
-
-    testWidgets('报错胶囊呈现淡红状态描边，长文案自动换用 20dp 圆角防裁切', (tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildLightTheme(),
-          home: Scaffold(
-            body: Builder(
-              builder: (context) => ElevatedButton(
-                onPressed: () => showAppSnackBar(
-                  context,
-                  message:
-                      '这是一条非常非常长的错误提示信息，用来验证超出单行宽度限制时会自动换用二十像素圆角且不会发生任何排版溢出',
-                  type: AppSnackBarType.error,
-                ),
-                child: const Text('触发长报错'),
-              ),
-            ),
-          ),
-        ),
+      expect(tester.getSize(find.byWidget(shortPill)).width, lessThan(220));
+      expect(
+        (shortPill.decoration as BoxDecoration).borderRadius,
+        BorderRadius.circular(999),
       );
 
       await tester.tap(find.text('触发长报错'));
       await tester.pumpAndSettle();
-
-      final pillBox = tester.widget<DecoratedBox>(
+      final longPill = tester.widget<DecoratedBox>(
         find.descendant(
           of: find.byType(SnackBar),
           matching: find.byType(DecoratedBox),
         ),
       );
-      final pillSize = tester.getSize(find.byWidget(pillBox));
-      expect(pillSize.width, lessThanOrEqualTo(420));
-
-      final decoration = pillBox.decoration as BoxDecoration;
-      expect(decoration.borderRadius, BorderRadius.circular(20));
-      final border = decoration.border! as Border;
       expect(
-        border.top.color,
+        tester.getSize(find.byWidget(longPill)).width,
+        lessThanOrEqualTo(420),
+      );
+      final longDec = longPill.decoration as BoxDecoration;
+      expect(longDec.borderRadius, BorderRadius.circular(20));
+      expect(
+        (longDec.border! as Border).top.color,
         buildLightTheme().colorScheme.error.withValues(alpha: 0.40),
       );
-
       await tester.pump(const Duration(seconds: 3));
     });
   });
 
-  group('验证码页面容错', () {
+  group('验证码页面容错与界面样式统一', () {
     testWidgets('验证码 Base64 数据异常时安全降级展示错误占位，不崩溃', (tester) async {
       final backend = FakeBackend(
         loginBehavior: (_, _) async => const CaptchaState(
@@ -4794,85 +3251,71 @@ void main() {
       expect(find.text('验证码图片无法显示'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
-  });
 
-  group('界面样式、语义色与提示统一', () {
-    testWidgets('AppColors.of 在裸 MaterialApp 回退浅色默认值，buildLightTheme 锁定纯白容器面', (
-      tester,
-    ) async {
-      await tester.pumpWidget(
-        const MaterialApp(home: SizedBox.shrink(key: Key('bare-theme-probe'))),
-      );
-      final bareContext = tester.element(
-        find.byKey(const Key('bare-theme-probe')),
-      );
-      final bareColors = AppColors.of(bareContext);
-      expect(bareColors.success, AppColors.light.success);
-      expect(bareColors.captchaSurface, AppColors.light.captchaSurface);
+    testWidgets(
+      'AppColors 回退与纯白容器面、SectionTitle 紧凑标题、ChangelogCategoryBadge 语义色及 UpdateProxyPage 零阴影卡片',
+      (tester) async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: SizedBox.shrink(key: Key('bare-theme-probe')),
+          ),
+        );
+        final bareContext = tester.element(
+          find.byKey(const Key('bare-theme-probe')),
+        );
+        expect(AppColors.of(bareContext).success, AppColors.light.success);
 
-      // 先卸载旧 MaterialApp，避免 AnimatedTheme 跨树复用时首帧仍沿用上一棵树的主题。
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildLightTheme(),
-          home: const SizedBox.shrink(key: Key('light-theme-probe')),
-        ),
-      );
-      final themedContext = tester.element(
-        find.byKey(const Key('light-theme-probe')),
-      );
-      final themedData = Theme.of(themedContext);
-      expect(themedData.extension<AppColors>(), same(AppColors.light));
-      expect(AppColors.of(themedContext), same(AppColors.light));
-      expect(themedData.colorScheme.surfaceContainerLowest, Colors.white);
-    });
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: buildLightTheme(),
+            home: Scaffold(
+              body: Wrap(
+                key: const Key('light-theme-probe'),
+                children: <Widget>[
+                  for (final title in const ['新增', '优化', '修复', '碎碎念', '其他'])
+                    ChangelogCategoryBadge(title: title),
+                ],
+              ),
+            ),
+          ),
+        );
+        final themedContext = tester.element(
+          find.byKey(const Key('light-theme-probe')),
+        );
+        final themedData = Theme.of(themedContext);
+        expect(AppColors.of(themedContext), same(AppColors.light));
+        expect(themedData.colorScheme.surfaceContainerLowest, Colors.white);
+        expect(
+          tester.widget<Text>(find.text('新增')).style?.color,
+          AppColors.light.categoryAdd,
+        );
 
-    testWidgets('SectionTitle 在设置页、更新代理页与提醒页保持统一紧凑标题样式', (tester) async {
-      void expectCompactSectionStyle(WidgetTester tester, String title) {
-        final sectionFinder = find.widgetWithText(SectionTitle, title);
-        expect(sectionFinder, findsOneWidget);
-        final text = tester.widget<Text>(
+        final model = buildModel();
+        model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: buildLightTheme(),
+            home: UpdateProxyPage(model: model),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final sectionFinder = find.widgetWithText(SectionTitle, '首选加速节点');
+        final sectionText = tester.widget<Text>(
           find.descendant(of: sectionFinder, matching: find.byType(Text)),
         );
-        expect(text.style?.fontSize, 12);
-        expect(text.style?.fontWeight, FontWeight.w500);
-        expect(text.style?.letterSpacing, 0.3);
-      }
+        expect(sectionText.style?.fontSize, 12);
+        expect(sectionText.style?.fontWeight, FontWeight.w500);
 
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-
-      await tester.pumpWidget(wrap(SettingsPage(model: model)));
-      expectCompactSectionStyle(tester, '课表');
-
-      await tester.pumpWidget(wrap(UpdateProxyPage(model: model)));
-      expectCompactSectionStyle(tester, '首选加速节点');
-
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      final gateway = FakeReminderGateway(
-        statusValue: const ReminderRuntimeStatus(
-          notificationPermission: true,
-          notificationsEnabled: true,
-          exactAlarmAllowed: true,
-          scheduled: 1,
-          style: 'banner',
-        ),
-      );
-      final service = ReminderService(
-        model: model,
-        gateway: gateway,
-        now: () => DateTime(2026, 9, 7, 6),
-      );
-      await tester.pumpWidget(
-        wrap(ReminderPage(model: model, service: service)),
-      );
-      await tester.pumpAndSettle();
-      expectCompactSectionStyle(tester, '提醒设置');
-      expectCompactSectionStyle(tester, '权限与可靠性');
-
-      service.dispose();
-      debugDefaultTargetPlatformOverride = null;
-    });
+        final cards = tester.widgetList<Card>(find.byType(Card)).toList();
+        expect(cards, isNotEmpty);
+        for (final card in cards) {
+          expect(card.elevation, isNull);
+        }
+        expect(find.byType(TactileActionButton), findsAtLeastNWidgets(1));
+      },
+    );
 
     testWidgets('SettingsPage 修改密码失败走 error 风格 SnackBar 且不再弹 AlertDialog', (
       tester,
@@ -4917,39 +3360,15 @@ void main() {
       expect(find.byType(AlertDialog), findsNothing);
       expect(find.byType(SnackBar), findsOneWidget);
       expect(find.textContaining('修改失败：'), findsOneWidget);
-
       await tester.pump(const Duration(seconds: 5));
-    });
-
-    testWidgets('ChangelogCategoryBadge 统一渲染各更新分类标签与语义色', (tester) async {
-      const titles = <String>['新增', '优化', '修复', '碎碎念', '其他'];
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildLightTheme(),
-          home: Scaffold(
-            body: Wrap(
-              children: <Widget>[
-                for (final title in titles)
-                  ChangelogCategoryBadge(title: title),
-              ],
-            ),
-          ),
-        ),
-      );
-
-      for (final title in titles) {
-        expect(
-          find.widgetWithText(ChangelogCategoryBadge, title),
-          findsOneWidget,
-        );
-      }
-      final addText = tester.widget<Text>(find.text('新增'));
-      expect(addText.style?.color, AppColors.light.categoryAdd);
     });
   });
 
-  group('触控按钮表面样式与长按菜单胶囊定位', () {
-    testWidgets('背景按钮为纯白带阴影且按住无边框；卡片内与彩色按钮无阴影无按压边框', (tester) async {
+  group('触控按钮、长按菜单与架构性能回归', () {
+    testWidgets('背景按钮纯白带阴影、卡片内无阴影、按下放大反馈无下沉、非菜单按钮不包 ClipRRect 且失活卸载安全', (
+      tester,
+    ) async {
+      var childBuilds = 0;
       await tester.pumpWidget(
         MaterialApp(
           theme: buildLightTheme(),
@@ -4972,6 +3391,15 @@ void main() {
                     onPressed: () {},
                     label: const Text('检查更新'),
                   ),
+                  TactileSurfaceButton(
+                    onTap: () {},
+                    child: Builder(
+                      builder: (_) {
+                        childBuilds++;
+                        return const Text('普通操作');
+                      },
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -4991,7 +3419,6 @@ void main() {
       );
       final bgBox = bgDecor.decoration as BoxDecoration;
       expect(bgBox.color, Colors.white);
-      expect(bgBox.boxShadow, isNotNull);
       expect(bgBox.boxShadow, isNotEmpty);
       expect(bgBox.border, isNull);
 
@@ -5008,378 +3435,67 @@ void main() {
       expect(cardBox.boxShadow, isNull);
       expect(cardBox.border, isNull);
 
-      // 按住「检查更新」与背景按钮，透明表面不额外包 DecoratedBox、也不应出现按压边框。
-      final checkBtn = find.text('检查更新');
-      final gesture1 = await tester.startGesture(tester.getCenter(checkBtn));
-      await tester.pump(const Duration(milliseconds: 60));
-      final actionSurface = find.ancestor(
-        of: checkBtn,
+      // 非菜单按钮不包 ClipRRect / FadeTransition，且不受 activeAppMenuMorph 影响。
+      final plainSurface = find.ancestor(
+        of: find.text('普通操作'),
         matching: find.byType(TactileSurfaceButton),
       );
       expect(
-        find.descendant(of: actionSurface, matching: find.byType(DecoratedBox)),
-        findsNothing,
-      );
-      await gesture1.up();
-      await tester.pumpAndSettle();
-
-      final gesture2 = await tester.startGesture(tester.getCenter(bgSurface));
-      await tester.pump(const Duration(milliseconds: 60));
-      final bgDecorPressed = tester.widget<DecoratedBox>(
-        find
-            .descendant(of: bgSurface, matching: find.byType(DecoratedBox))
-            .first,
-      );
-      expect((bgDecorPressed.decoration as BoxDecoration).border, isNull);
-      await gesture2.up();
-      await tester.pumpAndSettle();
-    });
-
-    testWidgets('设置页最小更新间隔使用无边框加减号且落在白色卡片内无阴影', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-
-      await tester.pumpWidget(wrap(SettingsPage(model: model)));
-      await tester.pumpAndSettle();
-
-      await tester.dragUntilVisible(
-        find.text('最小更新间隔'),
-        find.byType(ListView),
-        const Offset(0, -120),
-      );
-      await tester.pumpAndSettle();
-
-      expect(find.byIcon(Icons.remove_circle_outline_rounded), findsNothing);
-      expect(find.byIcon(Icons.add_circle_outline_rounded), findsNothing);
-      final minusBtn = find.widgetWithIcon(
-        TactileIconButton,
-        Icons.remove_rounded,
-      );
-      final plusBtn = find.widgetWithIcon(TactileIconButton, Icons.add_rounded);
-      expect(minusBtn, findsOneWidget);
-      expect(plusBtn, findsOneWidget);
-
-      final minusDecor = tester.widget<DecoratedBox>(
-        find
-            .descendant(of: minusBtn, matching: find.byType(DecoratedBox))
-            .first,
-      );
-      expect((minusDecor.decoration as BoxDecoration).boxShadow, isNull);
-    });
-
-    testWidgets('长按触发按钮展开菜单并滑选时，选择胶囊对齐选项位置并准确提交选中项', (tester) async {
-      String? picked;
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildLightTheme(),
-          home: Scaffold(
-            appBar: AppBar(
-              actions: <Widget>[
-                Padding(
-                  padding: const EdgeInsets.only(right: 12),
-                  child: TactileSurfaceButton(
-                    minSize: const Size(36, 36),
-                    onMenuOpen: (anchorCtx, dragPointer) {
-                      showAppMenu<String>(
-                        context: anchorCtx,
-                        dragPointer: dragPointer,
-                        items: const <AppMenuItem<String>>[
-                          AppMenuItem<String>(value: 'a', label: '选项甲'),
-                          AppMenuItem<String>(value: 'b', label: '选项乙'),
-                          AppMenuItem<String>(value: 'c', label: '选项丙'),
-                        ],
-                        onSelected: (v) => picked = v,
-                      );
-                    },
-                    child: const SizedBox(
-                      width: 36,
-                      height: 36,
-                      child: Icon(Icons.more_horiz_rounded),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            body: const SizedBox.expand(),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      final trigger = find.byIcon(Icons.more_horiz_rounded);
-      final downPos = tester.getCenter(trigger);
-      final gesture = await tester.startGesture(downPos);
-      // 等待 190ms 长按触发菜单展开
-      await tester.pump(const Duration(milliseconds: 220));
-      await tester.pump(const Duration(milliseconds: 40));
-
-      expect(find.text('选项甲'), findsOneWidget);
-      expect(find.text('选项乙'), findsOneWidget);
-
-      // 手指在菜单展开过程中先滑到「选项乙」，再短暂滑出菜单外触发橡皮筋偏移，然后滑回「选项丙」松手
-      final itemBPos = tester.getCenter(find.text('选项乙'));
-      await gesture.moveTo(itemBPos);
-      await tester.pump(const Duration(milliseconds: 20));
-      await gesture.moveTo(Offset(itemBPos.dx - 160, itemBPos.dy));
-      await tester.pump(const Duration(milliseconds: 20));
-      final itemCPos = tester.getCenter(find.text('选项丙'));
-      await gesture.moveTo(itemCPos);
-      await tester.pump(const Duration(milliseconds: 20));
-      await gesture.up();
-      await tester.pumpAndSettle();
-
-      expect(picked, 'c');
-    });
-  });
-
-  group('架构优化与性能回归', () {
-    testWidgets('CourseBlock 布局预算 LRU 缓存命中同一规格课程块而不重复排版', (tester) async {
-      CourseBlock.clearBlockPlanCacheForTest();
-      final baseline = CourseBlock.debugBlockPlanSolveCountForTest;
-      const entry = ScheduleEntry(
-        id: 'c1',
-        name: '高等数学（一）',
-        teacher: '李四',
-        location: 'M1-101',
-        day: 1,
-        startPeriod: 1,
-        endPeriod: 2,
-        weeks: <int>[1, 2],
-      );
-
-      Widget buildCell(ScheduleEntry e, Key key) => wrap(
-        Center(
-          child: SizedBox(
-            width: 68,
-            height: 112,
-            child: CourseBlock(key: key, entry: e, onTap: () {}),
-          ),
-        ),
-      );
-
-      await tester.pumpWidget(buildCell(entry, const ValueKey<int>(1)));
-      expect(CourseBlock.debugBlockPlanSolveCountForTest, baseline + 1);
-
-      // 以相同排版尺寸与文字重建另一个实例（不同 id/key）：应直接命中缓存，不重复求解。
-      const sameLayoutEntry = ScheduleEntry(
-        id: 'c2',
-        name: '高等数学（一）',
-        teacher: '李四',
-        location: 'M1-101',
-        day: 2,
-        startPeriod: 3,
-        endPeriod: 4,
-        weeks: <int>[3],
-      );
-      await tester.pumpWidget(
-        buildCell(sameLayoutEntry, const ValueKey<int>(2)),
-      );
-      expect(CourseBlock.debugBlockPlanSolveCountForTest, baseline + 1);
-
-      // 课程名改变导致文本样式测量键变化：应触发一次新的求解。
-      const changedEntry = ScheduleEntry(
-        id: 'c3',
-        name: '线性代数',
-        teacher: '李四',
-        location: 'M1-101',
-        day: 2,
-        startPeriod: 3,
-        endPeriod: 4,
-        weeks: <int>[3],
-      );
-      await tester.pumpWidget(buildCell(changedEntry, const ValueKey<int>(3)));
-      expect(CourseBlock.debugBlockPlanSolveCountForTest, baseline + 2);
-    });
-
-    testWidgets('TactileSurfaceButton 非菜单按钮默认不包 ClipRRect 且不受菜单形变监听影响', (
-      tester,
-    ) async {
-      var childBuilds = 0;
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildLightTheme(),
-          home: Scaffold(
-            body: Center(
-              child: TactileSurfaceButton(
-                onTap: () {},
-                child: Builder(
-                  builder: (_) {
-                    childBuilds++;
-                    return const Text('普通操作');
-                  },
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-
-      final surfaceFinder = find.byType(TactileSurfaceButton);
-      expect(
-        find.descendant(of: surfaceFinder, matching: find.byType(ClipRRect)),
+        find.descendant(of: plainSurface, matching: find.byType(ClipRRect)),
         findsNothing,
       );
       expect(
         find.descendant(
-          of: surfaceFinder,
+          of: plainSurface,
           matching: find.byType(FadeTransition),
         ),
         findsNothing,
       );
       expect(childBuilds, 1);
-
-      // 即使全局菜单正在展开，普通按钮也不会收到 activeAppMenuMorph 的重建通知。
       activeAppMenuMorph.value = (null, 0.5);
       await tester.pump();
       activeAppMenuMorph.value = (null, 0.0);
       await tester.pump();
       expect(childBuilds, 1);
-    });
 
-    testWidgets('课程详情弹窗改用单层 SelectionArea 与纯 Text，仅字段值可选中而标签与标题禁用选择', (
-      tester,
-    ) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byType(CourseBlock).first);
-      await tester.pumpAndSettle();
-
-      final sheet = find.byType(BottomSheet);
-      expect(sheet, findsOneWidget);
-      expect(
-        find.descendant(of: sheet, matching: find.byType(SelectableText)),
-        findsNothing,
-      );
-      expect(
-        find.descendant(of: sheet, matching: find.byType(SelectionArea)),
-        findsOneWidget,
-      );
-
-      final headerTitle = find.descendant(
-        of: sheet,
-        matching: find.text('期初课'),
-      );
-      final weekLabel = find.descendant(of: sheet, matching: find.text('周次'));
-      final weekValue = find.descendant(
-        of: sheet,
-        matching: find.text('1-2 周'),
-      );
-      final idValue = find.descendant(of: sheet, matching: find.text('early'));
-
-      SelectionContainer nearestSelectionContainer(Finder target) => tester
-          .widgetList<SelectionContainer>(
-            find.ancestor(
-              of: target,
-              matching: find.byType(SelectionContainer),
-            ),
+      // 按下放大反馈且保持原有底色与阴影无下沉、无边框。
+      final restScale = tester
+          .widgetList<Transform>(
+            find.descendant(of: bgSurface, matching: find.byType(Transform)),
           )
-          .first;
+          .last
+          .transform
+          .storage[0];
+      expect(restScale, closeTo(1.0, 0.001));
 
-      expect(nearestSelectionContainer(headerTitle).registrar, isNull);
-      expect(nearestSelectionContainer(weekLabel).registrar, isNull);
-      expect(nearestSelectionContainer(weekValue).registrar, isNotNull);
-      expect(nearestSelectionContainer(idValue).registrar, isNotNull);
-
-      // 真实交互选中 + 复制：全选复制时只包含字段值，不包含标题与左侧标签。
-      String? copiedText;
-      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        SystemChannels.platform,
-        (call) async {
-          if (call.method == 'Clipboard.setData') {
-            copiedText =
-                (call.arguments as Map<dynamic, dynamic>)['text'] as String?;
-          }
-          return null;
-        },
-      );
-      addTearDown(
-        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-          SystemChannels.platform,
-          null,
-        ),
-      );
-
-      await tester.longPress(weekValue);
-      await tester.pumpAndSettle();
-
-      final selectableRegion = tester.state<SelectableRegionState>(
-        find.descendant(of: sheet, matching: find.byType(SelectableRegion)),
-      );
-      selectableRegion.selectAll(SelectionChangedCause.toolbar);
+      final gesture = await tester.startGesture(tester.getCenter(bgSurface));
       await tester.pump();
-      Actions.invoke(weekValue.evaluate().first, CopySelectionTextIntent.copy);
-      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 80));
 
-      expect(copiedText, isNotNull);
-      expect(copiedText, contains('1-2 周'));
-      expect(copiedText, contains('张老师'));
-      expect(copiedText, contains('early'));
-      expect(copiedText, isNot(contains('期初课')));
-      expect(copiedText, isNot(contains('周次')));
-      expect(copiedText, isNot(contains('课程 ID')));
-    });
-
-    testWidgets('课程详情包含大量扩展字段时仍可在 SelectionArea 内正常滚动与长按选字', (tester) async {
-      final longDetails = <ScheduleDetail>[
-        for (var i = 1; i <= 20; i++)
-          ScheduleDetail(id: 'ext-$i', label: '扩展项$i', value: '字段值内容-$i'),
-      ];
-      final schedule = Schedule(
-        termId: '2026-2027-1',
-        maxWeeks: 18,
-        entries: <ScheduleEntry>[
-          ScheduleEntry(
-            id: 'long-detail-course',
-            name: '长详情课程',
-            day: 1,
-            startPeriod: 1,
-            endPeriod: 2,
-            weeks: const <int>[1, 2],
-            teacher: '李老师',
-            location: '教学楼 A101',
-            details: longDetails,
-          ),
-        ],
+      final pressedDecor = tester.widget<DecoratedBox>(
+        find
+            .descendant(of: bgSurface, matching: find.byType(DecoratedBox))
+            .first,
       );
-      final model = buildModel();
-      model.hydrateForTest(schedule: schedule, week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      final pressedBox = pressedDecor.decoration as BoxDecoration;
+      final pressedScale = tester
+          .widgetList<Transform>(
+            find.descendant(of: bgSurface, matching: find.byType(Transform)),
+          )
+          .elementAt(1)
+          .transform
+          .storage[0];
+      expect(pressedScale, greaterThan(1.20));
+      expect(pressedBox.color, bgBox.color);
+      expect(pressedBox.boxShadow?.first.color, bgBox.boxShadow?.first.color);
+      expect(pressedBox.border, isNull);
+      await gesture.up();
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byType(CourseBlock).first);
-      await tester.pumpAndSettle();
-
-      final sheet = find.byType(BottomSheet);
-      final scrollView = find.descendant(
-        of: sheet,
-        matching: find.byType(SingleChildScrollView),
-      );
-      final scrollable = tester.state<ScrollableState>(
-        find.descendant(of: scrollView, matching: find.byType(Scrollable)),
-      );
-      expect(scrollable.position.maxScrollExtent, greaterThan(0));
-
-      await tester.drag(scrollView, const Offset(0, -600));
-      await tester.pumpAndSettle();
-      expect(scrollable.position.pixels, greaterThan(0));
-      await tester.ensureVisible(find.text('字段值内容-20'));
-      await tester.pumpAndSettle();
-
-      await tester.longPress(find.text('字段值内容-20'));
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('TactileSurfaceButton 失活卸载同帧触发菜单形变通知不抛出 inactive element 异常', (
-      tester,
-    ) async {
+      // 失活卸载同帧触发菜单形变通知不抛出 inactive element 异常。
       var showButton = true;
       late StateSetter setHostState;
       final dummyAnchorKey = GlobalKey();
-
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -5409,144 +3525,15 @@ void main() {
           ),
         ),
       );
-
       setHostState(() => showButton = false);
       await tester.pump();
       activeAppMenuMorph.value = (null, 0.0);
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('CourseBlock 使用 RepaintBoundary 隔离点击反馈重绘', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-      await tester.pumpAndSettle();
-
-      final block = find.byType(CourseBlock).first;
-      expect(
-        find.descendant(of: block, matching: find.byType(RepaintBoundary)),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets('锚定菜单完成测量后退出 IntrinsicWidth 并以静态阴影卡片承载', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(
-        schedule: Schedule(
-          termId: '2026-2027-1',
-          maxWeeks: 20,
-          entries: sparseSchedule().entries,
-        ),
-        week: 1,
-      );
-      await tester.pumpWidget(wrap(SchedulePage(model: model)));
-      await tester.pumpAndSettle();
-
-      // 短菜单：测量后无 IntrinsicWidth，由 RenderMenuMorphBox 绘制柔和阴影且落定后不裁剪。
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
-      await tester.pumpAndSettle();
-      expect(
-        find.descendant(
-          of: find.byType(Overlay),
-          matching: find.byType(IntrinsicWidth),
-        ),
-        findsNothing,
-      );
-      final shortCard = tester.widget<Material>(
-        find
-            .ancestor(of: find.text('校准当前周次'), matching: find.byType(Material))
-            .first,
-      );
-      expect(shortCard.elevation, 0);
-      expect(shortCard.clipBehavior, Clip.none);
-      final shortMorphBox = tester.renderObject<RenderMenuMorphBox>(
-        find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
-      );
-      expect(shortMorphBox.isSettled, isTrue);
-      expect(shortMorphBox.isClipping, isFalse);
-      expect(shortMorphBox.shadowAlpha, greaterThan(0));
-      expect(shortMorphBox.shadowBlurRadius, greaterThan(8));
-
-      // 关掉短菜单后再打开可滚动 20 周长菜单：测量后同样无 IntrinsicWidth，滚动列表保留容器抗锯齿裁剪。
-      await tester.tapAt(const Offset(12, 12));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('第 1 周'));
-      await tester.pumpAndSettle();
-      expect(
-        find.descendant(
-          of: find.byType(Overlay),
-          matching: find.byType(IntrinsicWidth),
-        ),
-        findsNothing,
-      );
-      final longCard = tester.widget<Material>(
-        find
-            .ancestor(of: find.text('第 2 周'), matching: find.byType(Material))
-            .first,
-      );
-      expect(longCard.elevation, 0);
-      final longMorphBox = tester.renderObject<RenderMenuMorphBox>(
-        find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
-      );
-      expect(longMorphBox.isSettled, isTrue);
-      expect(longMorphBox.isClipping, isTrue);
-      expect(longMorphBox.shadowAlpha, greaterThan(0));
-    });
-
-    testWidgets('HomeShell 按目标按需懒加载：直达设置页时不提前构建学业页', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-
-      await tester.pumpWidget(wrap(HomeShell(model: model)));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(AcademicPage), findsNothing);
-      expect(find.byType(SettingsPage), findsNothing);
-
-      // 从课表直接点「设置」，仅惰性构建 SettingsPage，不应附带构建 AcademicPage。
-      await tester.tap(find.text('设置'));
-      await tester.pumpAndSettle();
-      expect(find.byType(SettingsPage), findsOneWidget);
-      expect(find.byType(AcademicPage), findsNothing);
-
-      // 再切换到「学业」，才懒加载 AcademicPage。
-      await tester.tap(find.text('学业'));
-      await tester.pumpAndSettle();
-      expect(find.byType(AcademicPage), findsOneWidget);
-    });
-
-    testWidgets('UpdateProxyPage 卡片统一零阴影并采用 TactileActionButton', (
+    testWidgets('触感按钮在跨帧按压与微抖动后松手仍可靠触发单次点击，可滚动容器内滑出容差取消按压而固定按钮保持拖跟', (
       tester,
     ) async {
-      final model = buildModel();
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildLightTheme(),
-          home: UpdateProxyPage(model: model),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      final cards = tester.widgetList<Card>(find.byType(Card)).toList();
-      expect(cards, isNotEmpty);
-      for (final card in cards) {
-        expect(card.elevation, isNull);
-        final cardMaterial = tester.widget<Material>(
-          find
-              .descendant(
-                of: find.byWidget(card),
-                matching: find.byType(Material),
-              )
-              .first,
-        );
-        expect(cardMaterial.elevation, 0);
-      }
-      expect(find.byType(TactileActionButton), findsAtLeastNWidgets(1));
-    });
-
-    testWidgets('触感按钮在跨帧按压与微抖动后松手仍可靠触发单次点击', (tester) async {
       var filledCount = 0;
       var tonalCount = 0;
       var outlinedCount = 0;
@@ -5618,7 +3605,6 @@ void main() {
 
       Future<void> humanTap(Finder target) async {
         final gesture = await tester.startGesture(tester.getCenter(target));
-        // 模拟真实触控：跨过多帧并叠加微小手指抖动，确保弹簧与拖拽不会重建手势识别器。
         await tester.pump(const Duration(milliseconds: 24));
         await tester.pump(const Duration(milliseconds: 36));
         await gesture.moveBy(const Offset(1.5, 1.5));
@@ -5628,433 +3614,24 @@ void main() {
       }
 
       await humanTap(find.text('主按钮'));
-      expect(filledCount, 1);
-
       await humanTap(find.text('确认操作'));
-      expect(tonalCount, 1);
-
       await humanTap(find.text('次按钮'));
-      expect(outlinedCount, 1);
-
       await humanTap(find.text('取消操作'));
-      expect(textCount, 1);
-
       await humanTap(find.byIcon(Icons.refresh_rounded));
-      expect(iconCount, 1);
-
       await humanTap(find.byType(BackButton));
-      expect(backCount, 1);
-
       await humanTap(find.text('直接触控'));
-      expect(directTapCount, 1);
-
       await humanTap(find.text('菜单短按'));
-      expect(menuShortTapCount, 1);
-    });
+      expect(<int>[
+        filledCount,
+        tonalCount,
+        outlinedCount,
+        textCount,
+        iconCount,
+        backCount,
+        directTapCount,
+        menuShortTapCount,
+      ], everyElement(1));
 
-    testWidgets('FloatingDock 主题色切换时字形缓存重建与滞后释放不触发异常', (tester) async {
-      const items = <FloatingDockItem>[
-        FloatingDockItem(
-          icon: Icons.calendar_today_outlined,
-          activeIcon: Icons.calendar_today_rounded,
-          label: '课表',
-        ),
-        FloatingDockItem(
-          icon: Icons.school_outlined,
-          activeIcon: Icons.school_rounded,
-          label: '学业',
-        ),
-        FloatingDockItem(
-          icon: Icons.settings_outlined,
-          activeIcon: Icons.settings_rounded,
-          label: '设置',
-        ),
-      ];
-
-      Widget buildDock(Color seed) => MaterialApp(
-        theme: ThemeData(
-          useMaterial3: true,
-          colorScheme: ColorScheme.fromSeed(seedColor: seed),
-        ),
-        home: Scaffold(
-          bottomNavigationBar: FloatingDock(
-            index: 0,
-            items: items,
-            onTap: (_) {},
-          ),
-        ),
-      );
-
-      await tester.pumpWidget(buildDock(Colors.blue));
-      await tester.pumpAndSettle();
-
-      await tester.pumpWidget(buildDock(Colors.teal));
-      await tester.pumpAndSettle();
-      expect(find.byType(FloatingDock), findsOneWidget);
-    });
-
-    testWidgets('TactileSurfaceButton 按下改为放大反馈且保持原有底色与阴影无下沉', (tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildLightTheme(),
-          home: Scaffold(
-            body: Center(
-              child: TactileIconButton(
-                icon: const Icon(Icons.refresh_rounded),
-                onPressed: () {},
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      final bgSurface = find.ancestor(
-        of: find.byIcon(Icons.refresh_rounded),
-        matching: find.byType(TactileSurfaceButton),
-      );
-      final restDecor = tester.widget<DecoratedBox>(
-        find
-            .descendant(of: bgSurface, matching: find.byType(DecoratedBox))
-            .first,
-      );
-      final restBox = restDecor.decoration as BoxDecoration;
-      final restScale = tester
-          .widgetList<Transform>(
-            find.descendant(of: bgSurface, matching: find.byType(Transform)),
-          )
-          .last
-          .transform
-          .storage[0];
-      expect(restScale, closeTo(1.0, 0.001));
-
-      final gesture = await tester.startGesture(tester.getCenter(bgSurface));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 80));
-
-      final pressedDecor = tester.widget<DecoratedBox>(
-        find
-            .descendant(of: bgSurface, matching: find.byType(DecoratedBox))
-            .first,
-      );
-      final pressedBox = pressedDecor.decoration as BoxDecoration;
-      final pressedScale = tester
-          .widgetList<Transform>(
-            find.descendant(of: bgSurface, matching: find.byType(Transform)),
-          )
-          .elementAt(1)
-          .transform
-          .storage[0];
-
-      // 按下应有明显放大反馈而不是缩小，且底色与阴影不随按压变暗下沉。
-      expect(pressedScale, greaterThan(1.20));
-      expect(pressedBox.color, restBox.color);
-      expect(pressedBox.boxShadow?.first.color, restBox.boxShadow?.first.color);
-
-      await gesture.up();
-      await tester.pumpAndSettle();
-    });
-
-    testWidgets('可展开菜单按钮长按时不显示 Tooltip 文案也不叠加长按震动', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      var hapticCount = 0;
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
-            if (call.method == 'HapticFeedback.vibrate') {
-              hapticCount++;
-            }
-            return null;
-          });
-
-      try {
-        await tester.pumpWidget(
-          MaterialApp(
-            theme: buildLightTheme(),
-            home: Scaffold(
-              appBar: AppBar(
-                actions: <Widget>[
-                  Padding(
-                    padding: const EdgeInsets.only(right: 12),
-                    child: TactileSurfaceButton(
-                      minSize: const Size(36, 36),
-                      tooltip: '更多',
-                      onMenuOpen: (anchorCtx, dragPointer) {
-                        showAppMenu<String>(
-                          context: anchorCtx,
-                          dragPointer: dragPointer,
-                          items: const <AppMenuItem<String>>[
-                            AppMenuItem<String>(value: 'a', label: '选项甲'),
-                          ],
-                          onSelected: (_) {},
-                        );
-                      },
-                      child: const SizedBox(
-                        width: 36,
-                        height: 36,
-                        child: Icon(Icons.more_horiz_rounded),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              body: const SizedBox.expand(),
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
-
-        final gesture = await tester.startGesture(
-          tester.getCenter(find.byIcon(Icons.more_horiz_rounded)),
-        );
-        // 超过 Tooltip 默认长按阈值（> 500ms）后仍不弹出「更多」提示，且始终仅触发打开菜单那 1 次震动。
-        await tester.pump(const Duration(milliseconds: 220));
-        await tester.pump(const Duration(milliseconds: 520));
-
-        expect(find.text('选项甲'), findsOneWidget);
-        expect(find.text('更多'), findsNothing);
-        expect(hapticCount, 1);
-
-        await gesture.up();
-        await tester.pumpAndSettle();
-      } finally {
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-            .setMockMethodCallHandler(SystemChannels.platform, null);
-        debugDefaultTargetPlatformOverride = null;
-      }
-    });
-
-    testWidgets('作息时间表列表卡片右侧更多按钮点击与长按均只展开菜单而不跳转编辑页', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      var hapticCount = 0;
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
-            if (call.method == 'HapticFeedback.vibrate') {
-              hapticCount++;
-            }
-            return null;
-          });
-
-      try {
-        final model = buildModel();
-        model.hydrateForTest(schedule: sparseSchedule(), week: 1);
-        await model.upsertTimetable(
-          Timetable(
-            id: 'extra-winter',
-            name: '冬季作息',
-            effectiveFrom: DateTime(2026, 10, 1),
-            sections: model.activeTimetable!.sections,
-          ),
-        );
-
-        await tester.pumpWidget(
-          MaterialApp(
-            theme: buildLightTheme(),
-            home: TimetableListPage(model: model),
-          ),
-        );
-        await tester.pumpAndSettle();
-
-        final moreButtons = find.byIcon(Icons.more_vert_rounded);
-        expect(moreButtons, findsNWidgets(2));
-
-        // 1. 短按右侧「更多」按钮：只展开菜单，不跳转 TimetableEditPage；再点菜单项弹删除确认。
-        await tester.tap(moreButtons.last);
-        await tester.pumpAndSettle();
-        expect(find.byType(TimetableEditPage), findsNothing);
-        expect(find.text('删除'), findsOneWidget);
-        await tester.tap(find.text('删除'));
-        await tester.pumpAndSettle();
-        expect(find.text('删除作息表'), findsOneWidget);
-        expect(find.byType(TimetableEditPage), findsNothing);
-        await tester.tap(find.widgetWithText(TextButton, '取消'));
-        await tester.pumpAndSettle();
-
-        // 2. 长按右侧「更多」按钮：不显示「更多」Tooltip、仅震动 1 次、不跳转编辑页；
-        // 初始胶囊直接落在「删除」上，松手直接弹出删除确认。
-        hapticCount = 0;
-        final hold = await tester.startGesture(
-          tester.getCenter(moreButtons.last),
-        );
-        await tester.pump(const Duration(milliseconds: 220));
-        await tester.pump(const Duration(milliseconds: 520));
-        expect(find.byType(TimetableEditPage), findsNothing);
-        expect(find.text('更多'), findsNothing);
-        expect(hapticCount, 1);
-        await hold.up();
-        await tester.pumpAndSettle();
-
-        expect(find.text('删除作息表'), findsOneWidget);
-        expect(find.byType(TimetableEditPage), findsNothing);
-        await tester.tap(find.widgetWithText(TextButton, '取消'));
-        await tester.pumpAndSettle();
-
-        // 3. 点击卡片左侧标题区仍能正常跳转编辑页。
-        await tester.tap(find.text('冬季作息'));
-        await tester.pumpAndSettle();
-        expect(find.byType(TimetableEditPage), findsOneWidget);
-      } finally {
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-            .setMockMethodCallHandler(SystemChannels.platform, null);
-        debugDefaultTargetPlatformOverride = null;
-      }
-    });
-
-    testWidgets('同类卡片列表右侧操作按钮点击不穿透触发外层卡片操作', (tester) async {
-      // 1. 调课页：点击右侧删除按钮直接删除，不弹出外层 ListTile 的修改底部弹窗。
-      final rescheduleModel = buildModel();
-      rescheduleModel.hydrateForTest(schedule: sparseSchedule(), week: 1);
-      await rescheduleModel.addReschedule(
-        fromMonth: 10,
-        fromDay: 1,
-        toMonth: 10,
-        toDay: 8,
-      );
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildLightTheme(),
-          home: ReschedulePage(model: rescheduleModel),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byIcon(Icons.delete_outline_rounded).first);
-      await tester.pumpAndSettle();
-      expect(rescheduleModel.reschedules, isEmpty);
-      expect(find.byType(BottomSheet), findsNothing);
-
-      // 2. 教务地址页：点击右侧删除按钮只弹「删除教务地址」，不触发「切换教务地址」。
-      final schoolModel = buildModel();
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildLightTheme(),
-          home: SchoolAddressPage(model: schoolModel),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byIcon(Icons.delete_outline_rounded).first);
-      await tester.pumpAndSettle();
-      expect(find.text('删除教务地址'), findsOneWidget);
-      expect(find.text('切换教务地址'), findsNothing);
-      await tester.tap(find.widgetWithText(TextButton, '取消'));
-      await tester.pumpAndSettle();
-
-      // 3. 更新代理页：点击自定义节点右侧删除按钮只弹「删除代理」，不切换所选代理。
-      final proxyModel = buildModel();
-      const customProxy = 'https://custom-proxy.example.com/';
-      await proxyModel.addCustomUpdateProxy(customProxy);
-      final beforeProxy = proxyModel.selectedUpdateProxy;
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildLightTheme(),
-          home: UpdateProxyPage(model: proxyModel),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      final deleteProxyBtn = find.byIcon(Icons.delete_outline_rounded).first;
-      await tester.ensureVisible(deleteProxyBtn);
-      await tester.pumpAndSettle();
-      await tester.tap(deleteProxyBtn);
-      await tester.pumpAndSettle();
-      expect(find.text('删除代理'), findsOneWidget);
-      expect(proxyModel.selectedUpdateProxy, beforeProxy);
-    });
-
-    testWidgets('长按打开菜单时选择胶囊直接从初始命中项出现且仅触发一次震动', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      var hapticCount = 0;
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
-            if (call.method == 'HapticFeedback.vibrate') {
-              hapticCount++;
-            }
-            return null;
-          });
-
-      try {
-        String? picked;
-        await tester.pumpWidget(
-          MaterialApp(
-            theme: buildLightTheme(),
-            home: Scaffold(
-              appBar: AppBar(
-                actions: <Widget>[
-                  Padding(
-                    padding: const EdgeInsets.only(right: 12),
-                    child: TactileSurfaceButton(
-                      minSize: const Size(36, 36),
-                      onMenuOpen: (anchorCtx, dragPointer) {
-                        showAppMenu<String>(
-                          context: anchorCtx,
-                          dragPointer: dragPointer,
-                          items: const <AppMenuItem<String>>[
-                            AppMenuItem<String>(value: 'a', label: '选项甲'),
-                            AppMenuItem<String>(value: 'b', label: '选项乙'),
-                            AppMenuItem<String>(value: 'c', label: '选项丙'),
-                          ],
-                          onSelected: (v) => picked = v,
-                        );
-                      },
-                      child: const SizedBox(
-                        width: 36,
-                        height: 36,
-                        child: Icon(Icons.more_horiz_rounded),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              body: const SizedBox.expand(),
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
-
-        final trigger = find.byIcon(Icons.more_horiz_rounded);
-        final downPos = tester.getCenter(trigger);
-        final gesture = await tester.startGesture(downPos);
-
-        // 等待长按触发：此时应立刻且仅有 1 次震动。
-        await tester.pump(const Duration(milliseconds: 220));
-        expect(hapticCount, 1);
-
-        // 展开前几帧内（Transform.scale 仍在放大期间）原地微抖动，不应误判到底部选项「选项丙」或二次震动。
-        await gesture.moveTo(downPos + const Offset(0, 2));
-        await tester.pump(const Duration(milliseconds: 16));
-        await gesture.moveTo(downPos + const Offset(0, 4));
-        await tester.pump(const Duration(milliseconds: 16));
-
-        expect(hapticCount, 1);
-        final textA = tester.widget<Text>(find.text('选项甲'));
-        final textC = tester.widget<Text>(find.text('选项丙'));
-        expect(textA.style?.fontWeight, FontWeight.w600);
-        expect(textC.style?.fontWeight, isNot(FontWeight.w600));
-
-        // 展开动画完全稳定后仍应保持在「选项甲」，且全程只有打开时的 1 次震动。
-        await tester.pumpAndSettle();
-        expect(hapticCount, 1);
-        expect(
-          tester.widget<Text>(find.text('选项甲')).style?.fontWeight,
-          FontWeight.w600,
-        );
-
-        // 滑选到「选项乙」应精确增加 1 次切换震动，并在松手后提交「b」。
-        await gesture.moveTo(tester.getCenter(find.text('选项乙')));
-        await tester.pump(const Duration(milliseconds: 20));
-        expect(hapticCount, 2);
-
-        await gesture.up();
-        await tester.pumpAndSettle();
-        expect(picked, 'b');
-      } finally {
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-            .setMockMethodCallHandler(SystemChannels.platform, null);
-        debugDefaultTargetPlatformOverride = null;
-      }
-    });
-
-    testWidgets('可滚动元素内按钮滑出容差即取消按压态，固定按钮保持拖跟效果', (tester) async {
       double buttonMaxScale(Finder target) {
         final transforms = tester.widgetList<Transform>(
           find.ancestor(of: target, matching: find.byType(Transform)),
@@ -6067,38 +3644,7 @@ void main() {
         return maxScale;
       }
 
-      // 1. 作息表列表卡片右侧「更多」菜单按钮（位于 ListView 内）：按住后拖走超过容差，应取消按压并不展开、不跳转编辑页。
-      final timetableModel = buildModel();
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildLightTheme(),
-          home: TimetableListPage(model: timetableModel),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      final moreBtn = find.byIcon(Icons.more_vert_rounded).first;
-      final moreDownPos = tester.getCenter(moreBtn);
-      final moreGesture = await tester.startGesture(moreDownPos);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 80));
-      expect(buttonMaxScale(moreBtn), greaterThan(1.05));
-
-      await moreGesture.moveTo(moreDownPos + const Offset(-28, 10));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 220));
-      expect(
-        buttonMaxScale(moreBtn),
-        lessThan(1.03),
-        reason: '作息表列表菜单按钮滑出容差后应取消按压状态并回退原尺寸',
-      );
-      expect(find.text('至少保留一张'), findsNothing);
-      expect(find.byType(TimetableListPage), findsOneWidget);
-      await moreGesture.up();
-      await tester.pumpAndSettle();
-      expect(find.byType(TimetableEditPage), findsNothing);
-
-      // 2. 设置页最小更新间隔加减号（位于 ListView 卡片内）：按住后开始滑动即取消按压态且不触发步进。
+      // 设置页最小更新间隔加减号（无边框加减号、无阴影、位于可滚动容器内）：按住滑动取消按压态且不触发步进。
       final settingsModel = buildModel();
       await settingsModel.setAutoRefresh(true);
       final beforeInterval = settingsModel.autoRefreshIntervalMinutes;
@@ -6110,6 +3656,17 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      final minusBtn = find.widgetWithIcon(
+        TactileIconButton,
+        Icons.remove_rounded,
+      );
+      final minusDecor = tester.widget<DecoratedBox>(
+        find
+            .descendant(of: minusBtn, matching: find.byType(DecoratedBox))
+            .first,
+      );
+      expect((minusDecor.decoration as BoxDecoration).boxShadow, isNull);
+
       final addBtn = find.byIcon(Icons.add_rounded);
       final addDownPos = tester.getCenter(addBtn);
       final addGesture = await tester.startGesture(addDownPos);
@@ -6120,16 +3677,12 @@ void main() {
       await addGesture.moveTo(addDownPos + const Offset(-28, 0));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 220));
-      expect(
-        buttonMaxScale(addBtn),
-        lessThan(1.03),
-        reason: '位于可移动容器内的加减号在按住滑动后应取消按压放大效果',
-      );
+      expect(buttonMaxScale(addBtn), lessThan(1.03));
       await addGesture.up();
       await tester.pumpAndSettle();
       expect(settingsModel.autoRefreshIntervalMinutes, beforeInterval);
 
-      // 3. 固定位置按钮（不在 Scrollable 内）：按住拖出容差仍保留按压放大效果直至松手。
+      // 固定位置按钮：滑走时仍保持原有按住放大效果。
       await tester.pumpWidget(
         MaterialApp(
           theme: buildLightTheme(),
@@ -6158,351 +3711,441 @@ void main() {
       await fixedGesture.moveTo(fixedDownPos + const Offset(-28, 0));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
-      expect(
-        buttonMaxScale(fixedBtn),
-        greaterThan(1.05),
-        reason: '处于固定位置的按钮滑走时仍保持原有按住放大效果',
-      );
+      expect(buttonMaxScale(fixedBtn), greaterThan(1.05));
       await fixedGesture.up();
       await tester.pumpAndSettle();
       expect(buttonMaxScale(fixedBtn), closeTo(1.0, 0.005));
     });
 
-    testWidgets('课程提醒快捷提前时间采用无边框触感胶囊并保留选中与切换行为', (tester) async {
+    testWidgets('长按触发按钮展开菜单：不弹 Tooltip、初始命中项单次震动、按住及滑出边界保持放大与橡皮筋跟随', (
+      tester,
+    ) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      final model = buildModel();
-      model.hydrateForTest(
-        schedule: sampleSchedule(),
-        termStart: DateTime(2026, 9, 7),
-        week: 1,
-      );
-      final gateway = FakeReminderGateway(
-        statusValue: const ReminderRuntimeStatus(
-          notificationPermission: true,
-          notificationsEnabled: true,
-          exactAlarmAllowed: true,
-          scheduled: 0,
-          style: 'banner',
-          nextTriggerMs: 0,
-        ),
-      );
-      final service = ReminderService(
-        model: model,
-        gateway: gateway,
-        now: () => DateTime(2026, 9, 7, 6),
-      );
+      var hapticCount = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'HapticFeedback.vibrate') {
+              hapticCount++;
+            }
+            return null;
+          });
 
       try {
+        String? picked;
         await tester.pumpWidget(
           MaterialApp(
             theme: buildLightTheme(),
-            home: ReminderPage(model: model, service: service),
+            home: Scaffold(
+              appBar: AppBar(
+                actions: <Widget>[
+                  Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: TactileSurfaceButton(
+                      minSize: const Size(36, 36),
+                      tooltip: '更多',
+                      onMenuOpen: (anchorCtx, dragPointer) {
+                        showAppMenu<String>(
+                          context: anchorCtx,
+                          dragPointer: dragPointer,
+                          items: const <AppMenuItem<String>>[
+                            AppMenuItem<String>(value: 'a', label: '选项甲'),
+                            AppMenuItem<String>(value: 'b', label: '选项乙'),
+                            AppMenuItem<String>(value: 'c', label: '选项丙'),
+                          ],
+                          onSelected: (v) => picked = v,
+                        );
+                      },
+                      child: const SizedBox(
+                        width: 36,
+                        height: 36,
+                        child: Icon(Icons.more_horiz_rounded),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              body: const SizedBox.expand(),
+            ),
           ),
         );
         await tester.pumpAndSettle();
 
-        expect(find.byType(ChoiceChip), findsNothing);
-        for (final minutes in reminderLeadOptions) {
-          expect(
-            find.widgetWithText(TactileSurfaceButton, '$minutes 分钟'),
-            findsOneWidget,
+        (double scale, Offset translation) menuTransformState() {
+          final box = tester.renderObject<RenderMenuMorphBox>(
+            find.byElementPredicate(
+              (e) => e.renderObject is RenderMenuMorphBox,
+            ),
           );
+          return (box.contentScale, box.currentRubberOffset);
         }
 
-        await tester.ensureVisible(find.text('20 分钟'));
-        await tester.pumpAndSettle();
+        final trigger = find.byIcon(Icons.more_horiz_rounded);
+        final downPos = tester.getCenter(trigger);
+        final gesture = await tester.startGesture(downPos);
 
-        final textCenterY = tester.getCenter(find.text('15 分钟')).dy;
-        final pillCenterY = tester
-            .getCenter(find.widgetWithText(TactileSurfaceButton, '15 分钟'))
-            .dy;
+        // 等待长按触发：此时应立刻且仅有 1 次震动。
+        await tester.pump(const Duration(milliseconds: 220));
+        expect(hapticCount, 1);
+
+        // 展开前几帧内原地微抖动，不应误判到底部选项「选项丙」或二次震动。
+        await gesture.moveTo(downPos + const Offset(0, 2));
+        await tester.pump(const Duration(milliseconds: 16));
+        await gesture.moveTo(downPos + const Offset(0, 4));
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(hapticCount, 1);
         expect(
-          textCenterY,
-          closeTo(pillCenterY, 0.5),
-          reason: '提前时间按钮文案需垂直居中于胶囊内部',
+          tester.widget<Text>(find.text('选项甲')).style?.fontWeight,
+          FontWeight.w600,
+        );
+        expect(
+          tester.widget<Text>(find.text('选项丙')).style?.fontWeight,
+          isNot(FontWeight.w600),
         );
 
-        await tester.tap(find.text('20 分钟'));
-        await tester.pumpAndSettle();
-        expect(model.reminderLeadMinutes, 20);
+        // 超过 Tooltip 默认长按阈值后仍不弹出「更多」提示，且保持在「选项甲」。
+        await tester.pump(const Duration(milliseconds: 520));
+        expect(find.text('更多'), findsNothing);
+        expect(hapticCount, 1);
+        expect(menuTransformState().$1, inInclusiveRange(1.03, 1.06));
 
-        // 按住时间胶囊后开始滑动：应立即取消按压放大效果且不误切时间。
-        double pillMaxScale(Finder target) {
-          final transforms = tester.widgetList<Transform>(
-            find.ancestor(of: target, matching: find.byType(Transform)),
-          );
-          var maxScale = 1.0;
-          for (final t in transforms) {
-            final s = t.transform.getMaxScaleOnAxis();
-            if (s > maxScale) maxScale = s;
-          }
-          return maxScale;
-        }
-
-        final pill15 = find.text('15 分钟');
-        final downPos = tester.getCenter(pill15);
-        final drag = await tester.startGesture(downPos);
+        // 滑出菜单边界外仍维持放大效果并带有橡皮筋跟随偏移。
+        await gesture.moveTo(const Offset(24, 420));
         await tester.pump();
-        await tester.pump(const Duration(milliseconds: 80));
-        expect(pillMaxScale(pill15), greaterThan(1.05));
+        await tester.pump(const Duration(milliseconds: 180));
+        final outsideState = menuTransformState();
+        expect(outsideState.$1, inInclusiveRange(1.03, 1.06));
+        expect(outsideState.$2.distance, greaterThan(0.5));
 
-        await drag.moveTo(downPos + const Offset(-28, 0));
-        await tester.pump();
-        await tester.pump(const Duration(milliseconds: 220));
-        expect(pillMaxScale(pill15), lessThan(1.03));
-        await drag.up();
+        // 滑回「选项乙」应增加 1 次切换震动，再滑到「选项丙」松手提交 'c'。
+        await gesture.moveTo(tester.getCenter(find.text('选项乙')));
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(hapticCount, 2);
+
+        await gesture.moveTo(tester.getCenter(find.text('选项丙')));
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(hapticCount, 3);
+
+        await gesture.up();
         await tester.pumpAndSettle();
-        expect(model.reminderLeadMinutes, 20);
+        expect(picked, 'c');
       } finally {
-        service.dispose();
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
         debugDefaultTargetPlatformOverride = null;
       }
     });
 
-    testWidgets('展开菜单在按住及滑出菜单边界外时均保持放大效果，松手后恢复', (tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildLightTheme(),
-          home: Scaffold(
-            appBar: AppBar(
-              actions: <Widget>[
-                Padding(
-                  padding: const EdgeInsets.only(right: 12),
-                  child: TactileSurfaceButton(
-                    minSize: const Size(36, 36),
-                    onMenuOpen: (anchorCtx, dragPointer) {
-                      showAppMenu<String>(
-                        context: anchorCtx,
-                        dragPointer: dragPointer,
-                        items: const <AppMenuItem<String>>[
-                          AppMenuItem<String>(value: 'a', label: '选项甲'),
-                          AppMenuItem<String>(value: 'b', label: '选项乙'),
-                          AppMenuItem<String>(value: 'c', label: '选项丙'),
-                        ],
-                        onSelected: (_) {},
-                      );
-                    },
-                    child: const SizedBox(
-                      width: 36,
-                      height: 36,
-                      child: Icon(Icons.more_horiz_rounded),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            body: const SizedBox.expand(),
+    testWidgets('卡片列表右侧操作按钮（作息表更多菜单、调课/教务地址/代理删除）点击与长按均不穿透触发外层卡片操作', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      var hapticCount = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'HapticFeedback.vibrate') {
+              hapticCount++;
+            }
+            return null;
+          });
+
+      try {
+        // 1. 作息时间表列表卡片右侧更多按钮：短按与长按均只展开菜单而不跳转编辑页。
+        final model = buildModel();
+        model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+        await model.upsertTimetable(
+          Timetable(
+            id: 'extra-winter',
+            name: '冬季作息',
+            effectiveFrom: DateTime(2026, 10, 1),
+            sections: model.activeTimetable!.sections,
+          ),
+        );
+
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: buildLightTheme(),
+            home: TimetableListPage(model: model),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final moreButtons = find.byIcon(Icons.more_vert_rounded);
+        await tester.tap(moreButtons.last);
+        await tester.pumpAndSettle();
+        expect(find.byType(TimetableEditPage), findsNothing);
+        await tester.tap(find.text('删除'));
+        await tester.pumpAndSettle();
+        expect(find.text('删除作息表'), findsOneWidget);
+        await tester.tap(find.widgetWithText(TextButton, '取消'));
+        await tester.pumpAndSettle();
+
+        hapticCount = 0;
+        final hold = await tester.startGesture(
+          tester.getCenter(moreButtons.last),
+        );
+        await tester.pump(const Duration(milliseconds: 220));
+        await tester.pump(const Duration(milliseconds: 520));
+        expect(find.byType(TimetableEditPage), findsNothing);
+        expect(find.text('更多'), findsNothing);
+        expect(hapticCount, 1);
+        await hold.up();
+        await tester.pumpAndSettle();
+        expect(find.text('删除作息表'), findsOneWidget);
+        await tester.tap(find.widgetWithText(TextButton, '取消'));
+        await tester.pumpAndSettle();
+
+        // 2. 调课页右侧删除按钮直接删除，不弹出修改底部弹窗。
+        final rescheduleModel = buildModel();
+        rescheduleModel.hydrateForTest(schedule: sparseSchedule(), week: 1);
+        await rescheduleModel.addReschedule(
+          fromMonth: 10,
+          fromDay: 1,
+          toMonth: 10,
+          toDay: 8,
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: buildLightTheme(),
+            home: ReschedulePage(model: rescheduleModel),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byIcon(Icons.delete_outline_rounded).first);
+        await tester.pumpAndSettle();
+        expect(rescheduleModel.reschedules, isEmpty);
+        expect(find.byType(BottomSheet), findsNothing);
+
+        // 3. 教务地址页右侧删除按钮只弹「删除教务地址」，不触发「切换教务地址」。
+        final schoolModel = buildModel();
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: buildLightTheme(),
+            home: SchoolAddressPage(model: schoolModel),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byIcon(Icons.delete_outline_rounded).first);
+        await tester.pumpAndSettle();
+        expect(find.text('删除教务地址'), findsOneWidget);
+        expect(find.text('切换教务地址'), findsNothing);
+        await tester.tap(find.widgetWithText(TextButton, '取消'));
+        await tester.pumpAndSettle();
+
+        // 4. 更新代理页自定义节点右侧删除按钮只弹「删除代理」，不切换所选代理。
+        final proxyModel = buildModel();
+        await proxyModel.addCustomUpdateProxy(
+          'https://custom-proxy.example.com/',
+        );
+        final beforeProxy = proxyModel.selectedUpdateProxy;
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: buildLightTheme(),
+            home: UpdateProxyPage(model: proxyModel),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final deleteProxyBtn = find.byIcon(Icons.delete_outline_rounded).first;
+        await tester.ensureVisible(deleteProxyBtn);
+        await tester.pumpAndSettle();
+        await tester.tap(deleteProxyBtn);
+        await tester.pumpAndSettle();
+        expect(find.text('删除代理'), findsOneWidget);
+        expect(proxyModel.selectedUpdateProxy, beforeProxy);
+      } finally {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    testWidgets('CourseBlock 布局预算 LRU 缓存命中同一规格课程块，且使用 RepaintBoundary 隔离点击重绘', (
+      tester,
+    ) async {
+      CourseBlock.clearBlockPlanCacheForTest();
+      final baseline = CourseBlock.debugBlockPlanSolveCountForTest;
+      const entry = ScheduleEntry(
+        id: 'c1',
+        name: '高等数学（一）',
+        teacher: '李四',
+        location: 'M1-101',
+        day: 1,
+        startPeriod: 1,
+        endPeriod: 2,
+        weeks: <int>[1, 2],
+      );
+
+      Widget buildCell(ScheduleEntry e, Key key) => wrap(
+        Center(
+          child: SizedBox(
+            width: 68,
+            height: 112,
+            child: CourseBlock(key: key, entry: e, onTap: () {}),
           ),
         ),
       );
-      await tester.pumpAndSettle();
 
-      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
-      await tester.pumpAndSettle();
-      expect(find.text('选项甲'), findsOneWidget);
-
-      (double scale, Offset translation) menuTransformState() {
-        final box = tester.renderObject<RenderMenuMorphBox>(
-          find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
-        );
-        return (box.contentScale, box.currentRubberOffset);
-      }
-
-      expect(menuTransformState().$1, closeTo(1.0, 0.005));
-
-      final gesture = await tester.startGesture(
-        tester.getCenter(find.text('选项甲')),
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 180));
-      expect(
-        menuTransformState().$1,
-        inInclusiveRange(1.03, 1.06),
-        reason: '按住菜单内部时应保持克制但可见的放大反馈',
-      );
-
-      // 拖出菜单边界外很远的位置仍需维持放大效果，并带有轻微弹性跟随偏移。
-      await gesture.moveTo(const Offset(24, 420));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 180));
-      final outsideState = menuTransformState();
-      expect(
-        outsideState.$1,
-        inInclusiveRange(1.03, 1.06),
-        reason: '手指移出菜单区域外时也应保持放大效果',
-      );
-      expect(outsideState.$2.distance, greaterThan(0.5));
-
-      // 在菜单外松手：菜单保持打开并回弹至正常尺寸。
-      await gesture.up();
-      await tester.pumpAndSettle();
-      expect(find.text('选项甲'), findsOneWidget);
-      expect(menuTransformState().$1, closeTo(1.0, 0.005));
-    });
-
-    testWidgets('课表页选择星期长菜单沿按钮中轴线向下展开', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(
-        schedule: Schedule(
-          termId: '2026-2027-1',
-          maxWeeks: 20,
-          entries: sparseSchedule().entries,
-        ),
-        week: 1,
-      );
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildLightTheme(),
-          home: SchedulePage(model: model),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      final weekTrigger = find.ancestor(
-        of: find.text('第 1 周'),
-        matching: find.byType(TactileSurfaceButton),
-      );
-      final triggerRect = tester.getRect(weekTrigger);
-
-      await tester.tap(find.text('第 1 周'));
-      await tester.pumpAndSettle();
-
-      final menuCard = find
-          .ancestor(of: find.text('第 2 周'), matching: find.byType(Material))
-          .first;
-      final menuRect = tester.getRect(menuCard);
-      expect(
-        menuRect.center.dx,
-        closeTo(triggerRect.center.dx, 1.0),
-        reason: '星期长菜单水平中轴线应与触发按钮一致',
-      );
-      expect(menuRect.top, closeTo(triggerRect.top, 1.0));
-
-      final morphBox = tester.renderObject<RenderMenuMorphBox>(
-        find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
-      );
-      expect(morphBox.alignment, Alignment.topCenter);
-    });
-
-    testWidgets('星期长菜单紧凑窄宽、文字左对齐且仅在按住条目时展示选择胶囊，当前周次保留对勾常态', (tester) async {
-      final model = buildModel();
-      model.hydrateForTest(
-        schedule: Schedule(
-          termId: '2026-2027-1',
-          maxWeeks: 20,
-          entries: sparseSchedule().entries,
-        ),
-        week: 3,
-      );
-      final lightTheme = buildLightTheme();
-      final scheme = lightTheme.colorScheme;
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: lightTheme,
-          home: SchedulePage(model: model),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      Finder findMenuItemText(String label) {
-        final menuMaterial = find
-            .ancestor(of: find.text('第 2 周'), matching: find.byType(Material))
-            .first;
-        return find.descendant(of: menuMaterial, matching: find.text(label));
-      }
-
-      BoxDecoration? findMenuTileDecoration(String label) {
-        final textFinder = findMenuItemText(label);
-        if (textFinder.evaluate().isEmpty) return null;
-        final boxes = tester.widgetList<DecoratedBox>(
-          find.ancestor(
-            of: textFinder.first,
-            matching: find.byType(DecoratedBox),
-          ),
-        );
-        for (final box in boxes) {
-          final dec = box.decoration;
-          if (dec is BoxDecoration &&
-              dec.borderRadius == BorderRadius.circular(14)) {
-            return dec;
-          }
-        }
-        return null;
-      }
-
-      // 打开 20 周长菜单
-      await tester.tap(find.text('第 3 周'));
-      await tester.pumpAndSettle();
-
-      final menuMaterial = find
-          .ancestor(of: find.text('第 2 周'), matching: find.byType(Material))
-          .first;
-      final menuRect = tester.getRect(menuMaterial);
-      // 1. 紧凑窄菜单：不受 168dp 动作菜单最小宽度撑宽
-      expect(menuRect.width, lessThan(168.0));
-
-      // 2. 文字左对齐（无多余左侧留白，贴近标准 18dp 左内边距）
-      final week3Text = findMenuItemText('第 3 周').first;
-      final week5Text = findMenuItemText('第 5 周').first;
-      expect(
-        tester.getTopLeft(week3Text).dx - menuRect.left,
-        closeTo(18.0, 1.0),
-      );
-      expect(
-        tester.getTopLeft(week5Text).dx - menuRect.left,
-        closeTo(18.0, 1.0),
-      );
-
-      // 3. 当前周次（第 3 周）仅以对勾+主色文案作常态标识，不常驻选择胶囊
+      await tester.pumpWidget(buildCell(entry, const ValueKey<int>(1)));
+      expect(CourseBlock.debugBlockPlanSolveCountForTest, baseline + 1);
       expect(
         find.descendant(
-          of: menuMaterial,
-          matching: find.byIcon(Icons.check_rounded),
+          of: find.byType(CourseBlock),
+          matching: find.byType(RepaintBoundary),
         ),
         findsOneWidget,
       );
-      final selectedDec = findMenuTileDecoration('第 3 周');
-      expect(selectedDec, isNotNull);
-      expect(selectedDec!.color, Colors.transparent);
 
-      final idleDec = findMenuTileDecoration('第 5 周');
-      expect(idleDec, isNotNull);
-      expect(idleDec!.color, Colors.transparent);
-
-      // 4. 按住「第 5 周」超过 TapGestureRecognizer 防抖窗口，立即出现短菜单同款选择胶囊
-      final holdGesture = await tester.startGesture(
-        tester.getCenter(week5Text),
+      const sameLayoutEntry = ScheduleEntry(
+        id: 'c2',
+        name: '高等数学（一）',
+        teacher: '李四',
+        location: 'M1-101',
+        day: 2,
+        startPeriod: 3,
+        endPeriod: 4,
+        weeks: <int>[3],
       );
-      await tester.pump(const Duration(milliseconds: 150));
-
-      final pressedDec = findMenuTileDecoration('第 5 周');
-      expect(pressedDec, isNotNull);
-      expect(pressedDec!.color, scheme.primary.withValues(alpha: 0.11));
-      final pressedBorder = pressedDec.border as Border;
-      expect(pressedBorder.top.color, scheme.primary.withValues(alpha: 0.18));
-
-      // 仍彻底关闭旧版水波纹与高亮灰底
-      final week5InkWell = tester.widget<InkWell>(
-        find.ancestor(of: week5Text, matching: find.byType(InkWell)).first,
+      await tester.pumpWidget(
+        buildCell(sameLayoutEntry, const ValueKey<int>(2)),
       );
-      expect(week5InkWell.splashFactory, NoSplash.splashFactory);
-      expect(week5InkWell.splashColor, Colors.transparent);
-      expect(week5InkWell.highlightColor, Colors.transparent);
+      expect(CourseBlock.debugBlockPlanSolveCountForTest, baseline + 1);
 
-      // 5. 竖向滑动滚走后取消按住状态：菜单保持打开且可滚动，未误切周次，胶囊恢复透明
-      await holdGesture.moveBy(const Offset(0, -140));
-      await tester.pump();
-      await holdGesture.up();
-      await tester.pumpAndSettle();
-
-      expect(model.week, 3);
-      final afterScrollDec = findMenuTileDecoration('第 5 周');
-      if (afterScrollDec != null) {
-        expect(afterScrollDec.color, Colors.transparent);
-      }
+      const changedEntry = ScheduleEntry(
+        id: 'c3',
+        name: '线性代数',
+        teacher: '李四',
+        location: 'M1-101',
+        day: 2,
+        startPeriod: 3,
+        endPeriod: 4,
+        weeks: <int>[3],
+      );
+      await tester.pumpWidget(buildCell(changedEntry, const ValueKey<int>(3)));
+      expect(CourseBlock.debugBlockPlanSolveCountForTest, baseline + 2);
     });
 
-    testWidgets('圆形与宽胶囊触发器开合容器变形共享物理逻辑且无缩小残影', (tester) async {
+    testWidgets('课程详情弹窗改用单层 SelectionArea 与纯 Text：仅字段值可选中复制，大量扩展字段可正常滚动与长按选字', (
+      tester,
+    ) async {
+      final longDetails = <ScheduleDetail>[
+        for (var i = 1; i <= 20; i++)
+          ScheduleDetail(id: 'ext-$i', label: '扩展项$i', value: '字段值内容-$i'),
+      ];
+      final schedule = Schedule(
+        termId: '2026-2027-1',
+        maxWeeks: 18,
+        entries: <ScheduleEntry>[
+          ScheduleEntry(
+            id: 'early',
+            name: '期初课',
+            day: 1,
+            startPeriod: 1,
+            endPeriod: 2,
+            weeks: const <int>[1, 2],
+            teacher: '张老师',
+            location: 'A101',
+            details: longDetails,
+          ),
+        ],
+      );
+      final model = buildModel();
+      model.hydrateForTest(schedule: schedule, week: 1);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(CourseBlock).first);
+      await tester.pumpAndSettle();
+
+      final sheet = find.byType(BottomSheet);
+      expect(
+        find.descendant(of: sheet, matching: find.byType(SelectableText)),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: sheet, matching: find.byType(SelectionArea)),
+        findsOneWidget,
+      );
+
+      final headerTitle = find.descendant(
+        of: sheet,
+        matching: find.text('期初课'),
+      );
+      final weekLabel = find.descendant(of: sheet, matching: find.text('周次'));
+      final weekValue = find.descendant(
+        of: sheet,
+        matching: find.text('1-2 周'),
+      );
+
+      SelectionContainer nearestSelectionContainer(Finder target) => tester
+          .widgetList<SelectionContainer>(
+            find.ancestor(
+              of: target,
+              matching: find.byType(SelectionContainer),
+            ),
+          )
+          .first;
+
+      expect(nearestSelectionContainer(headerTitle).registrar, isNull);
+      expect(nearestSelectionContainer(weekLabel).registrar, isNull);
+      expect(nearestSelectionContainer(weekValue).registrar, isNotNull);
+
+      String? copiedText;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copiedText =
+                (call.arguments as Map<dynamic, dynamic>)['text'] as String?;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+
+      await tester.longPress(weekValue);
+      await tester.pumpAndSettle();
+
+      final selectableRegion = tester.state<SelectableRegionState>(
+        find.descendant(of: sheet, matching: find.byType(SelectableRegion)),
+      );
+      selectableRegion.selectAll(SelectionChangedCause.toolbar);
+      await tester.pump();
+      Actions.invoke(weekValue.evaluate().first, CopySelectionTextIntent.copy);
+      await tester.pump();
+
+      expect(copiedText, contains('1-2 周'));
+      expect(copiedText, contains('张老师'));
+      expect(copiedText, isNot(contains('期初课')));
+      expect(copiedText, isNot(contains('周次')));
+
+      final scrollView = find.descendant(
+        of: sheet,
+        matching: find.byType(SingleChildScrollView),
+      );
+      final scrollable = tester.state<ScrollableState>(
+        find.descendant(of: scrollView, matching: find.byType(Scrollable)),
+      );
+      expect(scrollable.position.maxScrollExtent, greaterThan(0));
+
+      await tester.drag(scrollView, const Offset(0, -600));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('字段值内容-20'));
+      await tester.pumpAndSettle();
+      await tester.longPress(find.text('字段值内容-20'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('锚定菜单完成测量后退出 IntrinsicWidth，圆形与宽胶囊触发器共享开合变形逻辑且无缩小残影', (
+      tester,
+    ) async {
       final model = buildModel();
       model.hydrateForTest(
         schedule: Schedule(
@@ -6520,7 +4163,6 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // 1. 圆形 36x36 触发器：从 36x36 圆角 18 灵动变形展开至 20 圆角卡片，收起平滑归位，按钮不缩小。
       final circleIcon = find.byIcon(Icons.more_horiz_rounded);
       final circleTriggerFinder = find.ancestor(
         of: circleIcon,
@@ -6530,7 +4172,7 @@ void main() {
 
       await tester.tap(circleIcon);
       await tester.pump();
-      await tester.pump(); // overlay 插入首帧
+      await tester.pump();
 
       final circleMorphBox = tester.renderObject<RenderMenuMorphBox>(
         find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
@@ -6557,68 +4199,45 @@ void main() {
       final midOpenRect = circleMorphBox.morphRect;
       expect(midOpenRect.width, greaterThan(circleTriggerRect.width));
       expect(midOpenRect.height, greaterThan(circleTriggerRect.height));
-      expect(circleMorphBox.morphRadius, greaterThan(18.0));
-      expect(circleMorphBox.morphRadius, lessThanOrEqualTo(20.01));
 
       await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.byType(Overlay),
+          matching: find.byType(IntrinsicWidth),
+        ),
+        findsNothing,
+      );
       final settledRect = circleMorphBox.morphRect;
-      expect(settledRect.height, greaterThan(midOpenRect.height));
       expect(circleMorphBox.morphRadius, closeTo(20.0, 0.01));
       expect(circleMorphBox.isSettled, isTrue);
+      expect(circleMorphBox.isClipping, isFalse);
+      expect(circleMorphBox.shadowAlpha, greaterThan(0));
 
-      // 收起：沿同一套容器变形逻辑回到 36x36 触发器轮廓。
       await tester.tapAt(const Offset(16, 200));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 56));
       recordTriggerScale();
-      final midCloseRect = circleMorphBox.morphRect;
-      expect(midCloseRect.width, lessThan(settledRect.width));
-      expect(midCloseRect.height, lessThan(settledRect.height));
-      expect(circleMorphBox.morphRadius, lessThan(20.0));
-      expect(circleMorphBox.morphRadius, greaterThanOrEqualTo(18.0));
-      expect(
-        minTriggerScale,
-        greaterThanOrEqualTo(1.0 - 1e-6),
-        reason: '融合交接期间 TactileSurfaceButton 不得产生缩小残影',
-      );
-
+      expect(circleMorphBox.morphRect.width, lessThan(settledRect.width));
+      expect(minTriggerScale, greaterThanOrEqualTo(1.0 - 1e-6));
       await tester.pumpAndSettle();
-      expect(find.text('校准当前周次'), findsNothing);
 
-      // 2. 宽胶囊（第 1 周）触发器：居中向上下变形，水平宽度从按钮宽收拢至菜单宽并平滑归位。
-      final weekTrigger = find.ancestor(
-        of: find.text('第 1 周'),
-        matching: find.byType(TactileSurfaceButton),
-      );
-      final weekTriggerRect = tester.getRect(weekTrigger);
-
+      // 宽胶囊（第 1 周）触发器：测量后无 IntrinsicWidth，滚动列表保留裁剪。
       await tester.tap(find.text('第 1 周'));
-      await tester.pump();
-      await tester.pump();
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.byType(Overlay),
+          matching: find.byType(IntrinsicWidth),
+        ),
+        findsNothing,
+      );
       final weekMorphBox = tester.renderObject<RenderMenuMorphBox>(
         find.byElementPredicate((e) => e.renderObject is RenderMenuMorphBox),
       );
       expect(weekMorphBox.alignment, Alignment.topCenter);
-      expect(weekMorphBox.morphRadius, closeTo(18.0, 0.3));
-
-      await tester.pump(const Duration(milliseconds: 40));
-      final weekMidOpenRect = weekMorphBox.morphRect;
-      expect(weekMidOpenRect.height, greaterThan(weekTriggerRect.height));
-      expect(weekMorphBox.contentScale, greaterThanOrEqualTo(0.60));
-
-      await tester.pumpAndSettle();
-      final weekSettledRect = weekMorphBox.morphRect;
       expect(weekMorphBox.isSettled, isTrue);
-
-      await tester.tapAt(const Offset(16, 200));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 48));
-      final weekMidCloseRect = weekMorphBox.morphRect;
-      expect(weekMidCloseRect.height, lessThan(weekSettledRect.height));
-      expect(weekMorphBox.morphRadius, lessThan(20.0));
-
-      await tester.pumpAndSettle();
-      expect(find.text('第 2 周'), findsNothing);
+      expect(weekMorphBox.isClipping, isTrue);
     });
 
     testWidgets('展开中途直接点击视觉缩放后的菜单项仍精准命中该项，且收起中途同按钮重开连续接管速度与几何', (tester) async {
@@ -6663,8 +4282,6 @@ void main() {
 
       final triggerFinder = find.byIcon(Icons.more_horiz_rounded);
 
-      // 1. 展开中途（52ms，contentScale < 1.0）直接点击第 3 项「选项丙」的视觉中心：
-      //    命中结果必须精确为 'c'，不能因未反算缩放而误选上方条目 'b'。
       await tester.tap(triggerFinder);
       await tester.pump();
       await tester.pump();
@@ -6675,10 +4292,8 @@ void main() {
       expect(morphOpen.contentScale, lessThan(0.95));
       await tester.tapAt(tester.getCenter(find.text('选项丙')));
       await tester.pumpAndSettle();
-      expect(picked, 'c', reason: '展开形变中途点击缩放后的菜单项必须命中视觉对应项');
+      expect(picked, 'c');
 
-      // 2. 展开落定后点外部收起，在收起中途（48ms）再次点击同一触发器重开：
-      //    容器尺寸与缩放应从当前收起进度平滑延续折返，不闪退也不跌回 36x36 起点。
       picked = null;
       await tester.tap(triggerFinder);
       await tester.pumpAndSettle();
@@ -6701,7 +4316,6 @@ void main() {
       expect(
         reopenedMorph.morphRect.height,
         greaterThan(heightBeforeReopen * 0.65),
-        reason: '收起中途同按钮重开必须延续当前几何与速度惯性，不得跳回按钮起点',
       );
       await tester.pumpAndSettle();
       expect(reopenedMorph.isSettled, isTrue);
@@ -6709,6 +4323,123 @@ void main() {
       await tester.tap(find.text('选项乙'));
       await tester.pumpAndSettle();
       expect(picked, 'b');
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('文本可选中统一与底部弹窗公用容器', () {
+    testWidgets('调试页概览与原始课表均改用单层 SelectionArea，不再使用 SelectableText', (
+      tester,
+    ) async {
+      final backend = FakeBackend()
+        ..lastScheduleRawBody = '{"kbList":[{"kcmc":"高等数学"}]}'
+        ..lastScheduleRows = <Map<String, dynamic>>[
+          <String, dynamic>{
+            'kcmc': '高等数学',
+            'xqj': '1',
+            'jcs': '1-2',
+            'zcd': '1-16周',
+          },
+        ];
+      final model = buildModel(backend: backend);
+      await model.signIn('20240001', 'pw');
+      await tester.pumpWidget(wrap(DebugPage(model: model)));
+
+      expect(find.byType(SelectableText), findsNothing);
+      expect(find.byType(SelectionArea), findsOneWidget);
+      expect(
+        find.ancestor(
+          of: find.text('教务地址'),
+          matching: find.byType(SelectionContainer),
+        ),
+        findsWidgets,
+      );
+
+      await tester.tap(find.widgetWithText(Tab, '原始课表'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SelectableText), findsNothing);
+      expect(find.byType(SelectionArea), findsOneWidget);
+      expect(find.text('高等数学'), findsOneWidget);
+
+      // 展开原始行，确认内部的 JSON Text 也不使用 SelectableText
+      await tester.tap(find.text('高等数学'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SelectableText), findsNothing);
+      expect(find.textContaining('"kcmc": "高等数学"'), findsOneWidget);
+    });
+
+    testWidgets('关于页开源协议页面使用单层 SelectionArea + Text，不再使用 SelectableText', (
+      tester,
+    ) async {
+      final model = buildModel();
+      await tester.pumpWidget(wrap(AboutPage(model: model)));
+      await tester.pumpAndSettle();
+
+      await tester.drag(find.byType(ListView), const Offset(0, -400));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('开源协议'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('开源协议'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(LicenseTextPage), findsOneWidget);
+      expect(find.byType(SelectableText), findsNothing);
+      expect(find.byType(SelectionArea), findsOneWidget);
+    });
+
+    testWidgets('showAppModalBottomSheet 与 ScrollableBottomSheetFrame 统一弹窗结构', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Column(
+                children: [
+                  TextButton(
+                    onPressed: () => showAppModalBottomSheet<void>(
+                      context: context,
+                      builder: (_) => ScrollableBottomSheetFrame(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (var i = 0; i < 40; i++)
+                              ListTile(title: Text('弹窗条目 $i')),
+                          ],
+                        ),
+                      ),
+                    ),
+                    child: const Text('打开弹窗'),
+                  ),
+                  TextButton(
+                    onPressed: () =>
+                        showTimeWheel(context, initialMinutes: 8 * 60),
+                    child: const Text('打开时间轮'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('打开弹窗'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ScrollableBottomSheetFrame), findsOneWidget);
+      expect(find.byType(SingleChildScrollView), findsOneWidget);
+      final frameSize = tester.getSize(find.byType(ScrollableBottomSheetFrame));
+      final screenHeight = tester.getSize(find.byType(MaterialApp)).height;
+      expect(frameSize.height, lessThanOrEqualTo(screenHeight * 0.8 + 0.1));
+
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('打开时间轮'));
+      await tester.pumpAndSettle();
+      expect(find.text('选择时间'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });

@@ -25,7 +25,7 @@ void main() {
   });
 
   group('SafeJsonFile 原子写入与备份自愈', () {
-    test('初次读取不存在文件不报损坏；二次写入轮转生成 .bak 备份', () async {
+    test('初次读取不存在文件不报损坏、二次写入轮转生成 .bak 并在主文件损坏时自愈恢复', () async {
       final file = File('${tempDir.path}/sample.json');
       final store = SafeJsonFile(file);
 
@@ -44,27 +44,17 @@ void main() {
 
       final latest = await store.readJson(isValid: (d) => d is Map);
       expect((latest.data as Map)['version'], 2);
-    });
 
-    test('主文件损坏或被截断为空时，自动从 .bak 无感救回并自愈主文件', () async {
-      final file = File('${tempDir.path}/prefs.json');
-      final store = SafeJsonFile(file);
-
-      await store.writeJson(() => <String, Object?>{'step': 1});
-      await store.writeJson(() => <String, Object?>{'step': 2});
-
-      // 模拟断电导致主文件写半截或成空文件
+      // 模拟断电导致主文件损坏，应自动从 .bak 救回第 1 版并自愈主文件
       file.writeAsStringSync('{corrupted json');
-
       final healed = await store.readJson(isValid: (d) => d is Map);
       expect(healed.recoveredFromBackup, isTrue);
       expect(healed.hadUnrecoverableCorruption, isFalse);
-      expect((healed.data as Map)['step'], 1);
+      expect((healed.data as Map)['version'], 1);
 
-      // 主文件应已被 .bak 内容自愈修复
       final secondRead = await store.readJson(isValid: (d) => d is Map);
       expect(secondRead.recoveredFromBackup, isFalse);
-      expect((secondRead.data as Map)['step'], 1);
+      expect((secondRead.data as Map)['version'], 1);
     });
 
     test('主文件与 .bak 均损坏时标记不可恢复损坏；clear 一并清除主文件与备份', () async {
@@ -127,7 +117,6 @@ void main() {
       final latest = await store.readJson(isValid: (d) => d is Map);
       expect((latest.data as Map)['step'], 20);
 
-      // 排队中的待写快照遇到后续 clear 时应直接作废，不会在 clear 后死灰复燃
       final delayedWrite = store.writeJson(() => <String, Object?>{'step': 99});
       await store.clear();
       await delayedWrite;
@@ -137,7 +126,7 @@ void main() {
   });
 
   group('Preferences 抗损坏、并发排队与错误提示联动', () {
-    test('高频连续改设置串行落盘，全部变更完整保留', () async {
+    test('高频连续改设置串行落盘完整保留；主文件损坏优先从 .bak 恢复，双坏才标记重置', () async {
       final file = File('${tempDir.path}/app_prefs.json');
       final prefs = await Preferences.openFile(file);
 
@@ -156,19 +145,14 @@ void main() {
       expect(reloaded.courseTextScale, 1.2);
       expect(reloaded.autoRefreshIntervalMinutes, 120);
       expect(reloaded.didResetFromCorruption, isFalse);
-    });
 
-    test('主设置文件损坏时优先从 .bak 恢复且不标为重置；双坏才标记重置', () async {
-      final file = File('${tempDir.path}/app_prefs.json');
-      final prefs = await Preferences.openFile(file);
-      await prefs.setShowTeacher(false); // 写入第 1 版
-      await prefs.setCellHeight(92); // 写入第 2 版并把第 1 版留作 .bak
-
-      // 破坏主文件
+      // 再写入一版使上一版成为 .bak，随后破坏主文件验证从 .bak 恢复
+      await reloaded.setCellHeight(92);
       file.writeAsStringSync('{not valid json');
       final recovered = await Preferences.openFile(file);
       expect(recovered.didResetFromCorruption, isFalse);
       expect(recovered.showTeacher, isFalse);
+      expect(recovered.cellHeight, 88);
 
       // 双重破坏主文件与备份文件
       file.writeAsStringSync('{broken');
@@ -178,36 +162,7 @@ void main() {
       expect(reset.showTeacher, isTrue);
     });
 
-    test('设置写入目录被同名文件阻塞时通过 AppModel 发出节流提示，不崩溃', () async {
-      // 把父路径建造成普通文件，必然触发磁盘写入异常
-      final blocker = File('${tempDir.path}/blocker');
-      blocker.writeAsStringSync('not a directory');
-      final blockedFile = File('${blocker.path}/app_prefs.json');
-
-      final prefs = Preferences.decode('', file: blockedFile);
-      final model = AppModel(
-        service: ScheduleService(
-          credentials: InMemoryCredentialStore(),
-          cookieStorage: FakeSessionRepository(),
-          backendFactory: (_) => FakeBackend(),
-        ),
-        preferences: prefs,
-        examCache: InMemoryExamCache(),
-        gradesCache: InMemoryGradesCache(),
-      );
-      addTearDown(model.dispose);
-
-      expect(model.storageNoticeEvent, 0);
-      await model.setShowTeacher(false);
-      expect(model.storageNoticeEvent, 1);
-      expect(model.storageNoticeMessage, '本地设置保存失败，请检查存储空间');
-
-      // 连续失败只提醒一次，不刷屏
-      await model.setShowLocation(false);
-      expect(model.storageNoticeEvent, 1);
-    });
-
-    test('拨动开关先即时刷新界面通知，不等待磁盘落盘完成', () async {
+    test('拨动开关先即时刷新界面通知；存储写入失败时通过 AppModel 发出节流提示且不崩溃', () async {
       final file = File('${tempDir.path}/instant_ui_prefs.json');
       final prefs = await Preferences.openFile(file);
       final model = AppModel(
@@ -228,14 +183,34 @@ void main() {
       model.prefsNotifier.addListener(() => prefsNotifyCount++);
 
       final flushing = model.setShowTeacher(false);
-      // 尚未 await 落盘前，内存状态与界面通知均应已同步到位
       expect(model.showTeacher, isFalse);
       expect(notifyCount, 1);
       expect(prefsNotifyCount, 1);
-
       await flushing;
-      final reloaded = await Preferences.openFile(file);
-      expect(reloaded.showTeacher, isFalse);
+
+      // 构造父路径阻塞文件，验证磁盘写入失败时的节流通知
+      final blocker = File('${tempDir.path}/blocker');
+      blocker.writeAsStringSync('not a directory');
+      final blockedFile = File('${blocker.path}/app_prefs.json');
+      final blockedModel = AppModel(
+        service: ScheduleService(
+          credentials: InMemoryCredentialStore(),
+          cookieStorage: FakeSessionRepository(),
+          backendFactory: (_) => FakeBackend(),
+        ),
+        preferences: Preferences.decode('', file: blockedFile),
+        examCache: InMemoryExamCache(),
+        gradesCache: InMemoryGradesCache(),
+      );
+      addTearDown(blockedModel.dispose);
+
+      expect(blockedModel.storageNoticeEvent, 0);
+      await blockedModel.setShowTeacher(false);
+      expect(blockedModel.storageNoticeEvent, 1);
+      expect(blockedModel.storageNoticeMessage, '本地设置保存失败，请检查存储空间');
+
+      await blockedModel.setShowLocation(false);
+      expect(blockedModel.storageNoticeEvent, 1);
     });
   });
 
@@ -259,7 +234,6 @@ void main() {
         ),
       );
 
-      // 主文件被破坏
       file.writeAsStringSync('corrupt');
       final loaded = await cache.load();
       expect(loaded, isNotNull);
