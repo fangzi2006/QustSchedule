@@ -338,7 +338,6 @@ class PreferencesController {
   // ---------------------------------------------------------------------------
 
   String get selectedUpdateProxy => _preferences.selectedUpdateProxy;
-  String get updateProxyUrl => _preferences.updateProxyUrl;
   List<String> get customUpdateProxies => _preferences.customUpdateProxies;
   List<String> get allUpdateProxies => _preferences.allUpdateProxies;
   bool get autoCheckUpdate => _preferences.autoCheckUpdate;
@@ -354,14 +353,6 @@ class PreferencesController {
     if (_preferences.selectedUpdateProxy == value.trim()) return;
     await _commitPref(
       () => _preferences.setSelectedUpdateProxy(value),
-      syncProxy: true,
-    );
-  }
-
-  Future<void> setUpdateProxyUrl(String value) async {
-    if (_preferences.updateProxyUrl == value.trim()) return;
-    await _commitPref(
-      () => _preferences.setUpdateProxyUrl(value),
       syncProxy: true,
     );
   }

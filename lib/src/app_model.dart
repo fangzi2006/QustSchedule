@@ -277,9 +277,6 @@ class AppModel extends ChangeNotifier {
   String get selectedUpdateProxy => prefs.selectedUpdateProxy;
   Future<void> setSelectedUpdateProxy(String value) =>
       prefs.setSelectedUpdateProxy(value);
-  String get updateProxyUrl => prefs.updateProxyUrl;
-  Future<void> setUpdateProxyUrl(String value) =>
-      prefs.setUpdateProxyUrl(value);
   List<String> get customUpdateProxies => prefs.customUpdateProxies;
   List<String> get allUpdateProxies => prefs.allUpdateProxies;
   Future<void> addCustomUpdateProxy(String url) =>
@@ -464,8 +461,6 @@ class AppModel extends ChangeNotifier {
       academic.refreshAcademicData(showHint: showHint);
 
   void goToWeek(int week) => scheduleState.goToWeek(week);
-  void nextWeek() => scheduleState.nextWeek();
-  void previousWeek() => scheduleState.previousWeek();
   void goToThisWeek() => scheduleState.goToThisWeek();
 
   Future<void> calibrateCurrentWeek(int week) async {
@@ -926,7 +921,6 @@ class AppModel extends ChangeNotifier {
   List<RequestLog> get requestLog => session.requestLog;
   String? get rawScheduleBody => session.rawScheduleBody;
   List<Map<String, dynamic>> get rawScheduleRows => session.rawScheduleRows;
-  String? get rawTermsBody => session.rawTermsBody;
   List<String> get cookieNames => session.cookieNames;
   int get weekEntryCount => weekEntries.length;
 

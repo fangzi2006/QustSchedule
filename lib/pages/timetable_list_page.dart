@@ -246,7 +246,7 @@ class _TimetableCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '${_dateText(table.effectiveFrom)} 起 · ${table.sectionCount} 节'
+                      '${formatMonthDayDate(table.effectiveFrom)} 起 · ${table.sectionCount} 节'
                       '${span.isEmpty ? '' : ' · $span'}',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.hintColor,
@@ -293,6 +293,4 @@ class _TimetableCard extends StatelessWidget {
       ),
     );
   }
-
-  static String _dateText(DateTime value) => formatMonthDayDate(value);
 }

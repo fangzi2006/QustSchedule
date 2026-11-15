@@ -1,6 +1,8 @@
 /// 软件更新数据模型。
 library;
 
+import '../term_calendar.dart' show formatIsoDate;
+
 /// 单个发布产物信息。
 class ReleaseAsset {
   const ReleaseAsset({
@@ -127,7 +129,7 @@ class ReleaseInfo {
   String get formattedDate {
     final d = publishedAt;
     if (d == null) return '';
-    return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    return formatIsoDate(d);
   }
 }
 

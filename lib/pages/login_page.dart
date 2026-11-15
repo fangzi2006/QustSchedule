@@ -141,10 +141,7 @@ class _LoginPageState extends State<LoginPage> {
                             }
                             return Padding(
                               padding: const EdgeInsets.only(bottom: 14),
-                              child: _Banner(
-                                message: model.message,
-                                isError: false,
-                              ),
+                              child: _Banner(message: model.message),
                             );
                           },
                         ),
@@ -306,10 +303,9 @@ class _LoginPageState extends State<LoginPage> {
 }
 
 class _Banner extends StatelessWidget {
-  const _Banner({required this.message, required this.isError});
+  const _Banner({required this.message});
 
   final String message;
-  final bool isError;
 
   @override
   Widget build(BuildContext context) {
@@ -317,17 +313,13 @@ class _Banner extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: isError ? scheme.errorContainer : scheme.surfaceContainerHighest,
+        color: scheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(14),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Icon(
-            isError ? Icons.error_outline_rounded : Icons.info_outline_rounded,
-            size: 18,
-            color: isError ? scheme.error : null,
-          ),
+          const Icon(Icons.info_outline_rounded, size: 18),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -335,9 +327,7 @@ class _Banner extends StatelessWidget {
               style: TextStyle(
                 fontSize: 12,
                 height: 1.45,
-                color: isError
-                    ? scheme.onErrorContainer
-                    : scheme.onSurfaceVariant,
+                color: scheme.onSurfaceVariant,
               ),
             ),
           ),

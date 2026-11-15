@@ -99,7 +99,7 @@ class Preferences {
     int reminderLeadMinutes = defaultReminderLeadMinutes,
     ReminderStyle reminderStyle = defaultReminderStyle,
     bool reminderFluidUntilEnd = defaultReminderFluidUntilEnd,
-    String updateProxyUrl = defaultUpdateProxyUrl,
+    String selectedUpdateProxy = defaultUpdateProxyUrl,
     List<String>? customUpdateProxies,
     bool autoCheckUpdate = defaultAutoCheckUpdate,
     File? file,
@@ -130,7 +130,7 @@ class Preferences {
        _reminderLeadMinutes = clampReminderLead(reminderLeadMinutes),
        _reminderStyle = reminderStyle,
        _reminderFluidUntilEnd = reminderFluidUntilEnd,
-       _selectedUpdateProxy = updateProxyUrl.trim(),
+       _selectedUpdateProxy = selectedUpdateProxy.trim(),
        _customUpdateProxies = customUpdateProxies != null
            ? List<String>.from(customUpdateProxies)
            : <String>[],
@@ -232,7 +232,7 @@ class Preferences {
     int reminderLeadMinutes = defaultReminderLeadMinutes,
     ReminderStyle reminderStyle = defaultReminderStyle,
     bool reminderFluidUntilEnd = defaultReminderFluidUntilEnd,
-    String updateProxyUrl = defaultUpdateProxyUrl,
+    String selectedUpdateProxy = defaultUpdateProxyUrl,
     List<String>? customUpdateProxies,
     bool autoCheckUpdate = defaultAutoCheckUpdate,
   }) => Preferences._(
@@ -256,7 +256,7 @@ class Preferences {
     reminderLeadMinutes: reminderLeadMinutes,
     reminderStyle: reminderStyle,
     reminderFluidUntilEnd: reminderFluidUntilEnd,
-    updateProxyUrl: updateProxyUrl,
+    selectedUpdateProxy: selectedUpdateProxy,
     customUpdateProxies: customUpdateProxies,
     autoCheckUpdate: autoCheckUpdate,
     file: null,
@@ -348,7 +348,7 @@ class Preferences {
     var reminderLeadMinutes = defaultReminderLeadMinutes;
     var reminderStyle = defaultReminderStyle;
     var reminderFluidUntilEnd = defaultReminderFluidUntilEnd;
-    var updateProxyUrl = defaultUpdateProxyUrl;
+    var selectedUpdateProxy = defaultUpdateProxyUrl;
     var customUpdateProxies = <String>[];
     var autoCheckUpdate = defaultAutoCheckUpdate;
 
@@ -473,7 +473,7 @@ class Preferences {
       final rawUpdateProxy =
           decoded['selectedUpdateProxy'] ?? decoded['updateProxyUrl'];
       if (rawUpdateProxy is String) {
-        updateProxyUrl = rawUpdateProxy.trim();
+        selectedUpdateProxy = rawUpdateProxy.trim();
       }
       final rawCustomList = decoded['customUpdateProxies'];
       if (rawCustomList is List<dynamic>) {
@@ -508,7 +508,7 @@ class Preferences {
       reminderLeadMinutes: reminderLeadMinutes,
       reminderStyle: reminderStyle,
       reminderFluidUntilEnd: reminderFluidUntilEnd,
-      updateProxyUrl: updateProxyUrl,
+      selectedUpdateProxy: selectedUpdateProxy,
       customUpdateProxies: customUpdateProxies,
       autoCheckUpdate: autoCheckUpdate,
       file: file,
@@ -865,10 +865,6 @@ class Preferences {
     _selectedUpdateProxy = trimmed;
     await _flush();
   }
-
-  // 兼容旧接口
-  String get updateProxyUrl => _selectedUpdateProxy;
-  Future<void> setUpdateProxyUrl(String value) => setSelectedUpdateProxy(value);
 
   List<String> get customUpdateProxies =>
       List<String>.unmodifiable(_customUpdateProxies);

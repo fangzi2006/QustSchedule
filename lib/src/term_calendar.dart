@@ -69,6 +69,14 @@ String weekRangeLabel(DateTime termStart, int week) {
   return '${fmt(monday)} – ${fmt(sunday)}';
 }
 
+/// 将日期格式化为 `YYYY-MM-DD`。
+String formatIsoDate(DateTime value) {
+  final y = value.year.toString().padLeft(4, '0');
+  final m = value.month.toString().padLeft(2, '0');
+  final d = value.day.toString().padLeft(2, '0');
+  return '$y-$m-$d';
+}
+
 /// 该课是否在这一周上。[weeks] 为空时视为每周都上（解析不到周次时的容错）。
 bool occursInWeek(ScheduleEntry entry, int week) =>
     entry.weeks.isEmpty || entry.weeks.contains(week);

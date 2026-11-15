@@ -86,7 +86,7 @@ final ValueNotifier<(RenderObject?, double)> activeAppMenuMorph =
 /// [anchorRadius] 用于按钮 → 菜单容器形变衔接的起始圆角半径；
 /// [dragPointer] 不为 null 时，菜单会直接接管该手指实现“按住按钮不放下滑直选”；
 /// [centerHorizontally] 为 true 时，菜单水平方向以触发按钮中轴线对齐并向下展开；
-/// [minWidth] 指定菜单最小宽度；[centerItems] 为 true 时菜单文字水平居中对齐。
+/// [minWidth] 指定菜单最小宽度。
 Future<void> showAppMenu<T>({
   required BuildContext context,
   required List<AppMenuItem<T>> items,
@@ -96,7 +96,6 @@ Future<void> showAppMenu<T>({
   double minWidth = 168.0,
   int? dragPointer,
   bool centerHorizontally = false,
-  bool centerItems = false,
 }) async {
   final box = context.findRenderObject();
   final overlayState = Overlay.of(context, rootOverlay: true);
@@ -150,8 +149,6 @@ Future<void> showAppMenu<T>({
       overlaySize: overlaySize,
       dragPointer: dragPointer,
       centerHorizontally: centerHorizontally,
-      centerItems: centerItems,
-      overlayVsync: overlayState,
       onDismissed: (T? picked) {
         if (!completer.isCompleted) {
           completer.complete(picked);
@@ -307,8 +304,6 @@ class _AppMenu<T> extends StatefulWidget {
     required this.overlaySize,
     required this.dragPointer,
     required this.centerHorizontally,
-    required this.centerItems,
-    required this.overlayVsync,
     required this.onDismissed,
     required this.onEntryDisposeReady,
   });
@@ -323,8 +318,6 @@ class _AppMenu<T> extends StatefulWidget {
   final Size overlaySize;
   final int? dragPointer;
   final bool centerHorizontally;
-  final bool centerItems;
-  final TickerProvider overlayVsync;
   final ValueChanged<T?> onDismissed;
   final VoidCallback onEntryDisposeReady;
 
@@ -670,8 +663,7 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
         oldWidget.maxHeight != widget.maxHeight ||
         oldWidget.minWidth != widget.minWidth ||
         oldWidget.overlaySize != widget.overlaySize ||
-        oldWidget.centerHorizontally != widget.centerHorizontally ||
-        oldWidget.centerItems != widget.centerItems) {
+        oldWidget.centerHorizontally != widget.centerHorizontally) {
       _targetRect = null;
       _needsMeasure = true;
     }
@@ -1327,7 +1319,13 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: _buildStaggeredChildren(divider),
+                children: <Widget>[
+                  for (var i = 0; i < widget.items.length; i++)
+                    KeyedSubtree(
+                      key: _itemKeys[i],
+                      child: _buildItemContent(divider, i),
+                    ),
+                ],
               ),
             ),
           ),
@@ -1480,7 +1478,6 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
       index: index,
       highlightedIndex: _highlightedIndex,
       showCapsule: _isScrollable,
-      centerItems: widget.centerItems,
       onTap: () => _commitSelection(index),
       onPressChanged: (pressed) {
         if (!_isScrollable || _committed || !mounted) return;
@@ -1488,13 +1485,6 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
         _highlightedIndex.value = _pressedScrollableIndex;
       },
     );
-  }
-
-  List<Widget> _buildStaggeredChildren(DividerThemeData divider) {
-    return <Widget>[
-      for (var i = 0; i < widget.items.length; i++)
-        KeyedSubtree(key: _itemKeys[i], child: _buildItemContent(divider, i)),
-    ];
   }
 }
 
@@ -1596,7 +1586,6 @@ class _MenuMorphFrame {
     required this.contentAlpha,
     required this.contentScale,
     required this.childTransform,
-    required this.rubber,
     required this.shadowAlpha,
     required this.shadowBlurRadius,
     required this.shadowOffsetY,
@@ -1613,7 +1602,6 @@ class _MenuMorphFrame {
   final double contentAlpha;
   final double contentScale;
   final Matrix4 childTransform;
-  final Offset rubber;
   final double shadowAlpha;
   final double shadowBlurRadius;
   final double shadowOffsetY;
@@ -1942,7 +1930,6 @@ class RenderMenuMorphBox extends RenderProxyBox {
       contentAlpha: contentAlpha,
       contentScale: contentScale,
       childTransform: childTransform,
-      rubber: rubber,
       shadowAlpha: shadowAlpha,
       shadowBlurRadius: shadowBlurRadius,
       shadowOffsetY: shadowOffsetY,
@@ -2147,7 +2134,6 @@ class _MenuTile<T> extends StatefulWidget {
     required this.index,
     required this.highlightedIndex,
     required this.showCapsule,
-    required this.centerItems,
     required this.onTap,
     required this.onPressChanged,
   });
@@ -2159,7 +2145,6 @@ class _MenuTile<T> extends StatefulWidget {
   /// 长菜单不可滑动切换，按住/选中条目时直接在条目内绘制与短菜单同源的选择胶囊；
   /// 已选中的常态条目保持自身高亮与对勾指示，无需常驻胶囊。
   final bool showCapsule;
-  final bool centerItems;
   final VoidCallback onTap;
   final ValueChanged<bool> onPressChanged;
 
@@ -2216,90 +2201,43 @@ class _MenuTileState<T> extends State<_MenuTile<T>> {
         ? (highlighted ? scheme.primary : scheme.onSurfaceVariant)
         : theme.hintColor;
     final fontWeight = highlighted ? FontWeight.w600 : FontWeight.normal;
-    final Widget tileBody;
-    if (widget.centerItems) {
-      tileBody = Stack(
-        alignment: Alignment.center,
-        children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 27,
-              vertical: 12 - _kMenuPillVerticalInset,
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: <Widget>[
-                if (item.icon != null) ...<Widget>[
-                  Transform.scale(
-                    scale: _hovered ? 1.08 : 1.0,
-                    child: Icon(item.icon, size: 18, color: iconColor),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                Flexible(
-                  child: Text(
-                    item.label,
-                    textAlign: TextAlign.center,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: color,
-                      fontWeight: fontWeight,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (item.trailing != null)
-            Positioned(
-              right: 6,
-              top: 0,
-              bottom: 0,
-              child: Center(child: item.trailing!),
-            ),
-        ],
-      );
-    } else {
-      tileBody = Align(
-        alignment: Alignment.centerLeft,
-        widthFactor: 1.0,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: 18 - _kMenuPillHorizontalInset,
-            vertical: 12 - _kMenuPillVerticalInset,
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              if (item.icon != null) ...<Widget>[
-                Transform.scale(
-                  scale: _hovered ? 1.08 : 1.0,
-                  child: Icon(item.icon, size: 18, color: iconColor),
-                ),
-                const SizedBox(width: 12),
-              ],
-              Flexible(
-                child: Text(
-                  item.label,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: color,
-                    fontWeight: fontWeight,
-                  ),
+    final tileBody = Align(
+      alignment: Alignment.centerLeft,
+      widthFactor: 1.0,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: 18 - _kMenuPillHorizontalInset,
+          vertical: 12 - _kMenuPillVerticalInset,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            if (item.icon != null) ...<Widget>[
+              Transform.scale(
+                scale: _hovered ? 1.08 : 1.0,
+                child: Icon(item.icon, size: 18, color: iconColor),
+              ),
+              const SizedBox(width: 12),
+            ],
+            Flexible(
+              child: Text(
+                item.label,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: color,
+                  fontWeight: fontWeight,
                 ),
               ),
-              if (item.trailing != null) ...<Widget>[
-                const SizedBox(width: 16),
-                item.trailing!,
-              ],
+            ),
+            if (item.trailing != null) ...<Widget>[
+              const SizedBox(width: 16),
+              item.trailing!,
             ],
-          ),
+          ],
         ),
-      );
-    }
+      ),
+    );
     return InkWell(
       // 彻底屏蔽旧版 Material 水波纹与灰底阴影，仅留无障碍与可测试句柄，高亮全权交给滑动/选择胶囊。
       splashFactory: NoSplash.splashFactory,

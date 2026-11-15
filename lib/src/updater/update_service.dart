@@ -419,7 +419,6 @@ class UpdateService {
     );
   }
 
-  /// 兼容单代理调用的封装
   /// 带弱网重试机制的更新检测（纯网络策略：遇到网络错误退避重试）。
   Future<UpdateCheckResult> checkForUpdatesWithRetry({
     required String currentVersion,
@@ -464,16 +463,6 @@ class UpdateService {
         );
       }
     }
-  }
-
-  Future<UpdateCheckResult> checkForUpdates({
-    required String currentVersion,
-    required String proxyPrefix,
-  }) {
-    return checkForUpdatesWithFallback(
-      currentVersion: currentVersion,
-      selectedProxy: proxyPrefix,
-    );
   }
 
   List<String> _buildCandidates(
@@ -1301,22 +1290,5 @@ class UpdateService {
         } catch (_) {}
       }
     }
-  }
-
-  /// 兼容单节点调用的下载方法。
-  Future<File> downloadAsset({
-    required ReleaseAsset asset,
-    required String proxyPrefix,
-    required void Function(DownloadProgress progress) onProgress,
-    CancelToken? cancelToken,
-    String? expectedSha256,
-  }) {
-    return downloadAssetWithFallback(
-      asset: asset,
-      selectedProxy: proxyPrefix,
-      onProgress: onProgress,
-      cancelToken: cancelToken,
-      expectedSha256: expectedSha256,
-    );
   }
 }

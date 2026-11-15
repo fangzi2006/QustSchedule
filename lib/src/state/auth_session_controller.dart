@@ -274,7 +274,6 @@ class AuthSessionController {
   List<RequestLog> get requestLog => service.requestLog;
   String? get rawScheduleBody => service.lastScheduleRawBody;
   List<Map<String, dynamic>> get rawScheduleRows => service.lastScheduleRows;
-  String? get rawTermsBody => service.lastTermsRawBody;
 
   List<String> get cookieNames {
     final header = service.cookieHeaderForDebug;

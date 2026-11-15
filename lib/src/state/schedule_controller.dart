@@ -244,8 +244,6 @@ class ScheduleController extends ChangeNotifier {
     weekNotifier.value = next;
   }
 
-  void nextWeek() => goToWeek(_week + 1);
-  void previousWeek() => goToWeek(_week - 1);
   void goToThisWeek() => goToWeek(currentWeekOfToday);
 
   void applyCalendar(Schedule schedule, {bool resetToToday = true}) {

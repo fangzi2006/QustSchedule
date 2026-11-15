@@ -501,7 +501,6 @@ class _ExamSection extends StatelessWidget {
                     if (i > 0) const Divider(height: 0, indent: 16),
                     _ExamListTile(
                       exam: remainingExams[i],
-                      isNext: false,
                       isPast: isExamPast(remainingExams[i], current),
                     ),
                   ],
@@ -685,14 +684,9 @@ class NextExamHeroCard extends StatelessWidget {
 }
 
 class _ExamListTile extends StatelessWidget {
-  const _ExamListTile({
-    required this.exam,
-    required this.isNext,
-    required this.isPast,
-  });
+  const _ExamListTile({required this.exam, required this.isPast});
 
   final ExamItem exam;
-  final bool isNext;
   final bool isPast;
 
   @override
@@ -720,11 +714,9 @@ class _ExamListTile extends StatelessWidget {
             height: 8,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: isNext
-                  ? scheme.primary
-                  : (isPast
-                        ? scheme.outlineVariant
-                        : scheme.outline.withValues(alpha: 0.5)),
+              color: isPast
+                  ? scheme.outlineVariant
+                  : scheme.outline.withValues(alpha: 0.5),
             ),
           ),
           const SizedBox(width: 12),

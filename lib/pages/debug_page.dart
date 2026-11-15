@@ -15,6 +15,7 @@ import 'package:flutter/services.dart';
 import 'package:zf_academic/zf_academic.dart';
 
 import '../src/app_model.dart';
+import '../src/term_calendar.dart' show formatIsoDate;
 import '../theme/app_theme.dart';
 import '../widgets/course_detail_sheet.dart'
     show compressWeeks, showEntryDetails;
@@ -83,9 +84,7 @@ class _OverviewTab extends StatelessWidget {
       ('本周课程', '${model.weekEntryCount} 条'),
       (
         '第 1 周周一',
-        model.termStart == null
-            ? '未定位'
-            : '${model.termStart!.year}-${_two(model.termStart!.month)}-${_two(model.termStart!.day)}',
+        model.termStart == null ? '未定位' : formatIsoDate(model.termStart!),
       ),
       ('本周范围', model.weekRange.isEmpty ? '-' : model.weekRange),
       (
@@ -235,8 +234,6 @@ class _OverviewTab extends StatelessWidget {
       ],
     );
   }
-
-  static String _two(int value) => value.toString().padLeft(2, '0');
 }
 
 // ---------------------------------------------------------------------------

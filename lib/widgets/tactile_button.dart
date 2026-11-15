@@ -48,7 +48,6 @@ class TactileSurfaceButton extends StatefulWidget {
     this.enabled = true,
     this.filled = true,
     this.surfaceStyle,
-    this.clipContent = false,
     this.tooltip,
   });
 
@@ -61,7 +60,6 @@ class TactileSurfaceButton extends StatefulWidget {
   final bool enabled;
   final bool filled;
   final TactileSurfaceStyle? surfaceStyle;
-  final bool clipContent;
   final String? tooltip;
 
   TactileSurfaceStyle get effectiveSurfaceStyle =>
@@ -450,9 +448,6 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
         final scale = 1.0 + pressAmplitude * effectiveP;
 
         Widget body = child!;
-        if (widget.clipContent) {
-          body = ClipRRect(borderRadius: radius, child: body);
-        }
 
         if (style != TactileSurfaceStyle.transparent) {
           final Color bgColor;
@@ -641,7 +636,6 @@ class TactileIconButton extends StatelessWidget {
     this.color,
     this.size = 36,
     this.iconSize = 20,
-    this.filled = true,
     this.surfaceStyle,
   });
 
@@ -652,7 +646,6 @@ class TactileIconButton extends StatelessWidget {
   final Color? color;
   final double size;
   final double iconSize;
-  final bool filled;
   final TactileSurfaceStyle? surfaceStyle;
 
   @override
@@ -662,7 +655,6 @@ class TactileIconButton extends StatelessWidget {
       minSize: Size(size, size),
       borderRadius: BorderRadius.circular(size / 2),
       enabled: onPressed != null,
-      filled: filled,
       surfaceStyle: surfaceStyle,
       child: SizedBox(
         width: size,
@@ -737,7 +729,6 @@ class TactileActionButton extends StatelessWidget {
     this.borderRadius = 999.0,
     this.padding,
     this.foregroundColor,
-    this.backgroundColor,
     this.visualDensity,
     this.tapTargetSize,
     this.minimumSize,
@@ -751,7 +742,6 @@ class TactileActionButton extends StatelessWidget {
   final double borderRadius;
   final EdgeInsetsGeometry? padding;
   final Color? foregroundColor;
-  final Color? backgroundColor;
   final VisualDensity? visualDensity;
   final MaterialTapTargetSize? tapTargetSize;
   final Size? minimumSize;
@@ -793,10 +783,8 @@ class TactileActionButton extends StatelessWidget {
     final Widget inner;
     switch (variant) {
       case TactileActionVariant.filled:
-        final style = FilledButton.styleFrom(
-          foregroundColor: foregroundColor,
-          backgroundColor: backgroundColor,
-        ).merge(shared);
+        final style = FilledButton.styleFrom(foregroundColor: foregroundColor)
+            .merge(shared);
         inner = icon != null
             ? FilledButton.icon(
                 onPressed: onPressed,
@@ -806,10 +794,8 @@ class TactileActionButton extends StatelessWidget {
               )
             : FilledButton(onPressed: onPressed, style: style, child: label);
       case TactileActionVariant.tonal:
-        final style = FilledButton.styleFrom(
-          foregroundColor: foregroundColor,
-          backgroundColor: backgroundColor,
-        ).merge(shared);
+        final style = FilledButton.styleFrom(foregroundColor: foregroundColor)
+            .merge(shared);
         inner = icon != null
             ? FilledButton.tonalIcon(
                 onPressed: onPressed,
@@ -823,11 +809,8 @@ class TactileActionButton extends StatelessWidget {
                 child: label,
               );
       case TactileActionVariant.outlined:
-        final style =
-            OutlinedButton.styleFrom(
-              foregroundColor: foregroundColor,
-              backgroundColor: backgroundColor,
-            ).merge(
+        final style = OutlinedButton.styleFrom(foregroundColor: foregroundColor)
+            .merge(
               _sharedActionStyle(
                 shape: shape,
                 side: BorderSide(
@@ -844,10 +827,8 @@ class TactileActionButton extends StatelessWidget {
               )
             : OutlinedButton(onPressed: onPressed, style: style, child: label);
       case TactileActionVariant.text:
-        final style = TextButton.styleFrom(
-          foregroundColor: foregroundColor,
-          backgroundColor: backgroundColor,
-        ).merge(shared);
+        final style = TextButton.styleFrom(foregroundColor: foregroundColor)
+            .merge(shared);
         inner = icon != null
             ? TextButton.icon(
                 onPressed: onPressed,

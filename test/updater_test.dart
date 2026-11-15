@@ -205,6 +205,12 @@ void main() {
         Preferences.decode('{"selectedUpdateProxy": ""}').selectedUpdateProxy,
         isEmpty,
       );
+      expect(
+        Preferences.decode(
+          '{"updateProxyUrl": " https://legacy-proxy.example "}',
+        ).selectedUpdateProxy,
+        equals('https://legacy-proxy.example'),
+      );
 
       final model = AppModel(preferences: prefs);
       addTearDown(model.dispose);

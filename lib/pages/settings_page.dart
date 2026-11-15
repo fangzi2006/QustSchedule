@@ -18,6 +18,7 @@ import '../src/app_model.dart';
 import '../src/app_version.dart';
 import '../src/preferences_repository.dart';
 import '../src/reminder_service.dart';
+import '../src/term_calendar.dart' show formatIsoDate;
 import '../src/timetable.dart' show formatMonthDayDate;
 import '../theme/app_theme.dart';
 import '../widgets/app_snack_bar.dart';
@@ -89,7 +90,7 @@ class SettingsPage extends StatelessWidget {
                       subtitle: Text(
                         model.termStart == null
                             ? '未定位'
-                            : '今天第 ${model.currentWeekOfToday} 周 · 第 1 周 ${_dateText(model.termStart!)} 起',
+                            : '今天第 ${model.currentWeekOfToday} 周 · 第 1 周 ${formatIsoDate(model.termStart!)} 起',
                       ),
                       trailing: const Icon(Icons.chevron_right_rounded),
                       onTap: () => showCalibrateSheet(context, model),
@@ -331,9 +332,6 @@ class SettingsPage extends StatelessWidget {
       );
     }
   }
-
-  static String _dateText(DateTime value) =>
-      '${value.year}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
 }
 
 /// 修改密码：两次输入 + 一句"会用新密码登录验证"。

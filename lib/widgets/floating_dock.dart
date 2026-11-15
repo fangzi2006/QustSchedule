@@ -49,27 +49,15 @@ class FloatingDock extends StatefulWidget {
     super.key,
     required this.items,
     required this.index,
-    this.onTap,
-    this.onDragEnd,
     this.onPillProgress,
-    this.onPressStart,
     this.onTargetIndexHint,
   });
 
   final List<FloatingDockItem> items;
   final int index;
 
-  /// 用户**点**了某一项（没拖动）。不传则只靠 [onPillProgress] 同步页。
-  final ValueChanged<int>? onTap;
-
-  /// 用户**按住拖动后松手**，松手时指示块停在下标 `index`。
-  final ValueChanged<int>? onDragEnd;
-
   /// 指示块中心滑到首末两项中心的哪一段（0..1）。
   final ValueChanged<double>? onPillProgress;
-
-  /// 指针按下的那一帧（还没动）：外壳利用这瞬间提前唤醒下一页。
-  final VoidCallback? onPressStart;
 
   /// 指针按下或横向滑动进入某分段时通知目标下标，便于按需单页懒建。
   final ValueChanged<int>? onTargetIndexHint;
@@ -634,7 +622,6 @@ class FloatingDockState extends State<FloatingDock>
     final double x = _clampX(_rawLocalX(details.globalPosition));
     final int target = _indexAt(x);
     widget.onTargetIndexHint?.call(target);
-    widget.onPressStart?.call();
     if (target != _preview) _hapticTick();
     setState(() {
       _pressed = true;

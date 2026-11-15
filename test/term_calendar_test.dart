@@ -112,5 +112,12 @@ void main() {
       expect(compressWeeks(<int>[1, 3, 5]), '1, 3, 5 周');
       expect(compressWeeks(const <int>[]), '');
     });
+
+    test('formatIsoDate', () {
+      expect(formatIsoDate(DateTime(2026, 3, 2)), '2026-03-02');
+      expect(formatIsoDate(DateTime(2026, 10, 30)), '2026-10-30');
+      expect(formatIsoDate(DateTime.utc(2026, 1, 9, 23, 59)), '2026-01-09');
+      expect(formatIsoDate(DateTime(999, 12, 31)), '0999-12-31');
+    });
   });
 }

@@ -524,8 +524,8 @@ class _WeekBar extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            _SmallIconButton(
-              icon: Icons.chevron_left_rounded,
+            TactileIconButton(
+              icon: const Icon(Icons.chevron_left_rounded),
               tooltip: '上一周',
               onPressed: shownWeek > 1
                   ? () => model.goToWeek(shownWeek - 1)
@@ -579,8 +579,8 @@ class _WeekBar extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 4),
-            _SmallIconButton(
-              icon: Icons.chevron_right_rounded,
+            TactileIconButton(
+              icon: const Icon(Icons.chevron_right_rounded),
               tooltip: '下一周',
               onPressed: shownWeek < model.maxWeek
                   ? () => model.goToWeek(shownWeek + 1)
@@ -589,31 +589,6 @@ class _WeekBar extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-/// 统一边长的小按钮：36×36，图标 20。
-///
-/// 固定尺寸而不用 `visualDensity.compact`：后者的实际边长取决于图标与内边距，
-/// 同一行里会看着忽大忽小。
-class _SmallIconButton extends StatelessWidget {
-  const _SmallIconButton({
-    required this.icon,
-    required this.tooltip,
-    this.onPressed,
-  });
-
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return TactileIconButton(
-      icon: Icon(icon),
-      tooltip: tooltip,
-      onPressed: onPressed,
     );
   }
 }
@@ -875,7 +850,6 @@ class _WeekView extends StatelessWidget {
                                   conflictEntryKeys,
                                   rows,
                                   dayWidth,
-                                  constraints.maxWidth,
                                 ),
                               ],
                             ),
@@ -960,7 +934,6 @@ class _WeekView extends StatelessWidget {
     Set<String> conflictEntryKeys,
     int rows,
     double dayWidth,
-    double totalWidth,
   ) {
     final blocks = <Widget>[];
     for (final entry in entries) {
