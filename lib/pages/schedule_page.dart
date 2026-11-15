@@ -1383,7 +1383,6 @@ Future<void> showWeekPicker(
     minWidth: 0,
     dragPointer: dragPointer,
     centerHorizontally: true,
-    centerItems: true,
     items: <AppMenuItem<int>>[
       for (var week = 1; week <= model.maxWeek; week++)
         AppMenuItem<int>(

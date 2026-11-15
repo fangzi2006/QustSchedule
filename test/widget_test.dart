@@ -5452,7 +5452,7 @@ void main() {
       expect(menuTransforms, isNotEmpty);
     });
 
-    testWidgets('星期长菜单紧凑窄宽、文字居中且仅在按住条目时展示选择胶囊，当前周次保留对勾常态', (tester) async {
+    testWidgets('星期长菜单紧凑窄宽、文字左对齐且仅在按住条目时展示选择胶囊，当前周次保留对勾常态', (tester) async {
       final model = buildModel();
       model.hydrateForTest(
         schedule: Schedule(
@@ -5509,11 +5509,17 @@ void main() {
       // 1. 紧凑窄菜单：不受 168dp 动作菜单最小宽度撑宽
       expect(menuRect.width, lessThan(168.0));
 
-      // 2. 文字严格水平居中（即使当前周次右侧带有对勾也不左偏）
+      // 2. 文字左对齐（无多余左侧留白，贴近标准 18dp 左内边距）
       final week3Text = findMenuItemText('第 3 周').first;
       final week5Text = findMenuItemText('第 5 周').first;
-      expect(tester.getCenter(week3Text).dx, closeTo(menuRect.center.dx, 0.5));
-      expect(tester.getCenter(week5Text).dx, closeTo(menuRect.center.dx, 0.5));
+      expect(
+        tester.getTopLeft(week3Text).dx - menuRect.left,
+        closeTo(18.0, 1.0),
+      );
+      expect(
+        tester.getTopLeft(week5Text).dx - menuRect.left,
+        closeTo(18.0, 1.0),
+      );
 
       // 3. 当前周次（第 3 周）仅以对勾+主色文案作常态标识，不常驻选择胶囊
       expect(
