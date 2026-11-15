@@ -361,41 +361,38 @@ class AppScrollBehavior extends MaterialScrollBehavior {
   };
 }
 
-/// 页面进出转场：短促的**水平位移**（不用淡入淡出）。
+/// 页面进出转场：全宽**水平位移** + 轻量边缘投影与背层微暗（不用离屏透明与整页快照）。
 ///
-/// 为什么不用默认的 zoom 转场：它要 300ms、带缩放与整页快照，画面在动的
-/// 时间更长，期间点下一条会像"没反应"。这里换成短促的位移：进入 220ms、
-/// 退出 180ms（退出更快，回到上一页更跟手）。
+/// ## 为什么旧版会"半路突然切掉"且"返回加速过快"
 ///
-/// ## 为什么不用淡入淡出
+/// 1. 旧版 `_enterDistance = 0.28` 只滑了 28% 屏宽且无透明过渡：进入第 0 帧 72% 画面瞬间突入，
+///    返回到终点（`animation = 0`）时仍有 72% 页面遮挡在屏幕上随后一帧直接消失；
+/// 2. 旧版把 `Curves.easeOutCubic` 直接用于反向（`1 -> 0`），导致退出时变成 `easeInCubic`：
+///    刚点返回时几乎不动，越接近退场结束速度越快（3 倍末速度直接撞停消失）；
+/// 3. 旧版 `if (route.isFirst) return child;` 跳过了首页的 `secondaryAnimation` 联动。
 ///
-/// [FadeTransition] 内部是 [Opacity]，而 [Opacity] 在 0 < alpha < 1 时
-/// 必须把整页画进一个**离屏缓冲**再合成——框架源码里对这个分支的注释
-/// 直接写着 "expensive"。设置页里的子页面（作息表列表、教务地址、调试信息…）
-/// 本身内容不少，动画期间每帧都来一次全页离屏合成，就是"点进子页面时卡一下"
-/// 的来源。
+/// ## 现方案设计
 ///
-/// 纯位移只改变换矩阵，不产生离屏缓冲：帧内只重绘"多出来的那一条"，
-/// 两页各自的像素被缓存复用。
-///
-/// ## 位移的方向
-///
-/// 进入时新页从**右侧**推入、旧页往左让一点（iOS 的 push 观感）；
-/// 退出时反过来。这样"往里点 = 往左推"，与外壳的横向翻页是同一套语言。
+/// - **全宽位移（`1.0 <-> 0.0`）**：入场从屏幕右侧外完整滑入，退场完整滑出到右侧之外才销毁，
+///   彻底消除半途截断感；背层同步轻微左移（`-0.24`）并叠加单矩形微暗遮罩（最大 6% 黑色），
+///   无需 `Opacity`/`FadeTransition` 整页离屏 `saveLayer`，也不用 `SnapshotWidget` 整页纹理快照。
+/// - **连续双向缓动（[_ContinuousCurveAnimation]）**：正向入场与正常反向退场均呈“起步跟手、
+///   收尾柔和减速”；若入场尚未播完用户就点击返回（或动画中途折返），直接从**当前视觉进度**
+///   平滑衔接折返至目标端点，绝不跳帧、不闪回、不卡顿。
+/// - **入场期间即可交互**：不使用静态快照，不阻塞点击/滚动，命中测试随 `SlideTransition` 实时跟随。
 class _SlideTransitionsBuilder extends PageTransitionsBuilder {
   const _SlideTransitionsBuilder();
 
-  /// 新页从右侧推入的距离（占页宽的比例）。
-  static const double _enterDistance = 0.28;
+  /// 旧页被推走时的视差位移（占页宽的比例）。
+  static const double _exitParallaxDistance = 0.24;
 
-  /// 旧页被推走时的位移（占页宽的比例）。
-  static const double _exitDistance = 0.12;
-
-  @override
-  Duration get transitionDuration => const Duration(milliseconds: 220);
+  static const Curve _curve = Curves.easeOutCubic;
 
   @override
-  Duration get reverseTransitionDuration => const Duration(milliseconds: 180);
+  Duration get transitionDuration => const Duration(milliseconds: 260);
+
+  @override
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 240);
 
   @override
   Widget buildTransitions<T>(
@@ -405,26 +402,340 @@ class _SlideTransitionsBuilder extends PageTransitionsBuilder {
     Animation<double> secondaryAnimation,
     Widget child,
   ) {
-    // 首个页面（启动直达）不需要转场。
-    if (route.isFirst) return child;
-
-    // 新页：随 primary 动画从右侧推进来。
-    final Animation<Offset> enter = animation.drive(
-      Tween<Offset>(
-        begin: const Offset(_enterDistance, 0),
-        end: Offset.zero,
-      ).chain(CurveTween(curve: Curves.easeOutCubic)),
-    );
-    // 旧页：随 secondary 动画（上一层路由的动画）往左让一点。
-    final Animation<Offset> exit = secondaryAnimation.drive(
-      Tween<Offset>(
-        begin: Offset.zero,
-        end: const Offset(-_exitDistance, 0),
-      ).chain(CurveTween(curve: Curves.easeOutCubic)),
-    );
-    return SlideTransition(
-      position: enter,
-      child: SlideTransition(position: exit, child: child),
+    return _SmoothSlidePageTransition(
+      route: route,
+      animation: animation,
+      secondaryAnimation: secondaryAnimation,
+      exitParallaxDistance: _exitParallaxDistance,
+      curve: _curve,
+      child: child,
     );
   }
+}
+
+class _SmoothSlidePageTransition extends StatefulWidget {
+  const _SmoothSlidePageTransition({
+    required this.route,
+    required this.animation,
+    required this.secondaryAnimation,
+    required this.exitParallaxDistance,
+    required this.curve,
+    required this.child,
+  });
+
+  final PageRoute<dynamic> route;
+  final Animation<double> animation;
+  final Animation<double> secondaryAnimation;
+  final double exitParallaxDistance;
+  final Curve curve;
+  final Widget child;
+
+  @override
+  State<_SmoothSlidePageTransition> createState() =>
+      _SmoothSlidePageTransitionState();
+}
+
+class _SmoothSlidePageTransitionState
+    extends State<_SmoothSlidePageTransition> {
+  late _ContinuousCurveAnimation _primaryVisual;
+  late _ContinuousCurveAnimation _secondaryVisual;
+  late Animation<Offset> _primaryOffset;
+  late Animation<Offset> _secondaryOffset;
+
+  @override
+  void initState() {
+    super.initState();
+    _initAnimations();
+  }
+
+  void _initAnimations() {
+    _primaryVisual = _ContinuousCurveAnimation(
+      parent: widget.animation,
+      curve: widget.curve,
+    );
+    _secondaryVisual = _ContinuousCurveAnimation(
+      parent: widget.secondaryAnimation,
+      curve: widget.curve,
+    );
+    _bindOffsets();
+  }
+
+  void _bindOffsets() {
+    final beginOffset = widget.route.fullscreenDialog
+        ? const Offset(0.0, 1.0)
+        : const Offset(1.0, 0.0);
+    _primaryOffset = _primaryVisual.drive(
+      Tween<Offset>(begin: beginOffset, end: Offset.zero),
+    );
+    _secondaryOffset = _secondaryVisual.drive(
+      Tween<Offset>(
+        begin: Offset.zero,
+        end: Offset(-widget.exitParallaxDistance, 0.0),
+      ),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _SmoothSlidePageTransition oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final primaryChanged = oldWidget.animation != widget.animation;
+    final secondaryChanged =
+        oldWidget.secondaryAnimation != widget.secondaryAnimation;
+    final curveChanged = oldWidget.curve != widget.curve;
+    final dialogChanged =
+        oldWidget.route.fullscreenDialog != widget.route.fullscreenDialog;
+    final parallaxChanged =
+        oldWidget.exitParallaxDistance != widget.exitParallaxDistance;
+
+    if (primaryChanged || curveChanged) {
+      _primaryVisual.dispose();
+      _primaryVisual = _ContinuousCurveAnimation(
+        parent: widget.animation,
+        curve: widget.curve,
+      );
+    }
+    if (secondaryChanged || curveChanged) {
+      _secondaryVisual.dispose();
+      _secondaryVisual = _ContinuousCurveAnimation(
+        parent: widget.secondaryAnimation,
+        curve: widget.curve,
+      );
+    }
+    if (primaryChanged ||
+        secondaryChanged ||
+        curveChanged ||
+        dialogChanged ||
+        parallaxChanged) {
+      _bindOffsets();
+    }
+  }
+
+  @override
+  void dispose() {
+    _primaryVisual.dispose();
+    _secondaryVisual.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final textDirection = Directionality.maybeOf(context) ?? TextDirection.ltr;
+
+    // 无论是否为首页，都保留 secondaryAnimation 的视差与微暗遮罩，
+    // 这样从首页进入二级页以及二级页之间跳转，背层动画语义完全一致。
+    Widget content = CustomPaint(
+      foregroundPainter: _RouteScrimPainter(progress: _secondaryVisual),
+      child: widget.child,
+    );
+
+    if (!widget.route.isFirst && !widget.route.fullscreenDialog) {
+      content = CustomPaint(
+        painter: _EdgeShadowPainter(
+          progress: _primaryVisual,
+          textDirection: textDirection,
+        ),
+        child: content,
+      );
+    }
+
+    content = SlideTransition(
+      position: _secondaryOffset,
+      textDirection: textDirection,
+      child: content,
+    );
+
+    if (widget.route.isFirst) {
+      return content;
+    }
+
+    return SlideTransition(
+      position: _primaryOffset,
+      textDirection: textDirection,
+      child: content,
+    );
+  }
+}
+
+/// 将线性路由动画映射到连续双向缓动进度 `[0.0, 1.0]`：
+/// - 完整正向与完整反向都从起点快启、终点柔顺减速；
+/// - 动画中途改变方向时，以当前视觉进度为新起点无缝衔接至目标端点，绝不跳变。
+class _ContinuousCurveAnimation extends Animation<double>
+    with AnimationWithParentMixin<double> {
+  _ContinuousCurveAnimation({required this.parent, required this.curve}) {
+    _syncFromParentStatus(
+      parent.status,
+      raw: parent.value.clamp(0.0, 1.0),
+      initialize: true,
+    );
+    parent.addStatusListener(_handleStatusChanged);
+  }
+
+  @override
+  final Animation<double> parent;
+  final Curve curve;
+
+  AnimationStatus? _lastStatus;
+  double _fromRaw = 0.0;
+  double _toRaw = 1.0;
+  double _fromVisual = 0.0;
+  double _toVisual = 1.0;
+  bool _disposed = false;
+
+  void _syncFromParentStatus(
+    AnimationStatus status, {
+    required double raw,
+    bool initialize = false,
+  }) {
+    final prevStatus = _lastStatus;
+    _lastStatus = status;
+
+    switch (status) {
+      case AnimationStatus.dismissed:
+      case AnimationStatus.completed:
+        _fromRaw = 0.0;
+        _toRaw = 1.0;
+        _fromVisual = 0.0;
+        _toVisual = 1.0;
+      case AnimationStatus.forward:
+        if (!initialize && prevStatus == AnimationStatus.forward) {
+          return;
+        }
+        if (initialize || prevStatus != AnimationStatus.reverse) {
+          _fromRaw = 0.0;
+          _toRaw = 1.0;
+          _fromVisual = 0.0;
+          _toVisual = 1.0;
+        } else {
+          final currentVisual = _evaluate(raw, fromStatus: prevStatus);
+          _fromRaw = raw;
+          _toRaw = 1.0;
+          _fromVisual = currentVisual;
+          _toVisual = 1.0;
+        }
+      case AnimationStatus.reverse:
+        if (!initialize && prevStatus == AnimationStatus.reverse) {
+          return;
+        }
+        if (initialize || prevStatus != AnimationStatus.forward) {
+          _fromRaw = 1.0;
+          _toRaw = 0.0;
+          _fromVisual = 1.0;
+          _toVisual = 0.0;
+        } else {
+          final currentVisual = _evaluate(raw, fromStatus: prevStatus);
+          _fromRaw = raw;
+          _toRaw = 0.0;
+          _fromVisual = currentVisual;
+          _toVisual = 0.0;
+        }
+    }
+  }
+
+  void _handleStatusChanged(AnimationStatus status) {
+    if (_disposed) return;
+    _syncFromParentStatus(status, raw: parent.value.clamp(0.0, 1.0));
+  }
+
+  double _evaluate(double raw, {AnimationStatus? fromStatus}) {
+    final effectiveStatus = fromStatus ?? _lastStatus;
+    if (effectiveStatus == AnimationStatus.forward && raw < _fromRaw - 1e-6) {
+      _fromRaw = 0.0;
+      _toRaw = 1.0;
+      _fromVisual = 0.0;
+      _toVisual = 1.0;
+    } else if (effectiveStatus == AnimationStatus.reverse &&
+        raw > _fromRaw + 1e-6) {
+      _fromRaw = 1.0;
+      _toRaw = 0.0;
+      _fromVisual = 1.0;
+      _toVisual = 0.0;
+    }
+    final span = _toRaw - _fromRaw;
+    if (span.abs() < 1e-6) {
+      return _toVisual;
+    }
+    final u = ((raw - _fromRaw) / span).clamp(0.0, 1.0);
+    final c = curve.transform(u);
+    return _fromVisual + (_toVisual - _fromVisual) * c;
+  }
+
+  @override
+  double get value {
+    final status = parent.status;
+    final raw = parent.value.clamp(0.0, 1.0);
+    if (status != _lastStatus) {
+      _syncFromParentStatus(status, raw: raw);
+    }
+    if (status == AnimationStatus.dismissed) return 0.0;
+    if (status == AnimationStatus.completed) return 1.0;
+    return _evaluate(raw);
+  }
+
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    parent.removeStatusListener(_handleStatusChanged);
+  }
+}
+
+/// 分段纯色矩形绘制的页面左边缘投影：不触发线性渐变着色器编译，也不创建离屏图层。
+class _EdgeShadowPainter extends CustomPainter {
+  _EdgeShadowPainter({required this.progress, required this.textDirection})
+    : super(repaint: progress);
+
+  final Animation<double> progress;
+  final TextDirection textDirection;
+
+  static const double _shadowWidth = 16.0;
+  static const int _bandCount = 8;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = progress.value;
+    if (p <= 0.001 || p >= 0.999) return;
+    final edgeFade = ((1.0 - p) * 6.0).clamp(0.0, 1.0);
+    final maxAlpha = 0.08 * edgeFade;
+    if (maxAlpha <= 0.001) return;
+
+    final bandWidth = _shadowWidth / _bandCount;
+    final paint = Paint()..isAntiAlias = false;
+    final isRtl = textDirection == TextDirection.rtl;
+
+    for (var i = 0; i < _bandCount; i++) {
+      final t = (i + 1) / _bandCount;
+      final alpha = maxAlpha * t * t;
+      paint.color = Colors.black.withValues(alpha: alpha);
+      final left = isRtl
+          ? size.width + (_bandCount - 1 - i) * bandWidth
+          : -(_bandCount - i) * bandWidth;
+      canvas.drawRect(Rect.fromLTWH(left, 0, bandWidth, size.height), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_EdgeShadowPainter oldDelegate) =>
+      oldDelegate.progress != progress ||
+      oldDelegate.textDirection != textDirection;
+}
+
+/// 覆盖在背层页面上的轻量微暗遮罩（单矩形纯色绘制，无 `saveLayer` 离屏开销）。
+class _RouteScrimPainter extends CustomPainter {
+  _RouteScrimPainter({required this.progress}) : super(repaint: progress);
+
+  final Animation<double> progress;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = progress.value;
+    if (p <= 0.001) return;
+    final alpha = 0.06 * p.clamp(0.0, 1.0);
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..color = Colors.black.withValues(alpha: alpha),
+    );
+  }
+
+  @override
+  bool shouldRepaint(_RouteScrimPainter oldDelegate) =>
+      oldDelegate.progress != progress;
 }

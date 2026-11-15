@@ -4,6 +4,7 @@ library;
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
@@ -80,15 +81,23 @@ class _ChangelogPageState extends State<ChangelogPage> {
 
   Animation<double>? _routeAnimation;
   bool _batchScheduled = false;
+  bool _isLoading = false;
   int _loadGeneration = 0;
 
   bool get _hasRemainingChunks =>
       (_releases != null && _visibleCount < _releases!.length) ||
       _pendingGroupCursor < _pendingRawGroups.length;
 
-  bool get _isRouteTransitioning =>
-      _routeAnimation != null &&
-      _routeAnimation!.status == AnimationStatus.forward;
+  bool get _isRouteExiting {
+    final status = _routeAnimation?.status;
+    return status == AnimationStatus.reverse ||
+        status == AnimationStatus.dismissed;
+  }
+
+  bool get _canScheduleBackgroundBatches {
+    final status = _routeAnimation?.status;
+    return status == null || status == AnimationStatus.completed;
+  }
 
   @override
   void initState() {
@@ -129,16 +138,46 @@ class _ChangelogPageState extends State<ChangelogPage> {
   }
 
   void _handleRouteAnimationStatus(AnimationStatus status) {
-    if (status == AnimationStatus.completed ||
-        status == AnimationStatus.dismissed) {
+    if ((status == AnimationStatus.forward ||
+            status == AnimationStatus.completed) &&
+        _releases == null &&
+        _errorMessage == null &&
+        !_isLoading) {
+      _loadChangelog();
+    }
+    if (status == AnimationStatus.completed) {
       _scheduleNextBatchIfNeeded();
     }
   }
 
   void _onScroll() {
-    if (!_scrollController.hasClients || !_hasRemainingChunks) return;
+    if (!_scrollController.hasClients ||
+        !_hasRemainingChunks ||
+        _isRouteExiting) {
+      return;
+    }
     if (_scrollController.position.extentAfter < 360) {
-      _appendNextBatch(count: ChangelogPage.incrementalBatchSize * 2);
+      _appendNextBatch(count: ChangelogPage.incrementalBatchSize);
+    }
+  }
+
+  bool _handleOverscroll(OverscrollNotification notification) {
+    if (notification.overscroll > 0 &&
+        _hasRemainingChunks &&
+        !_isRouteExiting) {
+      _appendNextBatch(count: ChangelogPage.incrementalBatchSize);
+    }
+    return false;
+  }
+
+  void _handlePointerSignal(PointerSignalEvent event) {
+    if (event is PointerScrollEvent &&
+        event.scrollDelta.dy > 0 &&
+        _hasRemainingChunks &&
+        !_isRouteExiting &&
+        (!_scrollController.hasClients ||
+            _scrollController.position.extentAfter < 360)) {
+      _appendNextBatch(count: ChangelogPage.incrementalBatchSize);
     }
   }
 
@@ -146,13 +185,13 @@ class _ChangelogPageState extends State<ChangelogPage> {
     if (!mounted ||
         _batchScheduled ||
         !_hasRemainingChunks ||
-        _isRouteTransitioning) {
+        !_canScheduleBackgroundBatches) {
       return;
     }
     _batchScheduled = true;
     SchedulerBinding.instance.addPostFrameCallback((_) {
       _batchScheduled = false;
-      if (!mounted) return;
+      if (!mounted || !_canScheduleBackgroundBatches) return;
       _appendNextBatch();
     });
     SchedulerBinding.instance.scheduleFrame();
@@ -160,7 +199,7 @@ class _ChangelogPageState extends State<ChangelogPage> {
 
   void _appendNextBatch({int count = ChangelogPage.incrementalBatchSize}) {
     final releases = _releases;
-    if (releases == null || !_hasRemainingChunks) return;
+    if (releases == null || !_hasRemainingChunks || _isRouteExiting) return;
 
     var changed = false;
     if (_pendingGroupCursor < _pendingRawGroups.length) {
@@ -192,9 +231,10 @@ class _ChangelogPageState extends State<ChangelogPage> {
 
   Future<void> _loadChangelog() async {
     final generation = ++_loadGeneration;
+    _isLoading = true;
     try {
       final content = await rootBundle.loadString('CHANGELOG.md');
-      if (!mounted || generation != _loadGeneration) return;
+      if (!mounted || generation != _loadGeneration || _isRouteExiting) return;
 
       final groups = _splitReleaseLineGroups(content);
       if (groups.isEmpty) {
@@ -232,10 +272,14 @@ class _ChangelogPageState extends State<ChangelogPage> {
       });
       _scheduleNextBatchIfNeeded();
     } catch (e) {
-      if (!mounted || generation != _loadGeneration) return;
+      if (!mounted || generation != _loadGeneration || _isRouteExiting) return;
       setState(() {
         _errorMessage = '无法加载更新日志: $e';
       });
+    } finally {
+      if (generation == _loadGeneration) {
+        _isLoading = false;
+      }
     }
   }
 
@@ -301,29 +345,38 @@ class _ChangelogPageState extends State<ChangelogPage> {
     }
 
     final showFooter = _hasRemainingChunks;
-    return SelectionArea(
-      child: ListView.separated(
-        controller: _scrollController,
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        itemCount: _visibleCount + (showFooter ? 1 : 0),
-        separatorBuilder: (_, _) => const SizedBox(height: 12),
-        itemBuilder: (context, index) {
-          if (index >= _visibleCount) {
-            return const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: Center(
-                child: SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              ),
-            );
-          }
-          return RepaintBoundary(
-            child: _ReleaseLogCard(release: _releases![index]),
-          );
-        },
+    return Listener(
+      onPointerSignal: _handlePointerSignal,
+      child: NotificationListener<OverscrollNotification>(
+        onNotification: _handleOverscroll,
+        child: SelectionArea(
+          child: ListView.separated(
+            controller: _scrollController,
+            physics: _hasRemainingChunks
+                ? const AlwaysScrollableScrollPhysics()
+                : null,
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            itemCount: _visibleCount + (showFooter ? 1 : 0),
+            separatorBuilder: (_, _) => const SizedBox(height: 12),
+            itemBuilder: (context, index) {
+              if (index >= _visibleCount) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Center(
+                    child: SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
+                );
+              }
+              return RepaintBoundary(
+                child: _ReleaseLogCard(release: _releases![index]),
+              );
+            },
+          ),
+        ),
       ),
     );
   }
