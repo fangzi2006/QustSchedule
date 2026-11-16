@@ -1125,6 +1125,7 @@ void main() {
       final baseRoot = 'http://${server.address.address}:${server.port}';
       final service = UpdateService(
         apiTimeoutOverride: const Duration(milliseconds: 120),
+        platformSupportedOverride: true,
       );
       addTearDown(service.dispose);
 

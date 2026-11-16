@@ -56,6 +56,7 @@ class UpdateService {
     @visibleForTesting Duration? apiTimeoutOverride,
     @visibleForTesting Duration? downloadConnectTimeoutOverride,
     @visibleForTesting Duration? downloadIdleTimeoutOverride,
+    this.platformSupportedOverride,
   }) : _ownsClient = httpClient == null,
        _client = httpClient ?? HttpClient(),
        _probeTimeout = probeTimeoutOverride ?? probeTimeout,
@@ -73,6 +74,8 @@ class UpdateService {
   final Duration _apiTimeout;
   final Duration _downloadConnectTimeout;
   final Duration _downloadIdleTimeout;
+  @visibleForTesting
+  final bool? platformSupportedOverride;
 
   /// 释放底层网络连接资源（仅销毁内部自建的 HttpClient）。
   void dispose() {
@@ -342,7 +345,9 @@ class UpdateService {
   }) async {
     // 异步清理历史旧版安装包与碎片，不阻塞检查流程
     unawaited(cleanOldUpdateFiles(currentVersion: currentVersion));
-    if (!Platform.isAndroid && !Platform.isWindows) {
+    final platformSupported =
+        platformSupportedOverride ?? (Platform.isAndroid || Platform.isWindows);
+    if (!platformSupported) {
       return const UpdateCheckResult(
         status: UpdateStatus.unsupportedPlatform,
         errorMessage: '当前平台暂不支持应用内更新',
