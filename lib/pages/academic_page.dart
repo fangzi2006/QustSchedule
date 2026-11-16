@@ -20,9 +20,12 @@ import '../widgets/status_popup.dart';
 import '../widgets/tactile_button.dart';
 
 class AcademicPage extends StatefulWidget {
-  const AcademicPage({super.key, required this.model});
+  const AcademicPage({super.key, required this.model, this.isActive = true});
 
   final AppModel model;
+
+  /// 当前标签页是否处于激活展示态；离屏预挂载时传入 `false`，延迟到真正切入再触发网络加载。
+  final bool isActive;
 
   @override
   State<AcademicPage> createState() => _AcademicPageState();
@@ -30,12 +33,36 @@ class AcademicPage extends StatefulWidget {
 
 class _AcademicPageState extends State<AcademicPage> {
   AppModel get model => widget.model;
+  bool _loadCheckScheduled = false;
+
+  // 考试排序与状态缓存：避免滚动或局部通知重建时重复排序、重复编译正则。
+  List<ExamItem>? _cachedExamsSource;
+  DateTime? _cachedSortedAt;
+  DateTime? _cachedNextTransitionAt;
+  _ExamPresentation? _cachedPresentation;
 
   @override
   void initState() {
     super.initState();
+    if (widget.isActive) {
+      _scheduleInitialLoadCheck();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant AcademicPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.isActive && widget.isActive) {
+      _scheduleInitialLoadCheck();
+    }
+  }
+
+  void _scheduleInitialLoadCheck() {
+    if (_loadCheckScheduled) return;
+    _loadCheckScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
+      _loadCheckScheduled = false;
+      if (!mounted || !widget.isActive) return;
       if (model.exams.isEmpty &&
           model.grades.isEmpty &&
           !model.academicLoading &&
@@ -43,6 +70,66 @@ class _AcademicPageState extends State<AcademicPage> {
         model.loadAcademicData();
       }
     });
+  }
+
+  _ExamPresentation _getExamPresentation(List<ExamItem> exams) {
+    final now = DateTime.now();
+    final cached = _cachedPresentation;
+    final cachedAt = _cachedSortedAt;
+    if (cached != null &&
+        cachedAt != null &&
+        identical(_cachedExamsSource, exams) &&
+        cachedAt.year == now.year &&
+        cachedAt.month == now.month &&
+        cachedAt.day == now.day &&
+        now.difference(cachedAt).abs() < const Duration(seconds: 30) &&
+        (_cachedNextTransitionAt == null ||
+            now.isBefore(_cachedNextTransitionAt!))) {
+      return cached;
+    }
+
+    final sortedExams = sortAcademicExams(exams, now: now);
+    ExamItem? nextUpcoming;
+    DateTime? earliestTransition;
+
+    void considerTransition(ExamItem item) {
+      final end = item.effectiveEndTime;
+      if (end != null && !end.isBefore(now)) {
+        if (earliestTransition == null || end.isBefore(earliestTransition!)) {
+          earliestTransition = end;
+        }
+      }
+      final start = item.startTime;
+      if (start != null && start.isAfter(now)) {
+        if (earliestTransition == null || start.isBefore(earliestTransition!)) {
+          earliestTransition = start;
+        }
+      }
+    }
+
+    for (final e in sortedExams) {
+      considerTransition(e);
+      if (nextUpcoming == null && !isExamPast(e, now) && e.startTime != null) {
+        nextUpcoming = e;
+      }
+    }
+
+    final remaining = nextUpcoming != null
+        ? sortedExams.where((e) => e != nextUpcoming).toList(growable: false)
+        : sortedExams;
+    final remainingPast = <bool>[for (final e in remaining) isExamPast(e, now)];
+
+    final next = _ExamPresentation(
+      now: now,
+      nextUpcoming: nextUpcoming,
+      remainingExams: remaining,
+      remainingPastFlags: remainingPast,
+    );
+    _cachedExamsSource = exams;
+    _cachedSortedAt = now;
+    _cachedNextTransitionAt = earliestTransition;
+    _cachedPresentation = next;
+    return next;
   }
 
   @override
@@ -85,49 +172,77 @@ class _AcademicPageState extends State<AcademicPage> {
           body: Stack(
             children: <Widget>[
               Positioned.fill(
-                child: ListView(
-                  padding: EdgeInsets.fromLTRB(
-                    16,
-                    8,
-                    16,
-                    FloatingDock.contentInset(context),
-                  ),
-                  children: <Widget>[
-                    if (model.academicError != null) ...<Widget>[
-                      _ErrorBanner(
-                        message: model.academicError!,
-                        onRetry: () => model.refreshAcademicData(),
+                child: CustomScrollView(
+                  slivers: <Widget>[
+                    SliverPadding(
+                      padding: EdgeInsets.fromLTRB(
+                        16,
+                        8,
+                        16,
+                        FloatingDock.contentInset(context),
                       ),
-                      const SizedBox(height: 12),
-                    ],
-                    _SectionHeader(
-                      title: '考试安排',
-                      subtitle: model.exams.isNotEmpty
-                          ? '共 ${model.exams.length} 门考试'
-                          : null,
-                    ),
-                    const SizedBox(height: 8),
-                    _ExamSection(
-                      exams: model.exams,
-                      loading: model.academicLoading && model.exams.isEmpty,
-                    ),
-                    const SizedBox(height: 20),
-                    _SectionHeader(
-                      title: '成绩与绩点',
-                      subtitle: model.grades.isNotEmpty
-                          ? '共 ${model.grades.length} 门成绩'
-                          : null,
-                    ),
-                    const SizedBox(height: 8),
-                    if (model.isNotEvaluated) ...<Widget>[
-                      const _EvaluationWarningBanner(),
-                      const SizedBox(height: 12),
-                    ],
-                    _GradeSection(
-                      grades: model.grades,
-                      stats: model.gradeStats,
-                      isNotEvaluated: model.isNotEvaluated,
-                      loading: model.academicLoading && model.grades.isEmpty,
+                      sliver: SliverMainAxisGroup(
+                        slivers: <Widget>[
+                          if (model.academicError != null) ...<Widget>[
+                            SliverToBoxAdapter(
+                              child: _ErrorBanner(
+                                message: model.academicError!,
+                                onRetry: () => model.refreshAcademicData(),
+                              ),
+                            ),
+                            const SliverToBoxAdapter(
+                              child: SizedBox(height: 12),
+                            ),
+                          ],
+                          SliverToBoxAdapter(
+                            child: _SectionHeader(
+                              title: '考试安排',
+                              subtitle: model.exams.isNotEmpty
+                                  ? '共 ${model.exams.length} 门考试'
+                                  : null,
+                            ),
+                          ),
+                          const SliverToBoxAdapter(child: SizedBox(height: 8)),
+                          ..._buildExamSectionSlivers(
+                            context,
+                            exams: model.exams,
+                            loading:
+                                model.academicLoading && model.exams.isEmpty,
+                            presentation:
+                                (model.academicLoading &&
+                                        model.exams.isEmpty) ||
+                                    model.exams.isEmpty
+                                ? null
+                                : _getExamPresentation(model.exams),
+                          ),
+                          const SliverToBoxAdapter(child: SizedBox(height: 20)),
+                          SliverToBoxAdapter(
+                            child: _SectionHeader(
+                              title: '成绩与绩点',
+                              subtitle: model.grades.isNotEmpty
+                                  ? '共 ${model.grades.length} 门成绩'
+                                  : null,
+                            ),
+                          ),
+                          const SliverToBoxAdapter(child: SizedBox(height: 8)),
+                          if (model.isNotEvaluated) ...<Widget>[
+                            const SliverToBoxAdapter(
+                              child: _EvaluationWarningBanner(),
+                            ),
+                            const SliverToBoxAdapter(
+                              child: SizedBox(height: 12),
+                            ),
+                          ],
+                          ..._buildGradeSectionSlivers(
+                            context,
+                            grades: model.grades,
+                            stats: model.gradeStats,
+                            isNotEvaluated: model.isNotEvaluated,
+                            loading:
+                                model.academicLoading && model.grades.isEmpty,
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -331,6 +446,22 @@ bool isExamPast(ExamItem exam, DateTime now) {
   return false;
 }
 
+final RegExp _examTimeOfDayRegex = RegExp(r'\d{1,2}:\d{2}');
+
+class _ExamPresentation {
+  const _ExamPresentation({
+    required this.now,
+    required this.nextUpcoming,
+    required this.remainingExams,
+    required this.remainingPastFlags,
+  });
+
+  final DateTime now;
+  final ExamItem? nextUpcoming;
+  final List<ExamItem> remainingExams;
+  final List<bool> remainingPastFlags;
+}
+
 /// 考试安排列表排序规则：
 ///  1. 进行中/未来的考试排在最前，按日期与时刻升序排列（确保下一门要考的永远在最顶端）；
 ///  2. 时间未公布的考试紧随其后；
@@ -366,8 +497,8 @@ List<ExamItem> sortAcademicExams(List<ExamItem> exams, {DateTime? now}) {
       final dateCmp = dateA.compareTo(dateB);
       if (dateCmp != 0) return dateCmp;
 
-      final hasTimeA = RegExp(r'\d{1,2}:\d{2}').hasMatch(a.rawTimeStr);
-      final hasTimeB = RegExp(r'\d{1,2}:\d{2}').hasMatch(b.rawTimeStr);
+      final hasTimeA = _examTimeOfDayRegex.hasMatch(a.rawTimeStr);
+      final hasTimeB = _examTimeOfDayRegex.hasMatch(b.rawTimeStr);
       if (hasTimeA != hasTimeB) {
         return hasTimeA ? -1 : 1;
       }
@@ -403,114 +534,108 @@ List<ExamItem> sortAcademicExams(List<ExamItem> exams, {DateTime? now}) {
   return list;
 }
 
-class _ExamSection extends StatelessWidget {
-  const _ExamSection({required this.exams, required this.loading});
+List<Widget> _buildExamSectionSlivers(
+  BuildContext context, {
+  required List<ExamItem> exams,
+  required bool loading,
+  required _ExamPresentation? presentation,
+}) {
+  final theme = Theme.of(context);
+  final scheme = theme.colorScheme;
 
-  final List<ExamItem> exams;
-  final bool loading;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-
-    if (loading) {
-      return Card(
-        elevation: 0,
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
-        child: const Padding(
-          padding: EdgeInsets.all(28.0),
-          child: Center(
-            child: SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          ),
-        ),
-      );
-    }
-
-    if (exams.isEmpty) {
-      return Card(
-        elevation: 0,
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.3),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Icon(
-                  Icons.event_available_outlined,
-                  size: 40,
-                  color: scheme.outline,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  '暂无考试安排数据',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: scheme.outline,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    final current = DateTime.now();
-    final sortedExams = sortAcademicExams(exams, now: current);
-
-    ExamItem? nextUpcoming;
-    for (final e in sortedExams) {
-      if (!isExamPast(e, current) && e.startTime != null) {
-        nextUpcoming = e;
-        break;
-      }
-    }
-
-    final remainingExams = nextUpcoming != null
-        ? sortedExams.where((e) => e != nextUpcoming).toList()
-        : sortedExams;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        if (nextUpcoming != null) ...<Widget>[
-          NextExamHeroCard(exam: nextUpcoming, now: current),
-          if (remainingExams.isNotEmpty) const SizedBox(height: 12),
-        ],
-        if (remainingExams.isNotEmpty)
-          RepaintBoundary(
-            child: Card(
-              key: const Key('academic-exam-list-card'),
-              elevation: 0,
-              clipBehavior: Clip.antiAlias,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-                side: BorderSide(
-                  color: scheme.outlineVariant.withValues(alpha: 0.5),
-                ),
+  if (loading) {
+    return <Widget>[
+      SliverToBoxAdapter(
+        child: Card(
+          elevation: 0,
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
+          child: const Padding(
+            padding: EdgeInsets.all(28.0),
+            child: Center(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
               ),
+            ),
+          ),
+        ),
+      ),
+    ];
+  }
+
+  if (exams.isEmpty || presentation == null) {
+    return <Widget>[
+      SliverToBoxAdapter(
+        child: Card(
+          elevation: 0,
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.3),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
+            child: Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
-                  for (var i = 0; i < remainingExams.length; i++) ...<Widget>[
-                    if (i > 0) const Divider(height: 0, indent: 16),
-                    _ExamListTile(
-                      exam: remainingExams[i],
-                      isPast: isExamPast(remainingExams[i], current),
+                  Icon(
+                    Icons.event_available_outlined,
+                    size: 40,
+                    color: scheme.outline,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '暂无考试安排数据',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: scheme.outline,
                     ),
-                  ],
+                  ),
                 ],
               ),
             ),
           ),
-      ],
-    );
+        ),
+      ),
+    ];
   }
+
+  final nextUpcoming = presentation.nextUpcoming;
+  final remainingExams = presentation.remainingExams;
+  final remainingPastFlags = presentation.remainingPastFlags;
+  final cardColor =
+      CardTheme.of(context).color ??
+      (theme.useMaterial3 ? scheme.surfaceContainerLow : theme.cardColor);
+  final borderSide = BorderSide(
+    color: scheme.outlineVariant.withValues(alpha: 0.5),
+  );
+
+  return <Widget>[
+    if (nextUpcoming != null) ...<Widget>[
+      SliverToBoxAdapter(
+        child: NextExamHeroCard(exam: nextUpcoming, now: presentation.now),
+      ),
+      if (remainingExams.isNotEmpty)
+        const SliverToBoxAdapter(child: SizedBox(height: 12)),
+    ],
+    if (remainingExams.isNotEmpty)
+      SliverMainAxisGroup(
+        key: const Key('academic-exam-list-card'),
+        slivers: <Widget>[
+          SliverList.builder(
+            itemCount: remainingExams.length,
+            itemBuilder: (context, i) => _LazyCardSegment(
+              isFirst: i == 0,
+              isLast: i == remainingExams.length - 1,
+              color: cardColor,
+              side: borderSide,
+              showTopDivider: i > 0,
+              child: _ExamListTile(
+                exam: remainingExams[i],
+                isPast: remainingPastFlags[i],
+              ),
+            ),
+          ),
+        ],
+      ),
+  ];
 }
 
 @visibleForTesting
@@ -532,8 +657,7 @@ class NextExamHeroCard extends StatelessWidget {
     Color badgeTextColor = scheme.onPrimary;
 
     if (start != null) {
-      final hasSpecificTime = RegExp(r'\d{1,2}:\d{2}')
-          .hasMatch(exam.rawTimeStr);
+      final hasSpecificTime = _examTimeOfDayRegex.hasMatch(exam.rawTimeStr);
       final effectiveEnd =
           exam.effectiveEndTime ??
           DateTime(start.year, start.month, start.day, 23, 59, 59);
@@ -775,96 +899,261 @@ class _ExamListTile extends StatelessWidget {
   }
 }
 
-class _GradeSection extends StatelessWidget {
-  const _GradeSection({
-    required this.grades,
-    required this.stats,
-    required this.isNotEvaluated,
-    required this.loading,
+List<Widget> _buildGradeSectionSlivers(
+  BuildContext context, {
+  required List<GradeItem> grades,
+  required GradeStats stats,
+  required bool isNotEvaluated,
+  required bool loading,
+}) {
+  final theme = Theme.of(context);
+  final scheme = theme.colorScheme;
+
+  if (loading) {
+    return <Widget>[
+      SliverToBoxAdapter(
+        child: Card(
+          elevation: 0,
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
+          child: const Padding(
+            padding: EdgeInsets.all(28.0),
+            child: Center(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ];
+  }
+
+  if (grades.isEmpty) {
+    if (isNotEvaluated) return const <Widget>[];
+    return <Widget>[
+      SliverToBoxAdapter(
+        child: Card(
+          elevation: 0,
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.3),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(Icons.school_outlined, size: 40, color: scheme.outline),
+                  const SizedBox(height: 8),
+                  Text(
+                    '暂无成绩数据',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: scheme.outline,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ];
+  }
+
+  final cardColor =
+      CardTheme.of(context).color ??
+      (theme.useMaterial3 ? scheme.surfaceContainerLow : theme.cardColor);
+  final borderSide = BorderSide(
+    color: scheme.outlineVariant.withValues(alpha: 0.5),
+  );
+
+  return <Widget>[
+    SliverToBoxAdapter(child: _GpaStatsCard(stats: stats)),
+    const SliverToBoxAdapter(child: SizedBox(height: 12)),
+    SliverList.builder(
+      itemCount: grades.length,
+      itemBuilder: (context, i) => _LazyCardSegment(
+        isFirst: i == 0,
+        isLast: i == grades.length - 1,
+        color: cardColor,
+        side: borderSide,
+        showTopDivider: i > 0,
+        child: _GradeListTile(grade: grades[i]),
+      ),
+    ),
+  ];
+}
+
+/// 懒加载分组卡片中的单条分段容器：在 [SliverList] 内复用整卡的圆角描边与内部分割线外观。
+class _LazyCardSegment extends StatelessWidget {
+  const _LazyCardSegment({
+    required this.isFirst,
+    required this.isLast,
+    required this.color,
+    required this.side,
+    required this.showTopDivider,
+    required this.child,
   });
 
-  final List<GradeItem> grades;
-  final GradeStats stats;
-  final bool isNotEvaluated;
-  final bool loading;
+  final bool isFirst;
+  final bool isLast;
+  final Color color;
+  final BorderSide side;
+  final bool showTopDivider;
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-
-    if (loading) {
-      return Card(
-        elevation: 0,
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
-        child: const Padding(
-          padding: EdgeInsets.all(28.0),
-          child: Center(
-            child: SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          ),
-        ),
-      );
-    }
-
-    if (grades.isEmpty) {
-      if (isNotEvaluated) return const SizedBox.shrink();
-      return Card(
-        elevation: 0,
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.3),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Icon(Icons.school_outlined, size: 40, color: scheme.outline),
-                const SizedBox(height: 8),
-                Text(
-                  '暂无成绩数据',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: scheme.outline,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        _GpaStatsCard(stats: stats),
-        const SizedBox(height: 12),
-        RepaintBoundary(
-          child: Card(
-            elevation: 0,
-            clipBehavior: Clip.antiAlias,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
-              side: BorderSide(
-                color: scheme.outlineVariant.withValues(alpha: 0.5),
-              ),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                for (var i = 0; i < grades.length; i++) ...<Widget>[
-                  if (i > 0) const Divider(height: 0, indent: 16),
-                  _GradeListTile(grade: grades[i]),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ],
+    return Material(
+      color: color,
+      elevation: 0,
+      clipBehavior: Clip.antiAlias,
+      shape: _CardSegmentShape(
+        isFirst: isFirst,
+        isLast: isLast,
+        radius: 20,
+        side: side,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          if (showTopDivider) const Divider(height: 0, indent: 16),
+          child,
+        ],
+      ),
     );
   }
+}
+
+class _CardSegmentShape extends OutlinedBorder {
+  const _CardSegmentShape({
+    required this.isFirst,
+    required this.isLast,
+    required this.radius,
+    super.side,
+  });
+
+  final bool isFirst;
+  final bool isLast;
+  final double radius;
+
+  @override
+  OutlinedBorder copyWith({BorderSide? side}) => _CardSegmentShape(
+    isFirst: isFirst,
+    isLast: isLast,
+    radius: radius,
+    side: side ?? this.side,
+  );
+
+  @override
+  Path getOuterPath(Rect rect, {TextDirection? textDirection}) {
+    final r = Radius.circular(radius);
+    if (isFirst && isLast) {
+      return Path()..addRRect(RRect.fromRectAndRadius(rect, r));
+    }
+    if (isFirst) {
+      return Path()
+        ..addRRect(RRect.fromRectAndCorners(rect, topLeft: r, topRight: r));
+    }
+    if (isLast) {
+      return Path()..addRRect(
+        RRect.fromRectAndCorners(rect, bottomLeft: r, bottomRight: r),
+      );
+    }
+    return Path()..addRect(rect);
+  }
+
+  @override
+  Path getInnerPath(Rect rect, {TextDirection? textDirection}) {
+    final w = side.style == BorderStyle.none ? 0.0 : side.width;
+    final innerRect = Rect.fromLTRB(
+      rect.left + w,
+      rect.top + (isFirst ? w : 0),
+      rect.right - w,
+      rect.bottom - (isLast ? w : 0),
+    );
+    final innerR = (radius - w) > 0 ? radius - w : 0.0;
+    final r = Radius.circular(innerR);
+    if (isFirst && isLast) {
+      return Path()..addRRect(RRect.fromRectAndRadius(innerRect, r));
+    }
+    if (isFirst) {
+      return Path()..addRRect(
+        RRect.fromRectAndCorners(innerRect, topLeft: r, topRight: r),
+      );
+    }
+    if (isLast) {
+      return Path()..addRRect(
+        RRect.fromRectAndCorners(innerRect, bottomLeft: r, bottomRight: r),
+      );
+    }
+    return Path()..addRect(innerRect);
+  }
+
+  @override
+  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {
+    if (side.style == BorderStyle.none || side.width <= 0) return;
+    final paint = side.toPaint();
+    final half = side.width / 2;
+    final left = rect.left + half;
+    final top = rect.top + half;
+    final right = rect.right - half;
+    final bottom = rect.bottom - half;
+    final rVal = (radius - half) > 0 ? radius - half : 0.0;
+    final r = Radius.circular(rVal);
+
+    if (isFirst && isLast) {
+      canvas.drawRRect(
+        RRect.fromLTRBAndCorners(
+          left,
+          top,
+          right,
+          bottom,
+          topLeft: r,
+          topRight: r,
+          bottomLeft: r,
+          bottomRight: r,
+        ),
+        paint,
+      );
+      return;
+    }
+
+    if (isFirst) {
+      final path = Path()
+        ..moveTo(left, rect.bottom)
+        ..lineTo(left, top + rVal)
+        ..arcToPoint(Offset(left + rVal, top), radius: r, clockwise: true)
+        ..lineTo(right - rVal, top)
+        ..arcToPoint(Offset(right, top + rVal), radius: r, clockwise: true)
+        ..lineTo(right, rect.bottom);
+      canvas.drawPath(path, paint);
+      return;
+    }
+
+    if (isLast) {
+      final path = Path()
+        ..moveTo(left, rect.top)
+        ..lineTo(left, bottom - rVal)
+        ..arcToPoint(Offset(left + rVal, bottom), radius: r, clockwise: false)
+        ..lineTo(right - rVal, bottom)
+        ..arcToPoint(Offset(right, bottom - rVal), radius: r, clockwise: false)
+        ..lineTo(right, rect.top);
+      canvas.drawPath(path, paint);
+      return;
+    }
+
+    canvas.drawLine(Offset(left, rect.top), Offset(left, rect.bottom), paint);
+    canvas.drawLine(Offset(right, rect.top), Offset(right, rect.bottom), paint);
+  }
+
+  @override
+  ShapeBorder scale(double t) => _CardSegmentShape(
+    isFirst: isFirst,
+    isLast: isLast,
+    radius: radius * t,
+    side: side.scale(t),
+  );
 }
 
 class _GpaStatsCard extends StatelessWidget {

@@ -247,6 +247,9 @@ final class ExamItem {
         status: (json['status'] as String?) ?? '',
       );
 
+  /// 匹配常见时间写法（如 `08:30` / `8:30`），预编译避免高频计算重复构造正则。
+  static final RegExp _timeOfDayRegex = RegExp(r'\d{1,2}:\d{2}');
+
   /// 有效结束时间：
   ///  1. 若已提供 [endTime]，直接使用；
   ///  2. 若仅有 [startTime] 且包含具体时刻（如 08:30），按标准考程 2 小时估算有效结束时刻；
@@ -255,7 +258,7 @@ final class ExamItem {
   DateTime? get effectiveEndTime {
     if (endTime != null) return endTime;
     if (startTime == null) return null;
-    final hasSpecificTime = RegExp(r'\d{1,2}:\d{2}').hasMatch(rawTimeStr);
+    final hasSpecificTime = _timeOfDayRegex.hasMatch(rawTimeStr);
     if (hasSpecificTime) {
       return startTime!.add(const Duration(hours: 2));
     }

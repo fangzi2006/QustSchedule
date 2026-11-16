@@ -385,109 +385,149 @@ class _RawTab extends StatelessWidget {
       return const Center(child: Text('还没有获取过课表'));
     }
     return SelectionArea(
-      child: ListView(
+      child: ListView.builder(
         padding: const EdgeInsets.all(12),
-        children: <Widget>[
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  SelectionContainer.disabled(
-                    child: Row(
-                      children: <Widget>[
-                        Expanded(
-                          child: Text(
-                            '原始响应（${body?.length ?? 0} 字符）',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
+        itemCount: rows.length + 2,
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            return Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    SelectionContainer.disabled(
+                      child: Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: Text(
+                              '原始响应（${body?.length ?? 0} 字符）',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ),
-                        ),
-                        TactileActionButton(
-                          variant: TactileActionVariant.text,
-                          icon: const Icon(Icons.copy, size: 16),
-                          label: const Text('复制'),
-                          onPressed: body == null
-                              ? null
-                              : () => _copyText(context, body, '原始响应已复制'),
-                        ),
-                      ],
+                          TactileActionButton(
+                            variant: TactileActionVariant.text,
+                            icon: const Icon(Icons.copy, size: 16),
+                            label: const Text('复制'),
+                            onPressed: body == null
+                                ? null
+                                : () => _copyText(context, body, '原始响应已复制'),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  _CollapsibleText(text: body ?? ''),
-                ],
+                    _CollapsibleText(text: body ?? ''),
+                  ],
+                ),
               ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          SelectionContainer.disabled(
-            child: Text(
-              'kbList 行（${rows.length}）',
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-          ),
-          const SizedBox(height: 4),
-          for (var index = 0; index < rows.length; index++)
-            _RawRowTile(index: index, row: rows[index]),
-        ],
+            );
+          }
+          if (index == 1) {
+            return Padding(
+              padding: const EdgeInsets.only(top: 12, bottom: 4),
+              child: SelectionContainer.disabled(
+                child: Text(
+                  'kbList 行（${rows.length}）',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            );
+          }
+          final rowIndex = index - 2;
+          return _RawRowTile(index: rowIndex, row: rows[rowIndex]);
+        },
       ),
     );
   }
 }
 
-class _RawRowTile extends StatelessWidget {
+class _RawRowTile extends StatefulWidget {
   const _RawRowTile({required this.index, required this.row});
 
   final int index;
   final Map<String, dynamic> row;
 
   @override
+  State<_RawRowTile> createState() => _RawRowTileState();
+}
+
+class _RawRowTileState extends State<_RawRowTile> {
+  bool _expanded = false;
+  String? _formattedJson;
+
+  @override
+  void didUpdateWidget(covariant _RawRowTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.row, widget.row)) {
+      _formattedJson = null;
+    }
+  }
+
+  String _ensureFormattedJson() =>
+      _formattedJson ??= const JsonEncoder.withIndent('  ').convert(widget.row);
+
+  @override
   Widget build(BuildContext context) {
+    final row = widget.row;
     final name = row['kcmc'] ?? row['KCMC'] ?? '(无课程名)';
     final day = row['xqj'] ?? row['XQJ'] ?? '?';
     final periods =
         row['jcs'] ?? row['JCS'] ?? row['jcor'] ?? row['JCOR'] ?? '?';
     final weeks = row['zcd'] ?? row['ZCD'] ?? '?';
-    final text = const JsonEncoder.withIndent('  ').convert(row);
     return Card(
       margin: const EdgeInsets.only(bottom: 6),
       child: ExpansionTile(
         dense: true,
+        initiallyExpanded: _expanded,
+        onExpansionChanged: (expanded) {
+          if (_expanded == expanded) return;
+          setState(() => _expanded = expanded);
+        },
         title: SelectionContainer.disabled(
           child: Text('$name', style: const TextStyle(fontSize: 13)),
         ),
         subtitle: SelectionContainer.disabled(
           child: Text(
-            '#$index  周$day  第$periods节  $weeks',
+            '#${widget.index}  周$day  第$periods节  $weeks',
             style: const TextStyle(fontSize: 11),
           ),
         ),
-        children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                SelectionContainer.disabled(
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: TactileActionButton(
-                      variant: TactileActionVariant.text,
-                      icon: const Icon(Icons.copy, size: 16),
-                      label: const Text('复制这行 JSON'),
-                      onPressed: () =>
-                          _copyText(context, text, '已复制第 $index 行'),
-                    ),
+        children: !_expanded
+            ? const <Widget>[]
+            : <Widget>[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      SelectionContainer.disabled(
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: TactileActionButton(
+                            variant: TactileActionVariant.text,
+                            icon: const Icon(Icons.copy, size: 16),
+                            label: const Text('复制这行 JSON'),
+                            onPressed: () => _copyText(
+                              context,
+                              _ensureFormattedJson(),
+                              '已复制第 ${widget.index} 行',
+                            ),
+                          ),
+                        ),
+                      ),
+                      Text(
+                        _ensureFormattedJson(),
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                Text(
-                  text,
-                  style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
-                ),
               ],
-            ),
-          ),
-        ],
       ),
     );
   }

@@ -80,6 +80,42 @@ class AppInstaller {
     throw UnsupportedError('当前平台暂不支持应用内安装更新');
   }
 
+  /// 清理遗留在应用目录或临时目录下的更新辅助脚本与暂存目录（异步版本，避免阻塞 UI 线程）。
+  static Future<void> cleanLegacyUpdaterScriptAsync({
+    Directory? appDir,
+    Directory? tempDir,
+  }) async {
+    if (!Platform.isWindows && appDir == null && tempDir == null) return;
+    final effectiveAppDir =
+        appDir ??
+        (Platform.isWindows ? File(Platform.resolvedExecutable).parent : null);
+    if (effectiveAppDir != null) {
+      await _deleteIfExistsAsync(
+        File(
+          '${effectiveAppDir.path}${Platform.pathSeparator}$portableCmdFileName',
+        ),
+      );
+      await _deleteIfExistsAsync(
+        File(
+          '${effectiveAppDir.path}${Platform.pathSeparator}$portableVbsFileName',
+        ),
+      );
+      await _deleteDirIfExistsAsync(
+        Directory(
+          '${effectiveAppDir.path}${Platform.pathSeparator}.update_staging',
+        ),
+      );
+    }
+    if (tempDir != null) {
+      await _deleteIfExistsAsync(
+        File('${tempDir.path}${Platform.pathSeparator}$setupCmdFileName'),
+      );
+      await _deleteIfExistsAsync(
+        File('${tempDir.path}${Platform.pathSeparator}$setupVbsFileName'),
+      );
+    }
+  }
+
   /// 清理遗留在应用目录或临时目录下的更新辅助脚本与暂存目录（若此前自删未完成）。
   static void cleanLegacyUpdaterScript({
     Directory? appDir,
@@ -114,6 +150,18 @@ class AppInstaller {
         File('${tempDir.path}${Platform.pathSeparator}$setupVbsFileName'),
       );
     }
+  }
+
+  static Future<void> _deleteIfExistsAsync(File file) async {
+    try {
+      if (await file.exists()) await file.delete();
+    } catch (_) {}
+  }
+
+  static Future<void> _deleteDirIfExistsAsync(Directory dir) async {
+    try {
+      if (await dir.exists()) await dir.delete(recursive: true);
+    } catch (_) {}
   }
 
   static void _deleteIfExists(File file) {

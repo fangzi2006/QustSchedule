@@ -69,6 +69,58 @@ class ScheduleController extends ChangeNotifier {
   Future<Schedule>? scheduleLoad;
   bool _disposed = false;
 
+  int _dataRevision = 0;
+
+  /// 当前课表与调课视图缓存版本号（内容或调课规则变动时递增，供空闲预热判定失效）。
+  int get dataRevision => _dataRevision;
+
+  Schedule? _cachedViewSchedule;
+  DateTime? _cachedViewTermStart;
+  int _cachedViewMaxWeek = -1;
+  List<RescheduleRule> _cachedViewRules = const <RescheduleRule>[];
+  final Map<int, RescheduleWeekView> _rescheduleCache =
+      <int, RescheduleWeekView>{};
+  final Map<int, Map<String, ({int index, int total})>> _conflictLayoutCache =
+      <int, Map<String, ({int index, int total})>>{};
+
+  @visibleForTesting
+  int debugRescheduleComputes = 0;
+
+  @visibleForTesting
+  int debugConflictComputes = 0;
+
+  void _invalidateWeekCaches() {
+    _rescheduleCache.clear();
+    _conflictLayoutCache.clear();
+    _cachedViewSchedule = null;
+    _dataRevision++;
+  }
+
+  void _ensureWeekViewCacheValid() {
+    final schedule = _schedule;
+    final termStart = _termStart;
+    final rules = _prefs.reschedules;
+    if (identical(_cachedViewSchedule, schedule) &&
+        _cachedViewTermStart == termStart &&
+        _cachedViewMaxWeek == _maxWeek &&
+        listEquals(_cachedViewRules, rules)) {
+      return;
+    }
+    _rescheduleCache.clear();
+    _conflictLayoutCache.clear();
+    _cachedViewSchedule = schedule;
+    _cachedViewTermStart = termStart;
+    _cachedViewMaxWeek = _maxWeek;
+    _cachedViewRules = List<RescheduleRule>.of(rules);
+    _dataRevision++;
+  }
+
+  @visibleForTesting
+  int get rescheduleCacheCountForTest => _rescheduleCache.length;
+
+  @visibleForTesting
+  int get conflictLayoutCacheCountForTest => _conflictLayoutCache.length;
+
   void rebindCache(ScheduleCache cache) {
     _scheduleCache = cache;
   }
@@ -107,6 +159,7 @@ class ScheduleController extends ChangeNotifier {
     }
     unawaited(saveScheduleCache(schedule, baseUrl: baseUrl));
     _lastFetchedAt = DateTime.now();
+    _invalidateWeekCaches();
     notifyListeners();
   }
 
@@ -115,6 +168,7 @@ class ScheduleController extends ChangeNotifier {
     _termId = cached.schedule.termId;
     _lastFetchedAt = cached.fetchedAt;
     applyCalendar(cached.schedule);
+    _invalidateWeekCaches();
     notifyListeners();
   }
 
@@ -124,6 +178,7 @@ class ScheduleController extends ChangeNotifier {
     _schedule = null;
     _terms = null;
     _termId = '';
+    _invalidateWeekCaches();
     unawaited(_scheduleCache.clear());
     notifyListeners();
   }
@@ -134,6 +189,7 @@ class ScheduleController extends ChangeNotifier {
     _schedule = null;
     _terms = null;
     _termId = '';
+    _invalidateWeekCaches();
     notifyListeners();
     unawaited(_scheduleCache.clear());
   }
@@ -150,6 +206,7 @@ class ScheduleController extends ChangeNotifier {
     applyCalendar(schedule);
     if (termStart != null) _termStart = termStart;
     if (week != null) _setWeek(week);
+    _invalidateWeekCaches();
     notifyListeners();
   }
 
@@ -171,13 +228,31 @@ class ScheduleController extends ChangeNotifier {
     if (schedule == null || termStart == null) {
       return const RescheduleWeekView();
     }
-    return rescheduleWeekView(
-      schedule.entries,
-      _prefs.reschedules,
-      termStart,
-      week,
-      maxWeek: _maxWeek,
-    );
+    _ensureWeekViewCacheValid();
+    return _rescheduleCache.putIfAbsent(week, () {
+      debugRescheduleComputes++;
+      return rescheduleWeekView(
+        schedule.entries,
+        _cachedViewRules,
+        termStart,
+        week,
+        maxWeek: _maxWeek,
+      );
+    });
+  }
+
+  /// 获取某周的同天节次重叠并列布局缓存。
+  Map<String, ({int index, int total})> conflictLayoutForWeek(int week) {
+    final schedule = _schedule;
+    final termStart = _termStart;
+    if (schedule == null || termStart == null) {
+      return const <String, ({int index, int total})>{};
+    }
+    final view = rescheduleViewFor(week);
+    return _conflictLayoutCache.putIfAbsent(week, () {
+      debugConflictComputes++;
+      return conflictLayout(view.entries);
+    });
   }
 
   List<ScheduleEntry> entriesForWeek(int week) =>
@@ -294,6 +369,7 @@ class ScheduleController extends ChangeNotifier {
     if (termId.isNotEmpty) {
       await _prefs.raw.setTermStart(termId, start);
     }
+    _invalidateWeekCaches();
     notifyListeners();
     _prefs.notifyPrefs();
   }
@@ -305,6 +381,7 @@ class ScheduleController extends ChangeNotifier {
     _termStart = estimateTermStart(term);
     _setWeek(weekOf(_termStart!, DateTime.now()));
     await _prefs.raw.setTermStart(termId, _termStart!);
+    _invalidateWeekCaches();
     notifyListeners();
     _prefs.notifyPrefs();
   }

@@ -59,6 +59,19 @@ class RescheduleRule {
       toDay: toDay,
     );
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RescheduleRule &&
+          other.id == id &&
+          other.fromMonth == fromMonth &&
+          other.fromDay == fromDay &&
+          other.toMonth == toMonth &&
+          other.toDay == toDay;
+
+  @override
+  int get hashCode => Object.hash(id, fromMonth, fromDay, toMonth, toDay);
 }
 
 /// 一条调课冲突：调课 [winner] 顶掉了原本在该时段上课的 [displaced]。

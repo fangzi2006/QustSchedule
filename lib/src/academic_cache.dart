@@ -138,9 +138,10 @@ class FileExamCache implements ExamCache {
 
   static Future<FileExamCache> open({
     String fileName = 'zf-exam-cache.json',
+    Directory? directory,
   }) async {
-    final directory = await getApplicationSupportDirectory();
-    return FileExamCache._(File('${directory.path}/$fileName'));
+    final targetDir = directory ?? await getApplicationSupportDirectory();
+    return FileExamCache._(File('${targetDir.path}/$fileName'));
   }
 
   @override
@@ -274,9 +275,10 @@ class FileGradesCache implements GradesCache {
 
   static Future<FileGradesCache> open({
     String fileName = 'zf-grades-cache.json',
+    Directory? directory,
   }) async {
-    final directory = await getApplicationSupportDirectory();
-    return FileGradesCache._(File('${directory.path}/$fileName'));
+    final targetDir = directory ?? await getApplicationSupportDirectory();
+    return FileGradesCache._(File('${targetDir.path}/$fileName'));
   }
 
   @override

@@ -8,8 +8,12 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'cookies.dart';
+
+/// Cookie JSON 文本达到该长度后切换后台 Isolate 解码，避免大体积快照阻塞 UI 线程。
+const int _isolateJsonDecodeThreshold = 16 * 1024;
 
 class _PendingCookieSave {
   _PendingCookieSave(this.snapshot);
@@ -55,10 +59,12 @@ class FileCookieStorage {
     _pendingSaves.remove(_lockKey);
     return _synchronized(() async {
       final file = File(path);
-      if (!file.existsSync()) return null;
+      if (!await file.exists()) return null;
       try {
         final text = await file.readAsString();
-        final decoded = jsonDecode(text);
+        final decoded = text.length >= _isolateJsonDecodeThreshold
+            ? await Isolate.run<Object?>(() => jsonDecode(text))
+            : jsonDecode(text);
         if (decoded is! Map<String, dynamic>) return null;
         return CookieStoreSnapshot.fromJson(decoded);
       } catch (_) {
@@ -114,7 +120,7 @@ class FileCookieStorage {
       );
       await tmpFile.rename(path);
     } finally {
-      if (tmpFile.existsSync()) {
+      if (await tmpFile.exists()) {
         try {
           await tmpFile.delete();
         } catch (_) {}
@@ -134,9 +140,9 @@ class FileCookieStorage {
     }
     return _synchronized(() async {
       final file = File(path);
-      if (file.existsSync()) await file.delete();
+      if (await file.exists()) await file.delete();
       final tmpFile = File('$path.tmp');
-      if (tmpFile.existsSync()) {
+      if (await tmpFile.exists()) {
         try {
           await tmpFile.delete();
         } catch (_) {}

@@ -97,6 +97,11 @@ class UpdateService {
   /// 启用多线程并发分块的最小体积阈值（小于 4MB 的小文件单线程开销更小）
   static const int minChunkingBytes = 4 * 1024 * 1024;
 
+  static final RegExp _updateArtifactVerRegex = RegExp(
+    r'^QustSchedule_v?(\d+(?:\.\d+)*(?:-(?:alpha|beta|rc|pre|dev)[0-9A-Za-z\.]*)?(?:\+[0-9A-Za-z\.]+)?)(?=-|\.|$)',
+    caseSensitive: false,
+  );
+
   /// 静默清理临时目录中残留的历史安装包（版本号 <= 当前应用运行版本）以及未完成的临时切片文件。
   static Future<int> cleanOldUpdateFiles({
     String? currentVersion,
@@ -106,12 +111,10 @@ class UpdateService {
       final curVer = currentVersion ?? appVersion;
       if (curVer.isEmpty || curVer == '-') return 0;
       final tempDir = targetDirectory ?? await getTemporaryDirectory();
-      AppInstaller.cleanLegacyUpdaterScript(tempDir: tempDir);
-      final entities = tempDir.listSync();
-      final verRegex = RegExp(r'^QustSchedule_v?([0-9A-Za-z\.\+\-]+?)(?:-|\.)');
+      await AppInstaller.cleanLegacyUpdaterScriptAsync(tempDir: tempDir);
 
       int deletedCount = 0;
-      for (final entity in entities) {
+      await for (final entity in tempDir.list(followLinks: false)) {
         if (entity is! File) continue;
         final filename = entity.uri.pathSegments.last;
         if (!filename.startsWith('QustSchedule_')) continue;
@@ -119,18 +122,18 @@ class UpdateService {
         // 清理切片碎片
         if (filename.contains('.part')) {
           try {
-            entity.deleteSync();
+            await entity.delete();
             deletedCount++;
           } catch (_) {}
           continue;
         }
 
-        final match = verRegex.firstMatch(filename);
+        final match = _updateArtifactVerRegex.firstMatch(filename);
         if (match != null) {
           final fileVer = match.group(1)!;
           if (compareSemanticVersions(fileVer, curVer) <= 0) {
             try {
-              entity.deleteSync();
+              await entity.delete();
               deletedCount++;
             } catch (_) {}
           }
@@ -595,9 +598,9 @@ class UpdateService {
     final file = File('${tempDir.path}/${asset.name}');
 
     // 1. 本地完整性嗅探与复用：若本地已存在同名且大小完全匹配的文件，直接跳过网络下载（0秒秒进安装）
-    if (file.existsSync()) {
+    if (await file.exists()) {
       try {
-        final localLen = file.lengthSync();
+        final localLen = await file.length();
         if (localLen == asset.size && asset.size > 0) {
           bool valid = true;
           if (expectedSha256 != null && expectedSha256.isNotEmpty) {
@@ -632,7 +635,7 @@ class UpdateService {
         throw Exception('下载已取消');
       }
 
-      if (file.existsSync()) {
+      if (await file.exists()) {
         try {
           await file.delete();
         } catch (_) {}

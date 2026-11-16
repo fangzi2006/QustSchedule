@@ -639,6 +639,17 @@ class _WeekPagerState extends State<_WeekPager> {
   /// 手指正按着拖（含松手后的惯性直到完全停下）。
   bool _dragging = false;
 
+  Timer? _prewarmDelayTimer;
+  int _prewarmGen = 0;
+  bool _prewarmInFlight = false;
+  CourseBlockLayoutSnapshot? _layoutSnapshot;
+  int? _lastPrewarmedWeek;
+  int _lastPrewarmedMaxWeek = -1;
+  int _lastPrewarmedRevision = -1;
+  CourseBlockLayoutSnapshot? _lastPrewarmedSnapshot;
+  bool _prewarmCompleted = false;
+  bool _postFramePrewarmScheduled = false;
+
   AppModel get model => widget.model;
 
   @override
@@ -648,13 +659,175 @@ class _WeekPagerState extends State<_WeekPager> {
     // 订阅的是**周次通知源**而不是整个 model：内容变化与翻页无关，
     // 而周次变化也不该拖着整张课表重建。
     model.weekNotifier.addListener(_onWeekChanged);
+    widget.shownWeek.addListener(_onShownWeekChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant _WeekPager oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.shownWeek != widget.shownWeek) {
+      oldWidget.shownWeek.removeListener(_onShownWeekChanged);
+      widget.shownWeek.addListener(_onShownWeekChanged);
+    }
+    _scheduleNeighborPrewarm();
   }
 
   @override
   void dispose() {
+    _cancelNeighborPrewarm();
+    widget.shownWeek.removeListener(_onShownWeekChanged);
     model.weekNotifier.removeListener(_onWeekChanged);
     _controller.dispose();
     super.dispose();
+  }
+
+  void _cancelNeighborPrewarm() {
+    _prewarmGen++;
+    _prewarmInFlight = false;
+    _prewarmDelayTimer?.cancel();
+    _prewarmDelayTimer = null;
+  }
+
+  void _onShownWeekChanged() {
+    _scheduleNeighborPrewarm();
+  }
+
+  void _onLayoutSnapshot(CourseBlockLayoutSnapshot snapshot) {
+    final snapshotChanged = _layoutSnapshot != snapshot;
+    _layoutSnapshot = snapshot;
+    if (!snapshotChanged &&
+        _lastPrewarmedRevision == model.scheduleDataRevision) {
+      return;
+    }
+    if (_postFramePrewarmScheduled) return;
+    _postFramePrewarmScheduled = true;
+    // 推迟到布局阶段结束后的 post-frame 再入队邻近周分片预热，保持 LayoutBuilder 阶段纯净。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _postFramePrewarmScheduled = false;
+      if (mounted) {
+        _scheduleNeighborPrewarm();
+      }
+    });
+  }
+
+  void _scheduleNeighborPrewarm() {
+    if (!mounted || _dragging || _animatingTo != null) {
+      _cancelNeighborPrewarm();
+      return;
+    }
+    final snapshot = _layoutSnapshot;
+    if (snapshot == null || model.schedule == null) return;
+
+    final currentWeek = widget.shownWeek.value;
+    final maxWeek = model.maxWeek;
+    final revision = model.scheduleDataRevision;
+    final samePrewarmTarget =
+        _lastPrewarmedWeek == currentWeek &&
+        _lastPrewarmedMaxWeek == maxWeek &&
+        _lastPrewarmedRevision == revision &&
+        _lastPrewarmedSnapshot == snapshot;
+    if (samePrewarmTarget && (_prewarmCompleted || _prewarmInFlight)) {
+      return;
+    }
+
+    _lastPrewarmedWeek = currentWeek;
+    _lastPrewarmedMaxWeek = maxWeek;
+    _lastPrewarmedRevision = revision;
+    _lastPrewarmedSnapshot = snapshot;
+    _prewarmCompleted = false;
+
+    _cancelNeighborPrewarm();
+
+    final neighborWeeks = <int>[];
+    for (var delta = 1; delta <= 2; delta++) {
+      if (currentWeek + delta <= maxWeek) {
+        neighborWeeks.add(currentWeek + delta);
+      }
+      if (currentWeek - delta >= 1) {
+        neighborWeeks.add(currentWeek - delta);
+      }
+    }
+    if (neighborWeeks.isEmpty) {
+      _prewarmCompleted = true;
+      return;
+    }
+
+    const chunkSize = 3;
+    var weekCursor = 0;
+    var entryCursor = 0;
+    final gen = _prewarmGen;
+    _prewarmInFlight = true;
+
+    void scheduleNextFrameSlice() {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted ||
+            gen != _prewarmGen ||
+            _dragging ||
+            _animatingTo != null ||
+            model.schedule == null) {
+          if (gen == _prewarmGen) {
+            _prewarmInFlight = false;
+          }
+          return;
+        }
+        final stopwatch = Stopwatch()..start();
+        while (weekCursor < neighborWeeks.length) {
+          final targetWeek = neighborWeeks[weekCursor];
+          final entries = model.rescheduleViewFor(targetWeek).entries;
+          if (entryCursor >= entries.length) {
+            weekCursor++;
+            entryCursor = 0;
+            continue;
+          }
+          final layout = model.conflictLayoutForWeek(targetWeek);
+          final end = (entryCursor + chunkSize < entries.length)
+              ? entryCursor + chunkSize
+              : entries.length;
+          while (entryCursor < end) {
+            final entry = entries[entryCursor++];
+            CourseBlock.prewarmEntry(
+              entry: entry,
+              slot: layout[entry.id] ?? (index: 0, total: 1),
+              snapshot: snapshot,
+            );
+          }
+          if (stopwatch.elapsed >= const Duration(milliseconds: 2)) {
+            break;
+          }
+        }
+        if (weekCursor >= neighborWeeks.length) {
+          _prewarmInFlight = false;
+          if (mounted &&
+              gen == _prewarmGen &&
+              _lastPrewarmedWeek == currentWeek &&
+              _lastPrewarmedMaxWeek == maxWeek &&
+              _lastPrewarmedRevision == revision &&
+              _lastPrewarmedSnapshot == snapshot) {
+            _prewarmCompleted = true;
+          }
+          return;
+        }
+        scheduleNextFrameSlice();
+      });
+      // Timer 回调里可能处于无脏标记的静止状态，必须显式请求一帧，
+      // 否则 postFrameCallback 会在屏幕完全静止时得不到调度。
+      WidgetsBinding.instance.ensureVisualUpdate();
+    }
+
+    _prewarmDelayTimer = Timer(const Duration(milliseconds: 90), () {
+      _prewarmDelayTimer = null;
+      if (!mounted ||
+          gen != _prewarmGen ||
+          _dragging ||
+          _animatingTo != null ||
+          model.schedule == null) {
+        if (gen == _prewarmGen) {
+          _prewarmInFlight = false;
+        }
+        return;
+      }
+      scheduleNextFrameSlice();
+    });
   }
 
   /// 外部改了周次（点箭头 / 选周 / 回到本周 / 校准）→ 动画滚到对应页。
@@ -678,6 +851,7 @@ class _WeekPagerState extends State<_WeekPager> {
 
     _dragging = false;
     _animatingTo = target;
+    _cancelNeighborPrewarm();
     _controller
         .animateToPage(target, duration: _flipDuration, curve: Curves.easeOut)
         .whenComplete(() {
@@ -685,6 +859,7 @@ class _WeekPagerState extends State<_WeekPager> {
           _animatingTo = null;
           // 动画被打断（拖拽接管）时，落点由手决定：以实际停下的页为准。
           _settleToPage();
+          _scheduleNeighborPrewarm();
         });
   }
 
@@ -693,6 +868,7 @@ class _WeekPagerState extends State<_WeekPager> {
   bool _onScrollNotification(ScrollNotification notification) {
     if (notification.depth != 0) return false;
     if (notification is ScrollStartNotification) {
+      _cancelNeighborPrewarm();
       if (notification.dragDetails != null) {
         _dragging = true;
         // 真拖拽接管：程序动画的目标作废，否则拖到一半会被"拉回"原目标。
@@ -702,6 +878,7 @@ class _WeekPagerState extends State<_WeekPager> {
       // 拖拽 + 惯性彻底停下（按住不会走到这里，因为 hold 已被忽略）。
       _dragging = false;
       _settleToPage();
+      _scheduleNeighborPrewarm();
     }
     return false;
   }
@@ -752,8 +929,13 @@ class _WeekPagerState extends State<_WeekPager> {
         dragStartBehavior: DragStartBehavior.down,
         itemCount: model.maxWeek,
         onPageChanged: _onPageChanged,
-        itemBuilder: (context, index) =>
-            _WeekView(model: model, week: index + 1),
+        itemBuilder: (context, index) => _WeekView(
+          model: model,
+          week: index + 1,
+          onLayoutSnapshot: (index + 1) == widget.shownWeek.value
+              ? _onLayoutSnapshot
+              : null,
+        ),
       ),
     );
   }
@@ -761,10 +943,15 @@ class _WeekPagerState extends State<_WeekPager> {
 
 /// 一周的内容：表头 + 网格。
 class _WeekView extends StatelessWidget {
-  const _WeekView({required this.model, required this.week});
+  const _WeekView({
+    required this.model,
+    required this.week,
+    this.onLayoutSnapshot,
+  });
 
   final AppModel model;
   final int week;
+  final ValueChanged<CourseBlockLayoutSnapshot>? onLayoutSnapshot;
 
   /// 时间列宽度：只放 `08:00` 这种 5 个字符，34 刚好。
   /// 整列套 `FittedBox(scaleDown)` 兜底：窄了或系统字号放大时整体缩小，不会折行。
@@ -783,7 +970,7 @@ class _WeekView extends StatelessWidget {
 
     // 同一天节次重叠的课（重修 / 分班）→ conflictLayout 并排；据此算出
     // ① 哪些天有"课表时间冲突"（表头画黄底）② 哪些卡片要打冲突点。
-    final layout = conflictLayout(entries);
+    final layout = model.conflictLayoutForWeek(week);
     final timetableConflictDays = <int>{};
     final conflictEntryKeys = <String>{};
     for (final entry in entries) {
@@ -819,6 +1006,27 @@ class _WeekView extends StatelessWidget {
                     final rows = model.gridSectionCount;
                     final dayWidth =
                         (constraints.maxWidth - timeColumnWidth) / 7;
+                    final captureSnapshot = onLayoutSnapshot;
+                    if (captureSnapshot != null &&
+                        dayWidth > 0 &&
+                        rowHeight > 0 &&
+                        rows > 0) {
+                      captureSnapshot(
+                        CourseBlockLayoutSnapshot(
+                          baseTextStyle: DefaultTextStyle.of(context).style,
+                          boldText: MediaQuery.boldTextOf(context),
+                          textScaler: MediaQuery.textScalerOf(context),
+                          textDirection: Directionality.of(context),
+                          locale: Localizations.maybeLocaleOf(context),
+                          dayWidth: dayWidth,
+                          rowHeight: rowHeight,
+                          rows: rows,
+                          showTeacher: model.showTeacher,
+                          showLocation: model.showLocation,
+                          textScale: model.courseTextScale,
+                        ),
+                      );
+                    }
                     return SingleChildScrollView(
                       // 同上：竖向滚动也从按下那一点开始算，慢拖才跟手。
                       dragStartBehavior: DragStartBehavior.down,

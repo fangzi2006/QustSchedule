@@ -7,8 +7,10 @@
 library;
 
 import 'dart:async';
+import 'dart:io' show Directory;
 
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:zf_academic/zf_academic.dart';
 
 import 'academic_cache.dart';
@@ -71,6 +73,7 @@ class AppModel extends ChangeNotifier {
     AcademicService? academicService,
     UpdateFlowController? updateFlow,
     String? schoolBaseUrl,
+    this.supportDirectoryLoader,
   }) : _repositoryReady = repository != null,
        _preferencesReady = preferences != null,
        _cacheReady = scheduleCache != null,
@@ -120,6 +123,10 @@ class AppModel extends ChangeNotifier {
   final bool _examCacheReady;
   final bool _gradesCacheReady;
   final bool _academicServiceReady;
+
+  @visibleForTesting
+  final Future<Directory> Function()? supportDirectoryLoader;
+  Timer? _idleAcademicRestoreTimer;
 
   /// 全局与页面级提示气泡控制器。
   final HintNoticeController hints;
@@ -208,6 +215,11 @@ class AppModel extends ChangeNotifier {
 
   RescheduleWeekView rescheduleViewFor(int week) =>
       scheduleState.rescheduleViewFor(week);
+
+  Map<String, ({int index, int total})> conflictLayoutForWeek(int week) =>
+      scheduleState.conflictLayoutForWeek(week);
+
+  int get scheduleDataRevision => scheduleState.dataRevision;
 
   List<ScheduleEntry> entriesForWeek(int week) =>
       scheduleState.entriesForWeek(week);
@@ -354,17 +366,34 @@ class AppModel extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   Future<void> boot() async {
+    _cancelIdleAcademicRestore();
     _setStatus(AppStatus.booting);
     try {
+      final needsSupportDir =
+          !_repositoryReady ||
+          !_preferencesReady ||
+          !_cacheReady ||
+          !_examCacheReady ||
+          !_gradesCacheReady;
+      final supportDir = needsSupportDir
+          ? await (supportDirectoryLoader ?? getApplicationSupportDirectory)()
+          : null;
+
       final sessionFuture = _repositoryReady
           ? null
-          : FileSessionRepository.open();
-      final preferencesFuture = _preferencesReady ? null : Preferences.open();
-      final cacheFuture = _cacheReady ? null : FileScheduleCache.open();
-      final examCacheFuture = _examCacheReady ? null : FileExamCache.open();
+          : FileSessionRepository.open(directory: supportDir);
+      final preferencesFuture = _preferencesReady
+          ? null
+          : Preferences.open(directory: supportDir);
+      final cacheFuture = _cacheReady
+          ? null
+          : FileScheduleCache.open(directory: supportDir);
+      final examCacheFuture = _examCacheReady
+          ? null
+          : FileExamCache.open(directory: supportDir);
       final gradesCacheFuture = _gradesCacheReady
           ? null
-          : FileGradesCache.open();
+          : FileGradesCache.open(directory: supportDir);
 
       if (sessionFuture != null) session.rebindRepository(await sessionFuture);
       if (preferencesFuture != null) {
@@ -417,11 +446,9 @@ class AppModel extends ChangeNotifier {
         final saved = await session.service.credentials.get(
           session.accountKey(),
         );
-        if (saved != null) session.username = saved.username;
-        final hasSaved = await session.service.credentials.has(
-          session.accountKey(),
-        );
-        if (!hasSaved) {
+        if (saved != null) {
+          session.username = saved.username;
+        } else {
           _setStatus(AppStatus.needLogin);
           return;
         }
@@ -435,27 +462,50 @@ class AppModel extends ChangeNotifier {
   void _restoreCachedSchedule(CachedSchedule cached) {
     scheduleState.applyCachedSchedule(cached);
     _setStatus(AppStatus.ready);
-    unawaited(academic.restoreCachedData(cached.schedule.termId));
+    _scheduleIdleAcademicRestore(cached.schedule.termId);
+  }
+
+  void _scheduleIdleAcademicRestore(String termId) {
+    _cancelIdleAcademicRestore();
+    if (_disposed || termId.isEmpty) return;
+    _idleAcademicRestoreTimer = Timer(Duration.zero, () {
+      _idleAcademicRestoreTimer = null;
+      if (_disposed || _status == AppStatus.needLogin) return;
+      unawaited(academic.restoreCachedData(termId));
+    });
+  }
+
+  void _cancelIdleAcademicRestore() {
+    _idleAcademicRestoreTimer?.cancel();
+    _idleAcademicRestoreTimer = null;
   }
 
   // ---------------------------------------------------------------------------
   // 学业、周次与课表刷新编排
   // ---------------------------------------------------------------------------
 
-  void setAcademicTerm(String termId) => academic.setAcademicTerm(termId);
+  void setAcademicTerm(String termId) {
+    _cancelIdleAcademicRestore();
+    academic.setAcademicTerm(termId);
+  }
 
   Future<void> loadAcademicData({
     String? termId,
     bool forceRefresh = false,
     bool showHint = false,
-  }) => academic.loadAcademicData(
-    termId: termId,
-    forceRefresh: forceRefresh,
-    showHint: showHint,
-  );
+  }) {
+    _cancelIdleAcademicRestore();
+    return academic.loadAcademicData(
+      termId: termId,
+      forceRefresh: forceRefresh,
+      showHint: showHint,
+    );
+  }
 
-  Future<void> refreshAcademicData({bool showHint = true}) =>
-      academic.refreshAcademicData(showHint: showHint);
+  Future<void> refreshAcademicData({bool showHint = true}) {
+    _cancelIdleAcademicRestore();
+    return academic.refreshAcademicData(showHint: showHint);
+  }
 
   void goToWeek(int week) => scheduleState.goToWeek(week);
   void goToThisWeek() => scheduleState.goToThisWeek();
@@ -626,6 +676,7 @@ class AppModel extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   Future<void> signIn(String username, String password) async {
+    _cancelIdleAcademicRestore();
     _authEpoch++;
     scheduleState.scheduleLoad = null;
     _reloginStageActive = false;
@@ -787,6 +838,7 @@ class AppModel extends ChangeNotifier {
 
   Future<void> changeSchool(String baseUrl, {bool relogin = true}) async {
     if (sameSchool(schoolBaseUrl, baseUrl)) return;
+    _cancelIdleAcademicRestore();
 
     final String account = username;
 
@@ -898,6 +950,7 @@ class AppModel extends ChangeNotifier {
   }
 
   Future<void> signOut() async {
+    _cancelIdleAcademicRestore();
     _authEpoch++;
     _reloginStageActive = false;
     scheduleState.scheduleLoad = null;
@@ -1063,6 +1116,7 @@ class AppModel extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _cancelIdleAcademicRestore();
     hints.dispose();
     academic.dispose();
     scheduleState.dispose();

@@ -11,9 +11,14 @@ import '../theme/app_theme.dart';
 import '../widgets/tactile_button.dart';
 
 class CaptchaPage extends StatefulWidget {
-  const CaptchaPage({super.key, required this.model});
+  const CaptchaPage({
+    super.key,
+    required this.model,
+    @visibleForTesting this.base64Decoder,
+  });
 
   final AppModel model;
+  final Uint8List? Function(String)? base64Decoder;
 
   @override
   State<CaptchaPage> createState() => _CaptchaPageState();
@@ -23,28 +28,56 @@ class _CaptchaPageState extends State<CaptchaPage> {
   final _controller = TextEditingController();
   final _focus = FocusNode();
   bool _busy = false;
+  String? _cachedImageBase64;
+  Uint8List? _cachedBytes;
+  @visibleForTesting
+  int debugDecodeCount = 0;
 
   AppModel get model => widget.model;
 
   @override
   void initState() {
     super.initState();
+    _syncCaptchaBytes(model.captcha?.imageBase64);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _focus.requestFocus();
     });
   }
 
   @override
+  void didUpdateWidget(covariant CaptchaPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncCaptchaBytes(model.captcha?.imageBase64);
+  }
+
+  @override
   void dispose() {
+    _cachedImageBase64 = null;
+    _cachedBytes = null;
     _controller.dispose();
     _focus.dispose();
     super.dispose();
   }
 
+  void _syncCaptchaBytes(String? raw) {
+    if (raw == _cachedImageBase64) return;
+    _cachedImageBase64 = raw;
+    _cachedBytes = raw == null ? null : _decodeCaptchaBytes(raw);
+  }
+
+  Uint8List? _bytesForCaptcha(String raw) {
+    if (raw != _cachedImageBase64) {
+      _syncCaptchaBytes(raw);
+    }
+    return _cachedBytes;
+  }
+
   Uint8List? _decodeCaptchaBytes(String raw) {
+    debugDecodeCount++;
     if (raw.trim().isEmpty) return null;
     try {
-      return base64Decode(raw);
+      final custom = widget.base64Decoder;
+      return custom != null ? custom(raw) : base64Decode(raw);
     } catch (_) {
       return null;
     }
@@ -67,7 +100,6 @@ class _CaptchaPageState extends State<CaptchaPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final captcha = model.captcha;
 
     return Scaffold(
       appBar: AppBar(
@@ -90,135 +122,140 @@ class _CaptchaPageState extends State<CaptchaPage> {
             padding: const EdgeInsets.all(24),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 380),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: <Widget>[
-                  if (captcha == null)
-                    Text(
-                      '验证码已过期，请返回重新登录',
-                      textAlign: TextAlign.center,
-                      style: theme.textTheme.bodyMedium,
-                    )
-                  else ...<Widget>[
-                    Text(
-                      '教务系统要求输入验证码',
-                      textAlign: TextAlign.center,
-                      style: theme.textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '看不清可点击图片更换，登录进度将保留',
-                      textAlign: TextAlign.center,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.hintColor,
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    Center(
-                      child: InkWell(
-                        onTap: _busy ? null : model.refreshCaptcha,
-                        borderRadius: BorderRadius.circular(AppRadius.medium),
-                        child: Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: AppColors.of(context).captchaSurface,
+              child: ListenableBuilder(
+                listenable: model.routeNotifier,
+                builder: (context, _) {
+                  final captcha = model.captcha;
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      if (captcha == null)
+                        Text(
+                          '验证码已过期，请返回重新登录',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodyMedium,
+                        )
+                      else ...<Widget>[
+                        Text(
+                          '教务系统要求输入验证码',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          '看不清可点击图片更换，登录进度将保留',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.hintColor,
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        Center(
+                          child: InkWell(
+                            onTap: _busy ? null : model.refreshCaptcha,
                             borderRadius: BorderRadius.circular(
                               AppRadius.medium,
                             ),
-                            border: Border.all(color: scheme.outlineVariant),
-                          ),
-                          child: Builder(
-                            builder: (context) {
-                              final placeholder = SizedBox(
-                                height: 72,
-                                child: Center(
-                                  child: Text(
-                                    '验证码图片无法显示',
-                                    style: theme.textTheme.bodySmall,
-                                  ),
+                            child: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: AppColors.of(context).captchaSurface,
+                                borderRadius: BorderRadius.circular(
+                                  AppRadius.medium,
                                 ),
-                              );
-                              final bytes = _decodeCaptchaBytes(
-                                captcha.imageBase64,
-                              );
-                              if (bytes == null) return placeholder;
-                              return Image.memory(
-                                bytes,
-                                height: 72,
-                                fit: BoxFit.contain,
-                                gaplessPlayback: true,
-                                errorBuilder: (context, error, stack) =>
-                                    placeholder,
-                              );
-                            },
+                                border: Border.all(
+                                  color: scheme.outlineVariant,
+                                ),
+                              ),
+                              child: Builder(
+                                builder: (context) {
+                                  final placeholder = SizedBox(
+                                    height: 72,
+                                    child: Center(
+                                      child: Text(
+                                        '验证码图片无法显示',
+                                        style: theme.textTheme.bodySmall,
+                                      ),
+                                    ),
+                                  );
+                                  final bytes = _bytesForCaptcha(
+                                    captcha.imageBase64,
+                                  );
+                                  if (bytes == null) return placeholder;
+                                  return Image.memory(
+                                    bytes,
+                                    height: 72,
+                                    fit: BoxFit.contain,
+                                    gaplessPlayback: true,
+                                    errorBuilder: (context, error, stack) =>
+                                        placeholder,
+                                  );
+                                },
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    TextField(
-                      controller: _controller,
-                      focusNode: _focus,
-                      autofocus: true,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 20,
-                        letterSpacing: 6,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      decoration: InputDecoration(
-                        hintText: '输入验证码',
-                        hintStyle: const TextStyle(
-                          fontSize: 15,
-                          letterSpacing: 0,
-                          fontWeight: FontWeight.w400,
+                        const SizedBox(height: 18),
+                        TextField(
+                          controller: _controller,
+                          focusNode: _focus,
+                          autofocus: true,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 20,
+                            letterSpacing: 6,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          decoration: InputDecoration(
+                            hintText: '输入验证码',
+                            hintStyle: const TextStyle(
+                              fontSize: 15,
+                              letterSpacing: 0,
+                              fontWeight: FontWeight.w400,
+                            ),
+                            suffixIcon: IconButton(
+                              icon: const Icon(Icons.refresh_rounded, size: 20),
+                              tooltip: '换一张',
+                              onPressed: _busy ? null : model.refreshCaptcha,
+                            ),
+                          ),
+                          textInputAction: TextInputAction.done,
+                          onSubmitted: (_) => _submit(),
                         ),
-                        suffixIcon: IconButton(
-                          icon: const Icon(Icons.refresh_rounded, size: 20),
-                          tooltip: '换一张',
-                          onPressed: _busy ? null : model.refreshCaptcha,
+                        const SizedBox(height: 16),
+                        TactileActionButton(
+                          variant: TactileActionVariant.filled,
+                          borderRadius: 14.0,
+                          onPressed: _busy ? null : _submit,
+                          label: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            child: _busy
+                                ? const SizedBox(
+                                    height: 18,
+                                    width: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Text('提交'),
+                          ),
                         ),
-                      ),
-                      textInputAction: TextInputAction.done,
-                      onSubmitted: (_) => _submit(),
-                    ),
-                    const SizedBox(height: 16),
-                    TactileActionButton(
-                      variant: TactileActionVariant.filled,
-                      borderRadius: 14.0,
-                      onPressed: _busy ? null : _submit,
-                      label: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                        child: _busy
-                            ? const SizedBox(
-                                height: 18,
-                                width: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Text('提交'),
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 14),
-                  ListenableBuilder(
-                    listenable: model.routeNotifier,
-                    builder: (context, _) {
-                      if (model.message.isEmpty) return const SizedBox.shrink();
-                      return Text(
-                        model.message,
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: model.status == AppStatus.failed
-                              ? scheme.error
-                              : null,
+                      ],
+                      const SizedBox(height: 14),
+                      if (model.message.isNotEmpty)
+                        Text(
+                          model.message,
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: model.status == AppStatus.failed
+                                ? scheme.error
+                                : null,
+                          ),
                         ),
-                      );
-                    },
-                  ),
-                ],
+                    ],
+                  );
+                },
               ),
             ),
           ),

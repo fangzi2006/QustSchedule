@@ -14,6 +14,7 @@ import '../src/app_model.dart';
 import '../src/reminder_gateway.dart';
 import '../src/reminder_planner.dart';
 import '../src/reminder_service.dart';
+import '../src/route_settled.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_snack_bar.dart';
 import '../widgets/section_title.dart';
@@ -36,16 +37,32 @@ class _ReminderPageState extends State<ReminderPage>
 
   /// 是否正在跑一次原生操作。**故意不进 State，也不 setState**。
   bool _running = false;
+  bool _initialRefreshScheduled = false;
+  RouteSettledHandle? _initialRefreshHandle;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    unawaited(_refreshStatus());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_initialRefreshScheduled) return;
+    _initialRefreshScheduled = true;
+    // 推入转场期间暂缓首次原生状态查询，等进场动画落稳后再发，避免抢占 260ms 滑入帧。
+    _initialRefreshHandle = scheduleAfterRouteSettled(
+      context: context,
+      isMounted: () => mounted,
+      task: _refreshStatus,
+    );
   }
 
   @override
   void dispose() {
+    _initialRefreshHandle?.cancel();
+    _initialRefreshHandle = null;
     WidgetsBinding.instance.removeObserver(this);
     _statusNotifier.dispose();
     super.dispose();

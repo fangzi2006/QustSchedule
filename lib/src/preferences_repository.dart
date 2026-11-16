@@ -262,9 +262,12 @@ class Preferences {
     file: null,
   );
 
-  static Future<Preferences> open({String fileName = 'app_prefs.json'}) async {
-    final directory = await getApplicationSupportDirectory();
-    return openFile(File('${directory.path}/$fileName'));
+  static Future<Preferences> open({
+    String fileName = 'app_prefs.json',
+    Directory? directory,
+  }) async {
+    final targetDir = directory ?? await getApplicationSupportDirectory();
+    return openFile(File('${targetDir.path}/$fileName'));
   }
 
   /// 从指定设置文件安全打开设置（支持 `.bak` 自动恢复与损坏检测）。

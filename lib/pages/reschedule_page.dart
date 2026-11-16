@@ -21,7 +21,7 @@ class ReschedulePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: model,
+      listenable: model.prefsNotifier,
       builder: (context, _) {
         final rules = model.reschedules;
         return Scaffold(

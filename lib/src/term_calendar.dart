@@ -95,6 +95,9 @@ List<ScheduleEntry> entriesOfWeek(List<ScheduleEntry> entries, int week) =>
 Map<String, ({int index, int total})> conflictLayout(
   List<ScheduleEntry> entries,
 ) {
+  if (entries.isEmpty) {
+    return const <String, ({int index, int total})>{};
+  }
   final result = <String, ({int index, int total})>{};
   final byDay = <int, List<ScheduleEntry>>{};
   for (final entry in entries) {

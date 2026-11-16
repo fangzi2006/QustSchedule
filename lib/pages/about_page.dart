@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../src/app_model.dart';
 import '../src/app_version.dart';
+import '../src/route_settled.dart';
 import '../src/updater/update_models.dart';
 import '../src/updater/update_service.dart';
 import 'changelog_page.dart';
@@ -34,11 +35,27 @@ class _AboutPageState extends State<AboutPage> {
   bool _checkingUpdate = false;
   String? _updateStatusText;
   bool _lastCheckHadError = false;
+  bool _cleanupScheduled = false;
+  RouteSettledHandle? _cleanupRouteHandle;
 
   @override
-  void initState() {
-    super.initState();
-    unawaited(UpdateService.cleanOldUpdateFiles(currentVersion: appVersion));
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_cleanupScheduled) return;
+    _cleanupScheduled = true;
+    // 旧安装包清理推迟到页面转场稳定之后，避免压入首帧并发磁盘遍历。
+    _cleanupRouteHandle = scheduleAfterRouteSettled(
+      context: context,
+      isMounted: () => mounted,
+      task: () => UpdateService.cleanOldUpdateFiles(currentVersion: appVersion),
+    );
+  }
+
+  @override
+  void dispose() {
+    _cleanupRouteHandle?.cancel();
+    _cleanupRouteHandle = null;
+    super.dispose();
   }
 
   Future<void> _checkUpdate() async {
@@ -341,29 +358,76 @@ class _AboutPageState extends State<AboutPage> {
   }
 }
 
-/// 本应用开源协议全文（GPL v3）：从 asset 里的 LICENSE 读取展示。
+/// 本应用开源协议全文（GPL v3）：从 asset 里的 LICENSE 读取并分段懒渲染展示。
 class LicenseTextPage extends StatefulWidget {
   const LicenseTextPage({super.key});
+
+  static final RegExp _blankLineSplitRegex = RegExp(r'\n[ \t]*\n');
+  static final RegExp _lineBreakCollapseRegex = RegExp(r'\s*\n\s*');
+
+  static List<String>? _cachedParagraphs;
+
+  @visibleForTesting
+  static void resetCache() => _cachedParagraphs = null;
+
+  /// 将 LICENSE 文本规范化并按段落拆分，仅在加载或空闲预热时执行一次。
+  @visibleForTesting
+  static List<String> reflowParagraphs(String raw) {
+    final normalized = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final result = <String>[];
+    for (final chunk in normalized.split(_blankLineSplitRegex)) {
+      final cleaned = chunk.replaceAll(_lineBreakCollapseRegex, ' ').trim();
+      if (cleaned.isNotEmpty) {
+        result.add(cleaned);
+      }
+    }
+    return result;
+  }
+
+  /// 读取并缓存分段后的开源协议文本。
+  static Future<List<String>> loadParagraphs() async {
+    final cached = _cachedParagraphs;
+    if (cached != null) return cached;
+    final text = await rootBundle.loadString('LICENSE', cache: false);
+    final paragraphs = List<String>.unmodifiable(reflowParagraphs(text));
+    _cachedParagraphs = paragraphs;
+    return paragraphs;
+  }
+
+  /// 空闲帧静默预热开源协议缓存，避免首次打开页面时冷读 asset 并同步整篇重排。
+  static Future<void> warmUp() async {
+    if (_cachedParagraphs != null) return;
+    try {
+      await loadParagraphs();
+    } catch (_) {
+      // 预热失败静默忽略，进入页面时再按正常路径加载。
+    }
+  }
 
   @override
   State<LicenseTextPage> createState() => _LicenseTextPageState();
 }
 
 class _LicenseTextPageState extends State<LicenseTextPage> {
-  String? _text;
+  List<String>? _paragraphs;
   bool _failed = false;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    final cached = LicenseTextPage._cachedParagraphs;
+    if (cached != null) {
+      _paragraphs = cached;
+    } else {
+      _load();
+    }
   }
 
   Future<void> _load() async {
     try {
-      final text = await rootBundle.loadString('LICENSE');
+      final paragraphs = await LicenseTextPage.loadParagraphs();
       if (!mounted) return;
-      setState(() => _text = text);
+      setState(() => _paragraphs = paragraphs);
     } catch (_) {
       if (!mounted) return;
       setState(() => _failed = true);
@@ -396,31 +460,30 @@ class _LicenseTextPageState extends State<LicenseTextPage> {
         ),
       );
     }
-    if (_text == null) {
+    final paragraphs = _paragraphs;
+    if (paragraphs == null) {
       return const Center(child: CircularProgressIndicator());
     }
+    final textStyle = theme.textTheme.bodySmall?.copyWith(
+      fontSize: 13,
+      height: 1.6,
+      color: theme.colorScheme.onSurface,
+    );
     return SelectionArea(
-      child: SingleChildScrollView(
+      child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
-        child: Text(
-          _reflow(_text!),
-          textAlign: TextAlign.left,
-          style: theme.textTheme.bodySmall?.copyWith(
-            fontSize: 13,
-            height: 1.6,
-            color: theme.colorScheme.onSurface,
+        itemCount: paragraphs.length,
+        itemBuilder: (context, index) => Padding(
+          padding: EdgeInsets.only(
+            bottom: index == paragraphs.length - 1 ? 0 : 12,
+          ),
+          child: Text(
+            paragraphs[index],
+            textAlign: TextAlign.left,
+            style: textStyle,
           ),
         ),
       ),
     );
-  }
-
-  String _reflow(String raw) {
-    final normalized = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
-    return normalized
-        .split(RegExp(r'\n[ \t]*\n'))
-        .map((p) => p.replaceAll(RegExp(r'\s*\n\s*'), ' ').trim())
-        .where((p) => p.isNotEmpty)
-        .join('\n\n');
   }
 }

@@ -51,9 +51,10 @@ class FileScheduleCache implements ScheduleCache {
 
   static Future<FileScheduleCache> open({
     String fileName = 'zf-schedule-cache.json',
+    Directory? directory,
   }) async {
-    final directory = await getApplicationSupportDirectory();
-    return FileScheduleCache._(File('${directory.path}/$fileName'));
+    final targetDir = directory ?? await getApplicationSupportDirectory();
+    return FileScheduleCache._(File('${targetDir.path}/$fileName'));
   }
 
   static bool _isValidPayload(Object? decoded) {

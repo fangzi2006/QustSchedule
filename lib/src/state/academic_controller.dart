@@ -74,8 +74,20 @@ class AcademicController extends ChangeNotifier {
   List<GradeItem> _grades = const <GradeItem>[];
   List<GradeItem> get grades => _grades;
 
-  /// 当前学期成绩与学分绩点统计。
-  GradeStats get gradeStats => GradeStats.calculate(_grades);
+  GradeStats? _cachedGradeStats;
+  List<GradeItem>? _cachedGradeStatsSource;
+
+  /// 当前学期成绩与学分绩点统计（按成绩列表引用记忆化，避免每次重建重复遍历统计）。
+  GradeStats get gradeStats {
+    final cached = _cachedGradeStats;
+    if (cached != null && identical(_cachedGradeStatsSource, _grades)) {
+      return cached;
+    }
+    final computed = GradeStats.calculate(_grades);
+    _cachedGradeStatsSource = _grades;
+    _cachedGradeStats = computed;
+    return computed;
+  }
 
   bool _isNotEvaluated = false;
   bool get isNotEvaluated => _isNotEvaluated;
@@ -131,8 +143,10 @@ class AcademicController extends ChangeNotifier {
     if (termId.isEmpty) return;
     final seq = _academicLoadSeq;
     try {
-      final cachedExams = await _examCache.load(termId);
-      final cachedGrades = await _gradesCache.load(termId);
+      final cachedExamsFuture = _examCache.load(termId);
+      final cachedGradesFuture = _gradesCache.load(termId);
+      final cachedExams = await cachedExamsFuture;
+      final cachedGrades = await cachedGradesFuture;
       if (_disposed || seq != _academicLoadSeq || _isNeedLoginReader()) return;
       if (cachedExams != null || cachedGrades != null) {
         _exams = cachedExams?.items ?? const <ExamItem>[];
@@ -348,8 +362,10 @@ class AcademicController extends ChangeNotifier {
     final seq = _academicLoadSeq;
     _suppressStageHintsSetter(true);
     try {
-      final existingExams = await _examCache.load(termId);
-      final existingGrades = await _gradesCache.load(termId);
+      final existingExamsFuture = _examCache.load(termId);
+      final existingGradesFuture = _gradesCache.load(termId);
+      final existingExams = await existingExamsFuture;
+      final existingGrades = await existingGradesFuture;
       if (_disposed || seq != _academicLoadSeq || _isNeedLoginReader()) return;
 
       final bool isDebugCleared = _academicDataClearedForDebug;
@@ -366,8 +382,10 @@ class AcademicController extends ChangeNotifier {
       }
       if (_disposed || seq != _academicLoadSeq || _isNeedLoginReader()) return;
 
-      final freshExams = await _examCache.load(termId);
-      final freshGrades = await _gradesCache.load(termId);
+      final freshExamsFuture = _examCache.load(termId);
+      final freshGradesFuture = _gradesCache.load(termId);
+      final freshExams = await freshExamsFuture;
+      final freshGrades = await freshGradesFuture;
       if (_disposed || seq != _academicLoadSeq || _isNeedLoginReader()) return;
 
       final changeMsg = _diffChangeMessage(

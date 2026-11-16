@@ -5,6 +5,8 @@
 /// 放安全存储只会放大 Keystore 的读写频次与失败面。
 library;
 
+import 'dart:io';
+
 import 'package:path_provider/path_provider.dart';
 import 'package:zf_academic/zf_academic_io.dart';
 
@@ -26,10 +28,11 @@ class FileSessionRepository implements SessionRepository {
 
   static Future<FileSessionRepository> open({
     String fileName = 'zf-session.json',
+    Directory? directory,
   }) async {
-    final directory = await getApplicationSupportDirectory();
+    final targetDir = directory ?? await getApplicationSupportDirectory();
     return FileSessionRepository._(
-      FileCookieStorage('${directory.path}/$fileName'),
+      FileCookieStorage('${targetDir.path}/$fileName'),
     );
   }
 

@@ -25,6 +25,66 @@ import '../src/course_text.dart';
 import '../theme/app_theme.dart';
 import '../theme/course_palette.dart';
 
+/// 从已渲染周课表收集的真实布局与排版参数快照，用于空闲帧精准预热邻近周的课程块排版缓存。
+class CourseBlockLayoutSnapshot {
+  const CourseBlockLayoutSnapshot({
+    required this.baseTextStyle,
+    required this.boldText,
+    required this.textScaler,
+    required this.textDirection,
+    required this.locale,
+    required this.dayWidth,
+    required this.rowHeight,
+    required this.rows,
+    required this.showTeacher,
+    required this.showLocation,
+    required this.textScale,
+  });
+
+  final TextStyle baseTextStyle;
+  final bool boldText;
+  final TextScaler textScaler;
+  final TextDirection textDirection;
+  final Locale? locale;
+  final double dayWidth;
+  final double rowHeight;
+  final int rows;
+  final bool showTeacher;
+  final bool showLocation;
+  final double textScale;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CourseBlockLayoutSnapshot &&
+          other.baseTextStyle == baseTextStyle &&
+          other.boldText == boldText &&
+          other.textScaler == textScaler &&
+          other.textDirection == textDirection &&
+          other.locale == locale &&
+          (other.dayWidth - dayWidth).abs() < 0.01 &&
+          (other.rowHeight - rowHeight).abs() < 0.01 &&
+          other.rows == rows &&
+          other.showTeacher == showTeacher &&
+          other.showLocation == showLocation &&
+          (other.textScale - textScale).abs() < 0.001;
+
+  @override
+  int get hashCode => Object.hash(
+    baseTextStyle,
+    boldText,
+    textScaler,
+    textDirection,
+    locale,
+    (dayWidth * 100).round(),
+    (rowHeight * 100).round(),
+    rows,
+    showTeacher,
+    showLocation,
+    (textScale * 1000).round(),
+  );
+}
+
 class CourseBlock extends StatelessWidget {
   const CourseBlock({
     super.key,
@@ -65,6 +125,71 @@ class CourseBlock extends StatelessWidget {
   @visibleForTesting
   static void clearBlockPlanCacheForTest() {
     _BlockPlan.clearCache();
+  }
+
+  /// 按已渲染周视图快照的精确尺寸与文字样式，预先计算单条课程卡片的排版方案并写入缓存。
+  static void prewarmEntry({
+    required ScheduleEntry entry,
+    required ({int index, int total}) slot,
+    required CourseBlockLayoutSnapshot snapshot,
+  }) {
+    if (entry.day < 1 || entry.day > 7) return;
+    final start = entry.startPeriod < 1 ? 1 : entry.startPeriod;
+    if (start > snapshot.rows) return;
+    final end = entry.endPeriod > snapshot.rows
+        ? snapshot.rows
+        : entry.endPeriod;
+    if (end < start) return;
+
+    final rawHeight = (end - start + 1) * snapshot.rowHeight - 4;
+    const gap = 2.5;
+    final cellWidth = snapshot.dayWidth - 4;
+    final rawWidth = cellWidth / slot.total - (slot.total > 1 ? gap : 0);
+    final outerWidth = rawWidth < 24 ? 24.0 : rawWidth;
+    final outerHeight = rawHeight < 26 ? 26.0 : rawHeight;
+
+    // 精确扣除 Container 的 padding (3*2) 与 BoxDecoration Border.all(width: 1) 的边框占位 (1*2)
+    const chromeInsetX = _paddingX * 2 + 2.0;
+    const chromeInsetY = _paddingY * 2 + 2.0;
+    final innerWidth = outerWidth - chromeInsetX;
+    final innerHeight = outerHeight - chromeInsetY;
+    if (innerWidth <= 0 || innerHeight <= 0) return;
+
+    final scale = snapshot.textScale.clamp(0.6, 2.0);
+    var effectiveTitleStyle = snapshot.baseTextStyle.merge(
+      titleStyle.copyWith(
+        fontSize: titleStyle.fontSize! * scale,
+        color: _BlockPlan._cacheDummyColor,
+      ),
+    );
+    var effectiveDetailStyle = snapshot.baseTextStyle.merge(
+      detailStyle.copyWith(
+        fontSize: detailStyle.fontSize! * scale,
+        color: _BlockPlan._cacheDummyColor,
+      ),
+    );
+    if (snapshot.boldText) {
+      const boldOverride = TextStyle(fontWeight: FontWeight.bold);
+      effectiveTitleStyle = effectiveTitleStyle.merge(boldOverride);
+      effectiveDetailStyle = effectiveDetailStyle.merge(boldOverride);
+    }
+
+    final location = snapshot.showLocation && entry.location != null
+        ? roomOnly(entry.location!)
+        : '';
+
+    _BlockPlan.solve(
+      title: entry.name,
+      teacher: snapshot.showTeacher ? entry.teacher : null,
+      location: location,
+      width: innerWidth,
+      height: innerHeight,
+      scaler: snapshot.textScaler,
+      textDirection: snapshot.textDirection,
+      locale: snapshot.locale,
+      titleStyle: effectiveTitleStyle,
+      detailStyle: effectiveDetailStyle,
+    );
   }
 
   // 教师 / 地点比课名再小一号：课名是主信息，教师地点是次信息。

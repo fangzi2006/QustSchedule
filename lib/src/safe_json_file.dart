@@ -4,6 +4,11 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
+
+/// 触发后台 Isolate 解析的 JSON 文本长度阈值（约 16KB 字符），
+/// 小文件直接原地解码避免 Isolate 线程切换开销。
+const int isolateJsonDecodeThreshold = 16 * 1024;
 
 /// 单个安全 JSON 文件的读取结果。
 class SafeJsonReadResult {
@@ -194,7 +199,7 @@ class SafeJsonFile {
       try {
         final existingText = await file.readAsString();
         if (existingText.trim().isNotEmpty) {
-          jsonDecode(existingText);
+          await _decodeJsonMaybeOffload(existingText);
           await _writeTextAtomic(backupFile, _backupTempFile, existingText);
         }
       } catch (_) {
@@ -203,6 +208,13 @@ class SafeJsonFile {
     }
 
     await _writeTextAtomic(file, _tempFile, encoded);
+  }
+
+  static Future<Object?> _decodeJsonMaybeOffload(String rawText) {
+    if (rawText.length >= isolateJsonDecodeThreshold) {
+      return Isolate.run<Object?>(() => jsonDecode(rawText));
+    }
+    return Future<Object?>.value(jsonDecode(rawText));
   }
 
   static Future<({bool existed, String? rawText, Object? parsed})>
@@ -215,7 +227,7 @@ class SafeJsonFile {
       if (rawText.trim().isEmpty) {
         return (existed: true, rawText: rawText, parsed: null);
       }
-      final decoded = jsonDecode(rawText);
+      final decoded = await _decodeJsonMaybeOffload(rawText);
       if (isValid != null && !isValid(decoded)) {
         return (existed: true, rawText: rawText, parsed: null);
       }

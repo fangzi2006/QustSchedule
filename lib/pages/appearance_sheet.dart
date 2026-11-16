@@ -71,10 +71,9 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
 
   @override
   Widget build(BuildContext context) {
-    // **必须订阅 model**：滑块拿到的 `value` 只在这个 build 里读一次，
-    // 不重建的话拇指永远停在按下时的位置（课表那边动了，滑块却不动）。
+    // 仅订阅 prefsNotifier：避免非外观状态变化引发整张外观弹窗无谓重建。
     return ListenableBuilder(
-      listenable: model,
+      listenable: model.prefsNotifier,
       builder: (context, _) {
         final theme = Theme.of(context);
         return SafeArea(

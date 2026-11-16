@@ -20,8 +20,12 @@ class SecureCredentialStore implements CredentialStore {
   @override
   Future<Credentials?> get(String accountKey) async {
     try {
-      final username = await _storage.read(key: _userKey(accountKey));
-      final password = await _storage.read(key: credentialStoreKey(accountKey));
+      final results = await Future.wait<String?>(<Future<String?>>[
+        _storage.read(key: _userKey(accountKey)),
+        _storage.read(key: credentialStoreKey(accountKey)),
+      ]);
+      final username = results[0];
+      final password = results[1];
       if (username == null || password == null) return null;
       return Credentials(username, password);
     } catch (_) {

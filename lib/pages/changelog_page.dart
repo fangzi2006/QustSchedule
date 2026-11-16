@@ -48,10 +48,20 @@ class ChangelogPage extends StatefulWidget {
     bool forceRefresh = false,
   }) async {
     if (!forceRefresh && _cachedReleases != null) return _cachedReleases!;
-    final content = await rootBundle.loadString('CHANGELOG.md');
+    final content = await rootBundle.loadString('CHANGELOG.md', cache: false);
     final parsed = List<ReleaseLog>.unmodifiable(parseChangelog(content));
     _cachedReleases = parsed;
     return parsed;
+  }
+
+  /// 空闲帧静默预热 CHANGELOG 缓存：首开页面直接命中内存缓存。
+  static Future<void> warmUp() async {
+    if (_cachedReleases != null) return;
+    try {
+      await loadReleases();
+    } catch (_) {
+      // 预热失败静默忽略，页面打开时再按正常流程读取或重试。
+    }
   }
 
   /// 点击「更新日志」时的即时导航快捷方法：
@@ -79,8 +89,10 @@ class _ChangelogPageState extends State<ChangelogPage> {
   int _visibleCount = 0;
   String? _errorMessage;
 
+  ModalRoute<dynamic>? _modalRoute;
   Animation<double>? _routeAnimation;
   bool _batchScheduled = false;
+  bool _offstageCheckScheduled = false;
   bool _isLoading = false;
   int _loadGeneration = 0;
 
@@ -95,6 +107,7 @@ class _ChangelogPageState extends State<ChangelogPage> {
   }
 
   bool get _canScheduleBackgroundBatches {
+    if (_modalRoute?.offstage ?? false) return false;
     final status = _routeAnimation?.status;
     return status == null || status == AnimationStatus.completed;
   }
@@ -120,17 +133,41 @@ class _ChangelogPageState extends State<ChangelogPage> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final routeAnim = ModalRoute.of(context)?.animation;
+    final route = ModalRoute.of(context);
+    _modalRoute = route;
+    final routeAnim = route?.animation;
     if (!identical(_routeAnimation, routeAnim)) {
       _routeAnimation?.removeStatusListener(_handleRouteAnimationStatus);
       _routeAnimation = routeAnim;
       _routeAnimation?.addStatusListener(_handleRouteAnimationStatus);
     }
+    if (route != null && route.offstage) {
+      _scheduleOffstageCheck();
+      return;
+    }
     _scheduleNextBatchIfNeeded();
+  }
+
+  void _scheduleOffstageCheck() {
+    if (_offstageCheckScheduled) return;
+    _offstageCheckScheduled = true;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      _offstageCheckScheduled = false;
+      if (!mounted || _isRouteExiting) return;
+      final route = _modalRoute;
+      if (route != null && route.offstage) {
+        _scheduleOffstageCheck();
+        return;
+      }
+      if (_canScheduleBackgroundBatches) {
+        _scheduleNextBatchIfNeeded();
+      }
+    });
   }
 
   @override
   void dispose() {
+    _batchScheduled = false;
     _routeAnimation?.removeStatusListener(_handleRouteAnimationStatus);
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
@@ -138,6 +175,14 @@ class _ChangelogPageState extends State<ChangelogPage> {
   }
 
   void _handleRouteAnimationStatus(AnimationStatus status) {
+    if (status == AnimationStatus.reverse ||
+        status == AnimationStatus.dismissed) {
+      _batchScheduled = false;
+      return;
+    }
+    if (status == AnimationStatus.forward) {
+      _batchScheduled = false;
+    }
     if ((status == AnimationStatus.forward ||
             status == AnimationStatus.completed) &&
         _releases == null &&
@@ -146,6 +191,10 @@ class _ChangelogPageState extends State<ChangelogPage> {
       _loadChangelog();
     }
     if (status == AnimationStatus.completed) {
+      if (_modalRoute?.offstage ?? false) {
+        _scheduleOffstageCheck();
+        return;
+      }
       _scheduleNextBatchIfNeeded();
     }
   }
@@ -185,13 +234,17 @@ class _ChangelogPageState extends State<ChangelogPage> {
     if (!mounted ||
         _batchScheduled ||
         !_hasRemainingChunks ||
-        !_canScheduleBackgroundBatches) {
+        !_canScheduleBackgroundBatches ||
+        _isRouteExiting) {
       return;
     }
     _batchScheduled = true;
+
     SchedulerBinding.instance.addPostFrameCallback((_) {
       _batchScheduled = false;
-      if (!mounted || !_canScheduleBackgroundBatches) return;
+      if (!mounted || !_canScheduleBackgroundBatches || _isRouteExiting) {
+        return;
+      }
       _appendNextBatch();
     });
     SchedulerBinding.instance.scheduleFrame();
@@ -233,7 +286,7 @@ class _ChangelogPageState extends State<ChangelogPage> {
     final generation = ++_loadGeneration;
     _isLoading = true;
     try {
-      final content = await rootBundle.loadString('CHANGELOG.md');
+      final content = await rootBundle.loadString('CHANGELOG.md', cache: false);
       if (!mounted || generation != _loadGeneration || _isRouteExiting) return;
 
       final groups = _splitReleaseLineGroups(content);
