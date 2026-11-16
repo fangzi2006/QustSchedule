@@ -902,7 +902,7 @@ void main() {
       HttpOverrides.global = null;
       addTearDown(() => HttpOverrides.global = prevOverrides);
 
-      const totalSize = UpdateService.minChunkingBytes;
+      const totalSize = 64 * 1024;
       final payload = Uint8List.fromList(
         List<int>.generate(totalSize, (i) => i & 0xff),
       );
@@ -912,12 +912,12 @@ void main() {
       final openStalledResponses = <HttpResponse>[];
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() async {
+        await server.close(force: true);
         for (final res in openStalledResponses) {
           try {
-            await res.close();
+            await res.close().timeout(const Duration(milliseconds: 100));
           } catch (_) {}
         }
-        await server.close(force: true);
         if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
       });
 
@@ -963,7 +963,11 @@ void main() {
         await req.response.close();
       });
 
-      final service = UpdateService();
+      final service = UpdateService(
+        downloadConnectTimeoutOverride: const Duration(seconds: 3),
+        downloadIdleTimeoutOverride: const Duration(seconds: 3),
+        minChunkingBytesOverride: totalSize,
+      );
       addTearDown(service.dispose);
       final asset = ReleaseAsset(
         name: 'QustSchedule_test.apk',
@@ -997,7 +1001,7 @@ void main() {
       HttpOverrides.global = null;
       addTearDown(() => HttpOverrides.global = prevOverrides);
 
-      const totalSize = UpdateService.minChunkingBytes;
+      const totalSize = 64 * 1024;
       final tempDir = Directory.systemTemp.createTempSync('qust_chunk_cancel_');
       final openStalledResponses = <HttpResponse>[];
       final chunkStarted = Completer<void>();
@@ -1006,12 +1010,12 @@ void main() {
 
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() async {
+        await server.close(force: true);
         for (final res in openStalledResponses) {
           try {
-            await res.close();
+            await res.close().timeout(const Duration(milliseconds: 100));
           } catch (_) {}
         }
-        await server.close(force: true);
         if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
       });
 
@@ -1044,7 +1048,11 @@ void main() {
         await req.response.close();
       });
 
-      final service = UpdateService();
+      final service = UpdateService(
+        downloadConnectTimeoutOverride: const Duration(seconds: 3),
+        downloadIdleTimeoutOverride: const Duration(seconds: 3),
+        minChunkingBytesOverride: totalSize,
+      );
       addTearDown(service.dispose);
       final token = CancelToken();
       final asset = ReleaseAsset(

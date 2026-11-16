@@ -56,6 +56,7 @@ class UpdateService {
     @visibleForTesting Duration? apiTimeoutOverride,
     @visibleForTesting Duration? downloadConnectTimeoutOverride,
     @visibleForTesting Duration? downloadIdleTimeoutOverride,
+    @visibleForTesting int? minChunkingBytesOverride,
     this.platformSupportedOverride,
   }) : _ownsClient = httpClient == null,
        _client = httpClient ?? HttpClient(),
@@ -64,7 +65,8 @@ class UpdateService {
        _downloadConnectTimeout =
            downloadConnectTimeoutOverride ?? downloadConnectTimeout,
        _downloadIdleTimeout =
-           downloadIdleTimeoutOverride ?? downloadIdleTimeout;
+           downloadIdleTimeoutOverride ?? downloadIdleTimeout,
+       _minChunkingBytes = minChunkingBytesOverride ?? minChunkingBytes;
 
   final String repoOwner;
   final String repoName;
@@ -74,6 +76,7 @@ class UpdateService {
   final Duration _apiTimeout;
   final Duration _downloadConnectTimeout;
   final Duration _downloadIdleTimeout;
+  final int _minChunkingBytes;
   @visibleForTesting
   final bool? platformSupportedOverride;
 
@@ -704,7 +707,7 @@ class UpdateService {
             probeCancelSignal,
           );
 
-          if (totalBytes >= minChunkingBytes) {
+          if (totalBytes >= _minChunkingBytes) {
             try {
               // 文件大于 4MB 且支持 Range：优先开启 3 线程并发分块极速下载
               await _downloadMultiChunk(
@@ -1012,10 +1015,17 @@ class UpdateService {
       );
 
       if (response.statusCode != HttpStatus.partialContent) {
-        await _raceWithCancel(
-          response.drain<void>().timeout(_downloadConnectTimeout),
-          cancelSignal,
-        );
+        try {
+          await _raceWithCancel(
+            response.drain<void>().timeout(_downloadConnectTimeout),
+            cancelSignal,
+          );
+        } catch (e) {
+          if (cancelSignal.isCompleted) {
+            _cancelLateResponse(response);
+          }
+          rethrow;
+        }
         throw HttpException(
           'Chunk $workerIndex HTTP ${response.statusCode}',
           uri: Uri.parse(downloadUrl),
@@ -1153,10 +1163,17 @@ class UpdateService {
         onLateValue: _cancelLateResponse,
       );
       if (singleRes.statusCode != HttpStatus.ok) {
-        await _raceWithCancel(
-          singleRes.drain<void>().timeout(_downloadConnectTimeout),
-          cancelSignal,
-        );
+        try {
+          await _raceWithCancel(
+            singleRes.drain<void>().timeout(_downloadConnectTimeout),
+            cancelSignal,
+          );
+        } catch (e) {
+          if (cancelSignal.isCompleted) {
+            _cancelLateResponse(singleRes);
+          }
+          rethrow;
+        }
         throw HttpException(
           'HTTP ${singleRes.statusCode}',
           uri: Uri.parse(downloadUrl),
