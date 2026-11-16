@@ -126,6 +126,40 @@ class WeekPagerController extends PageController {
     );
   }
 
+  /// 跨多周跳转：先连续滑出 [frontPages] 页，在高速区间无缝跳过中间页，
+  /// 再从目标旁 [backPages] 页减速滑入 [page]。
+  Future<void> animateToPageWithSkip(
+    int page, {
+    required Duration duration,
+    required Curve curve,
+    double frontPages = 2.0,
+    double backPages = 1.0,
+  }) {
+    final pager = _pager;
+    if (pager == null) return Future<void>.value();
+    if (!pager.hasViewportDimension ||
+        pager.viewportDimension <= 0 ||
+        !pager.hasPixels) {
+      pager.pendingPage = page.toDouble();
+      return Future<void>.value();
+    }
+    final currentPage = pager.pixels / pager.viewportDimension;
+    final targetPage = page.toDouble();
+    if ((targetPage - currentPage).abs() <= frontPages + backPages) {
+      return animateToPage(page, duration: duration, curve: curve);
+    }
+    pager.gestureOrigin = null;
+    pager.headingTo = targetPage;
+    return pager.animateSkipToPage(
+      fromPage: currentPage,
+      targetPage: targetPage,
+      frontPages: frontPages,
+      backPages: backPages,
+      duration: duration,
+      curve: curve,
+    );
+  }
+
   @override
   void jumpToPage(int page) {
     final pager = _pager;
@@ -347,6 +381,76 @@ class _WeekPagerPosition extends ScrollPositionWithSingleContext
           : math.min(current.roundToDouble(), oneStep);
     }
     return target.clamp(0, last.toDouble()) * viewportDimension;
+  }
+
+  Future<void> animateSkipToPage({
+    required double fromPage,
+    required double targetPage,
+    required double frontPages,
+    required double backPages,
+    required Duration duration,
+    required Curve curve,
+  }) {
+    final activity = _SkipJumpScrollActivity(
+      this,
+      fromPage: fromPage,
+      targetPage: targetPage,
+      frontPages: frontPages,
+      backPages: backPages,
+      initialViewport: viewportDimension,
+      duration: duration,
+      curve: curve,
+      vsync: context.vsync,
+    );
+    beginActivity(activity);
+    return activity.done;
+  }
+}
+
+/// 跨多周分片映射滚动活动：沿单一 [DrivenScrollActivity] 曲线推进虚拟位移，
+/// 前段滑过 [frontPages] 页后无缝重映射到目标前 [backPages] 页继续滑至 [targetPage]。
+class _SkipJumpScrollActivity extends DrivenScrollActivity {
+  _SkipJumpScrollActivity(
+    this._position, {
+    required double fromPage,
+    required double targetPage,
+    required double frontPages,
+    required double backPages,
+    required double initialViewport,
+    required super.duration,
+    required super.curve,
+    required super.vsync,
+  }) : _fromPage = fromPage,
+       _targetPage = targetPage,
+       _frontPages = frontPages,
+       _backPages = backPages,
+       _dir = targetPage >= fromPage ? 1.0 : -1.0,
+       _initialViewport = initialViewport,
+       super(
+         _position,
+         from: 0,
+         to: (frontPages + backPages) * initialViewport,
+       );
+
+  final _WeekPagerPosition _position;
+  final double _fromPage;
+  final double _targetPage;
+  final double _frontPages;
+  final double _backPages;
+  final double _dir;
+  final double _initialViewport;
+
+  @override
+  bool applyMoveTo(double value) {
+    final vp = _position.hasViewportDimension && _position.viewportDimension > 0
+        ? _position.viewportDimension
+        : _initialViewport;
+    final offsetPages = value / _initialViewport;
+    final currentPage = offsetPages <= _frontPages
+        ? _fromPage + _dir * offsetPages
+        : (_targetPage - _dir * _backPages) +
+              _dir * (offsetPages - _frontPages);
+    return delegate.setPixels(currentPage * vp).abs() < precisionErrorTolerance;
   }
 }
 

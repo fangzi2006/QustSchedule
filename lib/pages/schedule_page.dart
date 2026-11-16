@@ -620,12 +620,6 @@ class _WeekPager extends StatefulWidget {
 /// 里另有一处调快（见 `_kSnapSpring`），两边节奏要对得上。
 const Duration _flipDuration = Duration(milliseconds: 150);
 
-/// 跨多周借位跳转后滑入目标周那一页的动画时长（略柔和以防瞬切突兀）。
-const Duration _shortcutSettleDuration = Duration(milliseconds: 220);
-
-/// 触发邻近借位滑动的页码跨度阈值（> 2 页即跨越 3 周及以上）。
-const double _shortcutJumpThreshold = 2.0;
-
 class _WeekPagerState extends State<_WeekPager> {
   late final WeekPagerController _controller = WeekPagerController(
     initialPage: (widget.model.week - 1).clamp(0, widget.model.maxWeek - 1),
@@ -859,32 +853,28 @@ class _WeekPagerState extends State<_WeekPager> {
     _animatingTo = target;
     _cancelNeighborPrewarm();
 
-    // 跨度超过 2 页（>= 3 周）时先瞬切借位到目标旁 1 页，再平滑滑入目标周：
-    // 既保留左右翻页方向感，又避免在 150ms 内高速扫过并构建大量中间周网格。
-    final delta = page == null ? 0.0 : (target - page);
-    final useShortcut =
-        delta.abs() > _shortcutJumpThreshold && model.maxWeek > 1;
-    if (useShortcut) {
-      final proxyPage = (delta > 0 ? target - 1 : target + 1).clamp(
-        0,
-        model.maxWeek - 1,
-      );
-      _controller.jumpToPage(proxyPage);
-    }
+    final absDelta = page == null ? 0.0 : (target - page).abs();
+    final animation = (absDelta > 3.0 && model.maxWeek > 1)
+        // 跨 4 周及以上：与 1~3 周保持完全一致的 _flipDuration 与 Curves.easeOut 节奏，
+        // 视觉上等长滑过 3 页（前 2 页滑出 → 无缝跳过中间页 → 滑入目标页）。
+        ? _controller.animateToPageWithSkip(
+            target,
+            duration: _flipDuration,
+            curve: Curves.easeOut,
+          )
+        : _controller.animateToPage(
+            target,
+            duration: _flipDuration,
+            curve: Curves.easeOut,
+          );
 
-    _controller
-        .animateToPage(
-          target,
-          duration: useShortcut ? _shortcutSettleDuration : _flipDuration,
-          curve: useShortcut ? Curves.easeOutCubic : Curves.easeOut,
-        )
-        .whenComplete(() {
-          if (!mounted || _animatingTo != target) return;
-          _animatingTo = null;
-          // 动画被打断（拖拽接管）时，落点由手决定：以实际停下的页为准。
-          _settleToPage();
-          _scheduleNeighborPrewarm();
-        });
+    animation.whenComplete(() {
+      if (!mounted || _animatingTo != target) return;
+      _animatingTo = null;
+      // 动画被打断（拖拽接管）时，落点由手决定：以实际停下的页为准。
+      _settleToPage();
+      _scheduleNeighborPrewarm();
+    });
   }
 
   /// 只处理翻页这一层的通知；`depth != 0` 是每页里那个竖向滚动（网格），
