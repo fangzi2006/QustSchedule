@@ -616,9 +616,8 @@ class _WeekPager extends StatefulWidget {
   State<_WeekPager> createState() => _WeekPagerState();
 }
 
-/// 翻页动画时长。比原来（220ms）更利落；落页弹簧在 [WeekPagerController]
-/// 里另有一处调快（见 `_kSnapSpring`），两边节奏要对得上。
-const Duration _flipDuration = Duration(milliseconds: 150);
+/// 翻页动画时长。比原来（220ms）更利落，同时为 1~3 周与跨多周借位滑入提供统一节奏。
+const Duration _flipDuration = Duration(milliseconds: 180);
 
 class _WeekPagerState extends State<_WeekPager> {
   late final WeekPagerController _controller = WeekPagerController(

@@ -628,13 +628,19 @@ void main() {
       expect(model.week, 1);
     });
 
-    testWidgets('跨多周跳转以一致的 150ms 节奏先滑过前 2 页再无缝跳过中间页并滑入目标页', (tester) async {
+    testWidgets('跨多周跳转（含“今”回本周）以一致的 180ms 节奏先滑过前 2 页再无缝跳过中间页并滑入目标页', (
+      tester,
+    ) async {
       final model = buildModel();
       tester.view.physicalSize = const Size(400, 640);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
 
-      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      model.hydrateForTest(
+        schedule: sparseSchedule(),
+        week: 1,
+        termStart: mondayOf(DateTime.now()),
+      );
       await tester.pumpWidget(wrap(SchedulePage(model: model)));
       await tester.pumpAndSettle();
       expect(pagerPage(tester), 0);
@@ -645,32 +651,52 @@ void main() {
       expect(pagerPage(tester), 0);
       expect(find.text('第 12 周'), findsOneWidget);
 
-      // 前段（~40ms）仍在前 2 页滑出阶段（0 < page < 2）
-      await tester.pump(const Duration(milliseconds: 40));
+      // 前段（~50ms / 180ms）仍在前 2 页滑出阶段（0 < page < 2）
+      await tester.pump(const Duration(milliseconds: 50));
       expect(pagerPage(tester), greaterThan(0.2));
       expect(pagerPage(tester), lessThan(2.0));
 
-      // 跨过前 2 页后（~100ms）已无缝跳过第 4~10 周，落在最后 1 页（10 < page < 11）滑向第 12 周
-      await tester.pump(const Duration(milliseconds: 60));
+      // 跨过前 2 页后（~120ms / 180ms）已无缝跳过第 4~10 周，落在最后 1 页（10 < page < 11）滑向第 12 周
+      await tester.pump(const Duration(milliseconds: 70));
       expect(pagerPage(tester), greaterThan(10.0));
       expect(pagerPage(tester), lessThan(11.0));
 
-      await tester.pump(const Duration(milliseconds: 60));
+      await tester.pump(const Duration(milliseconds: 70));
       await tester.pumpAndSettle();
       expect(pagerPage(tester), 11);
       expect(model.week, 12);
 
-      // 2. 反向跨多周（第 12 周 -> 第 2 周）：同样先向后滑出前 2 页，再无缝切到第 3 周滑入第 2 周
+      // 2. 点击右下角“今”按钮跨多周回到本周（第 12 周 -> 第 1 周）：走同一套前 2 页 + 跳过中间页 + 末页滑入
+      await tester.tap(find.text('今'));
+      await tester.pump();
+      expect(pagerPage(tester), 11);
+      expect(find.text('第 1 周'), findsOneWidget);
+
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(pagerPage(tester), greaterThan(9.0));
+      expect(pagerPage(tester), lessThan(10.8));
+
+      await tester.pump(const Duration(milliseconds: 70));
+      expect(pagerPage(tester), greaterThan(0.0));
+      expect(pagerPage(tester), lessThan(1.0));
+
+      await tester.pumpAndSettle();
+      expect(pagerPage(tester), 0);
+      expect(model.week, 1);
+
+      // 3. 反向跨多周（先跳第 12 周再回第 2 周）与跨 2 周（第 2 周 -> 第 4 周）：同样保持 180ms 节奏
+      model.goToWeek(12);
+      await tester.pumpAndSettle();
       model.goToWeek(2);
       await tester.pump();
       expect(pagerPage(tester), 11);
       expect(find.text('第 2 周'), findsOneWidget);
 
-      await tester.pump(const Duration(milliseconds: 40));
+      await tester.pump(const Duration(milliseconds: 50));
       expect(pagerPage(tester), greaterThan(9.0));
       expect(pagerPage(tester), lessThan(10.8));
 
-      await tester.pump(const Duration(milliseconds: 60));
+      await tester.pump(const Duration(milliseconds: 70));
       expect(pagerPage(tester), greaterThan(1.0));
       expect(pagerPage(tester), lessThan(2.0));
 
@@ -678,12 +704,11 @@ void main() {
       expect(pagerPage(tester), 1);
       expect(model.week, 2);
 
-      // 3. 跨 2 周（第 2 周 -> 第 4 周，delta == 2）：同样保持 150ms 连续滚过
       model.goToWeek(4);
       await tester.pump();
       expect(pagerPage(tester), 1);
 
-      await tester.pump(const Duration(milliseconds: 160));
+      await tester.pump(const Duration(milliseconds: 190));
       expect(pagerPage(tester), 3);
       expect(model.week, 4);
     });
