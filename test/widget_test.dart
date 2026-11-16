@@ -627,6 +627,61 @@ void main() {
       expect(pagerPage(tester), 0);
       expect(model.week, 1);
     });
+
+    testWidgets('跨多周跳转先借位到目标旁 1 页再 220ms 平滑滑入，单周及跨 2 周保持 150ms 连续节奏', (
+      tester,
+    ) async {
+      final model = buildModel();
+      tester.view.physicalSize = const Size(400, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      await tester.pumpAndSettle();
+      expect(pagerPage(tester), 0);
+
+      // 1. 正向跨多周（第 1 周 -> 第 12 周）：立即借位到第 11 周（page=10），顶栏直接显示第 12 周
+      model.goToWeek(12);
+      await tester.pump();
+      expect(pagerPage(tester), 10);
+      expect(find.text('第 12 周'), findsOneWidget);
+      expect(find.text('第 11 周'), findsNothing);
+
+      // 借位滑入耗时 220ms：160ms 时仍在最后 1 页途中，240ms 时落稳在第 12 周（page=11）
+      await tester.pump(const Duration(milliseconds: 160));
+      expect(pagerPage(tester), greaterThan(10));
+      expect(pagerPage(tester), lessThan(11));
+
+      await tester.pump(const Duration(milliseconds: 80));
+      await tester.pumpAndSettle();
+      expect(pagerPage(tester), 11);
+      expect(model.week, 12);
+
+      // 2. 反向跨多周（第 12 周 -> 第 2 周）：借位到第 3 周（page=2），从右侧平滑滚入第 2 周
+      model.goToWeek(2);
+      await tester.pump();
+      expect(pagerPage(tester), 2);
+      expect(find.text('第 2 周'), findsOneWidget);
+
+      await tester.pump(const Duration(milliseconds: 160));
+      expect(pagerPage(tester), greaterThan(1));
+      expect(pagerPage(tester), lessThan(2));
+
+      await tester.pumpAndSettle();
+      expect(pagerPage(tester), 1);
+      expect(model.week, 2);
+
+      // 3. 跨 2 周（第 2 周 -> 第 4 周，delta == 2）：不借位，保持原 150ms 连续滚过
+      model.goToWeek(4);
+      await tester.pump();
+      expect(pagerPage(tester), 1);
+
+      await tester.pump(const Duration(milliseconds: 160));
+      await tester.pumpAndSettle();
+      expect(pagerPage(tester), 3);
+      expect(model.week, 4);
+    });
   });
 
   group('周次与内容分开通知（性能契约）', () {

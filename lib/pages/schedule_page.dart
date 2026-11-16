@@ -620,6 +620,12 @@ class _WeekPager extends StatefulWidget {
 /// 里另有一处调快（见 `_kSnapSpring`），两边节奏要对得上。
 const Duration _flipDuration = Duration(milliseconds: 150);
 
+/// 跨多周借位跳转后滑入目标周那一页的动画时长（略柔和以防瞬切突兀）。
+const Duration _shortcutSettleDuration = Duration(milliseconds: 220);
+
+/// 触发邻近借位滑动的页码跨度阈值（> 2 页即跨越 3 周及以上）。
+const double _shortcutJumpThreshold = 2.0;
+
 class _WeekPagerState extends State<_WeekPager> {
   late final WeekPagerController _controller = WeekPagerController(
     initialPage: (widget.model.week - 1).clamp(0, widget.model.maxWeek - 1),
@@ -852,8 +858,26 @@ class _WeekPagerState extends State<_WeekPager> {
     _dragging = false;
     _animatingTo = target;
     _cancelNeighborPrewarm();
+
+    // 跨度超过 2 页（>= 3 周）时先瞬切借位到目标旁 1 页，再平滑滑入目标周：
+    // 既保留左右翻页方向感，又避免在 150ms 内高速扫过并构建大量中间周网格。
+    final delta = page == null ? 0.0 : (target - page);
+    final useShortcut =
+        delta.abs() > _shortcutJumpThreshold && model.maxWeek > 1;
+    if (useShortcut) {
+      final proxyPage = (delta > 0 ? target - 1 : target + 1).clamp(
+        0,
+        model.maxWeek - 1,
+      );
+      _controller.jumpToPage(proxyPage);
+    }
+
     _controller
-        .animateToPage(target, duration: _flipDuration, curve: Curves.easeOut)
+        .animateToPage(
+          target,
+          duration: useShortcut ? _shortcutSettleDuration : _flipDuration,
+          curve: useShortcut ? Curves.easeOutCubic : Curves.easeOut,
+        )
         .whenComplete(() {
           if (!mounted || _animatingTo != target) return;
           _animatingTo = null;
