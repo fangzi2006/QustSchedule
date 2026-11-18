@@ -56,8 +56,7 @@ data class FluidCardState(
  */
 object ReminderFluidRenderer {
 
-    const val CHANNEL_FLUID = "course_fluid_v3"
-    private val LEGACY_CHANNELS_FLUID = arrayOf("course_fluid_v1", "course_fluid_v2")
+    const val CHANNEL_FLUID = "course_fluid_v1"
     const val CHANNEL_FLUID_NAME = "上课进度"
 
     private const val REQUEST_CONTENT = 4403
@@ -69,7 +68,6 @@ object ReminderFluidRenderer {
             channelName = CHANNEL_FLUID_NAME,
             descriptionText = "上课倒计时常驻卡片",
             showBadge = false,
-            legacyChannelIds = LEGACY_CHANNELS_FLUID,
         )
     }
 

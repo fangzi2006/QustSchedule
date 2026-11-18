@@ -26,8 +26,7 @@ import java.util.Locale
  */
 object ReminderNotifier {
 
-    const val CHANNEL_ID = "course_reminder_v3"
-    private val LEGACY_CHANNEL_IDS = arrayOf("course_reminder_v1", "course_reminder_v2")
+    const val CHANNEL_ID = "course_reminder_v1"
     const val CHANNEL_NAME = "上课提醒"
 
     /** 固定通知 id：新课覆盖旧卡，不按事件各发一条。 */
@@ -85,7 +84,6 @@ object ReminderNotifier {
             channelName = CHANNEL_NAME,
             descriptionText = "上课前按课表提醒",
             showBadge = true,
-            legacyChannelIds = LEGACY_CHANNEL_IDS,
         )
     }
 
@@ -95,15 +93,10 @@ object ReminderNotifier {
         channelName: String,
         descriptionText: String,
         showBadge: Boolean,
-        legacyChannelIds: Array<String> = emptyArray(),
     ) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(NotificationManager::class.java)
             ?: return
-        // 系统会永久缓存既有渠道的铃声/震动/锁屏与重要度设置，升级渠道版本时删旧建新。
-        for (oldId in legacyChannelIds) {
-            manager.deleteNotificationChannel(oldId)
-        }
         // 未授予通知权限前不预先建渠道，防止国产系统在无权状态下将渠道锁定为静默/折叠。
         if (!ReminderPermissions.hasNotificationPermission(context)) return
         if (manager.getNotificationChannel(channelId) != null) return
