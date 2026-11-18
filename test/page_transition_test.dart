@@ -586,7 +586,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(CircularProgressIndicator), findsNothing);
-      expect(find.textContaining('1.5.0'), findsAtLeastNWidgets(1));
+      final latestVersion = parseChangelog(
+        await rootBundle.loadString('CHANGELOG.md'),
+      ).first.version;
+      expect(find.text('v$latestVersion'), findsOneWidget);
     });
   });
 }

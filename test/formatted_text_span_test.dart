@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/pages/changelog_page.dart';
 import 'package:qustschedule/src/app_version.dart';
@@ -253,7 +254,10 @@ void main() {
 
       expect(find.text('更新日志'), findsOneWidget);
       // 验证真实 CHANGELOG.md 内容已渲染
-      expect(find.textContaining('1.5.0'), findsAtLeastNWidgets(1));
+      final latestVersion = parseChangelog(
+        await rootBundle.loadString('CHANGELOG.md'),
+      ).first.version;
+      expect(find.text('v$latestVersion'), findsOneWidget);
     });
 
     testWidgets('分段加载首帧仅构建首批版本卡片并在后续帧渐进补齐', (tester) async {
