@@ -1883,6 +1883,68 @@ void main() {
         expect(prefs2.courseTextScale, defaultTextScale);
       },
     );
+
+    test(
+      'changeSchool(relogin: true) 切校重置认证代数与在飞刷新状态，旧校失败与迟到验证码回调均不篡改新态',
+      () async {
+        final oldScheduleGate = Completer<void>();
+        final loginGate = Completer<void>();
+        final backend = FakeBackend();
+        backend.fetchBehavior = (call, termId) async {
+          if (call == 1) {
+            await oldScheduleGate.future;
+            throw const AcademicError(ErrorCode.networkRetryable, '旧校网络超时');
+          }
+          return sampleSchedule('2026-2027-2');
+        };
+        backend.loginBehavior = (call, creds) async {
+          await loginGate.future;
+          return const AuthenticatedState(
+            studentId: '20240001',
+            studentName: '测试学生',
+          );
+        };
+
+        final rig = buildRig(backend: backend);
+        final model = rig.model;
+        addTearDown(model.dispose);
+        await rig.credentials.save(
+          '${_baseUrl.toLowerCase()}|20240001',
+          const Credentials('20240001', 'pw'),
+        );
+        model.session.username = '20240001';
+        model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+        model.session.setCaptcha(
+          const CaptchaState(
+            continuationId: 'c1',
+            imageBase64: '',
+            mimeType: 'image/png',
+          ),
+        );
+
+        final oldRefresh = model.refresh();
+        await waitUntil(() => backend.fetchCount == 1);
+        expect(model.refreshing, isTrue);
+
+        final switchFuture = model.changeSchool(
+          'https://jw2.example.edu.cn/jwglxt',
+          relogin: true,
+        );
+        await waitUntil(() => model.status == AppStatus.loading);
+        expect(model.refreshing, isFalse);
+        expect(model.captcha, isNull);
+
+        oldScheduleGate.complete();
+        await oldRefresh;
+        expect(model.status, AppStatus.loading);
+        expect(model.scheduleHint, isEmpty);
+
+        loginGate.complete();
+        await switchFuture;
+        expect(model.status, AppStatus.ready);
+        expect(model.schoolBaseUrl, 'https://jw2.example.edu.cn/jwglxt');
+      },
+    );
   });
 }
 

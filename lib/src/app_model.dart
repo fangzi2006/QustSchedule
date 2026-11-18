@@ -675,12 +675,18 @@ class AppModel extends ChangeNotifier {
   // 登录、验证码、切线路、退出
   // ---------------------------------------------------------------------------
 
-  Future<void> signIn(String username, String password) async {
-    _cancelIdleAcademicRestore();
+  /// 中断当前进行中的登录、验证码与课表刷新上下文，防止新旧会话回调互串。
+  void _resetAuthFlight() {
     _authEpoch++;
     scheduleState.scheduleLoad = null;
+    scheduleState.setRefreshing(false);
     _reloginStageActive = false;
     session.setCaptcha(null);
+  }
+
+  Future<void> signIn(String username, String password) async {
+    _cancelIdleAcademicRestore();
+    _resetAuthFlight();
     session.username = username;
     _setStatus(AppStatus.signingIn);
     hints.showHint('登录中…');
@@ -843,10 +849,10 @@ class AppModel extends ChangeNotifier {
     final String account = username;
 
     if (!relogin) {
+      _resetAuthFlight();
       session.switchSchoolTarget(baseUrl);
       scheduleState.clearForSchoolReset();
       academic.resetOnSignOut();
-      _reloginStageActive = false;
       hints.clearGlobalHint();
       hints.clearScheduleHint();
       unawaited(prefs.raw.setCurrentSchool(baseUrl));
@@ -860,12 +866,16 @@ class AppModel extends ChangeNotifier {
     final Credentials? saved = account.isEmpty
         ? null
         : await session.service.credentials.get(session.accountKey());
+    if (_disposed) return;
     if (saved == null || saved.password.isEmpty || saved.username.isEmpty) {
       hints.showHint('切换失败：本机没有找到已保存的密码。请在「设置 → 账号」重新登录一次再切换', error: true);
       return;
     }
 
     final String previousBase = schoolBaseUrl;
+    _resetAuthFlight();
+    hints.clearGlobalHint();
+    hints.clearScheduleHint();
     _setStatus(AppStatus.loading, message: '正在切换到「${schoolLabel(baseUrl)}」…');
     session.switchSchoolTarget(baseUrl);
     session.username = account;
@@ -951,10 +961,7 @@ class AppModel extends ChangeNotifier {
 
   Future<void> signOut() async {
     _cancelIdleAcademicRestore();
-    _authEpoch++;
-    _reloginStageActive = false;
-    scheduleState.scheduleLoad = null;
-    scheduleState.setRefreshing(false);
+    _resetAuthFlight();
     hints.clearHint();
     academic.resetOnSignOut();
     await session.signOutReset();
