@@ -29,8 +29,11 @@ object ReminderNotifier {
     const val CHANNEL_ID = "course_reminder_v1"
     const val CHANNEL_NAME = "上课提醒"
 
-    /** 固定通知 id：新课覆盖旧卡，不按事件各发一条。 */
+    /** 固定横幅通知 id：新课覆盖旧卡，不按事件各发一条。 */
     const val NOTIFY_ID = 2000
+
+    /** 流体云前台服务通知 id：与横幅通知分离，避免横幅切回前台同步时被误杀。 */
+    const val FLUID_NOTIFY_ID = 2001
 
     private const val REQUEST_CONTENT = 4402
     private val DEFAULT_VIBRATION_PATTERN = longArrayOf(0L, 250L, 150L, 250L)
@@ -44,6 +47,7 @@ object ReminderNotifier {
         ensureChannel(context)
         val manager = context.getSystemService(NotificationManager::class.java)
             ?: return false
+        ReminderFluidService.stop(context)
 
         val now = System.currentTimeMillis()
         val timeoutMs = (event.startMs - now).coerceAtLeast(1000L)
@@ -69,6 +73,12 @@ object ReminderNotifier {
 
         manager.notify(NOTIFY_ID, notification)
         return true
+    }
+
+    /** 取消当前展示的普通横幅通知。 */
+    fun cancelBanner(context: Context) {
+        context.getSystemService(NotificationManager::class.java)
+            ?.cancel(NOTIFY_ID)
     }
 
     /** 注册全部提醒渠道（仅在已获通知权限后创建，确保默认策略完整生效）。 */

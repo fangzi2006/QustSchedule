@@ -34,6 +34,10 @@ class ReminderService {
 
   Timer? _timer;
   bool _disposed = false;
+  Future<ReminderSyncResult?>? _syncInFlight;
+  bool _resyncQueued = false;
+  bool _resyncForceQueued = false;
+  int _syncEpoch = 0;
 
   /// 已经"取消过"一次：课表没了 / 开关关着时不必每次通知都再调一次原生。
   bool _cancelled = false;
@@ -67,14 +71,52 @@ class ReminderService {
   /// [force] 为 true 时忽略指纹（回到前台、覆盖安装后恢复用）——系统可能在
   /// App 不在时清掉闹钟（force-stop、清后台），指纹相同也必须重排一遍。
   ///
+  /// 若前一次原生同步仍在进行，本次请求合并排队并串行跟进执行，确保最后一次
+  /// 参数（如刚刚调好的提前量）必定落地且返回值与状态快照顺序一致。
+  ///
   /// 返回 null 表示这次什么都没做（偏好未加载 / 没开提醒 / 没有课表）。
-  Future<ReminderSyncResult?> syncNow({bool force = false}) async {
-    if (_disposed) return null;
+  Future<ReminderSyncResult?> syncNow({bool force = false}) {
+    if (_disposed) return Future<ReminderSyncResult?>.value(null);
     _timer?.cancel();
     _timer = null;
+
+    final active = _syncInFlight;
+    if (active != null) {
+      _resyncQueued = true;
+      _resyncForceQueued = _resyncForceQueued || force;
+      return active;
+    }
+
+    final future = _runSyncLoop(force);
+    _syncInFlight = future;
+    return future;
+  }
+
+  Future<ReminderSyncResult?> _runSyncLoop(bool initialForce) async {
+    var force = initialForce;
+    ReminderSyncResult? latest;
+    try {
+      while (!_disposed) {
+        _resyncQueued = false;
+        _resyncForceQueued = false;
+        latest = await _syncOnce(force: force);
+        if (!_resyncQueued || _disposed) break;
+        force = _resyncForceQueued;
+      }
+      return latest;
+    } finally {
+      _syncInFlight = null;
+      _resyncQueued = false;
+      _resyncForceQueued = false;
+    }
+  }
+
+  Future<ReminderSyncResult?> _syncOnce({required bool force}) async {
+    if (_disposed) return null;
     // 冷启动保护：偏好还没读到，默认的 false 不代表用户关掉了提醒。
     if (!model.preferencesLoaded) return null;
 
+    final epoch = _syncEpoch;
     final plan = buildPlan();
     if (plan == null) {
       await _cancelIfNeeded();
@@ -86,7 +128,7 @@ class ReminderService {
     }
 
     final result = await _gateway.sync(plan.toPayloadJson());
-    if (_disposed) return result;
+    if (_disposed || epoch != _syncEpoch) return result;
     _cancelled = false;
     _lastResult = result;
     _lastPlan = plan;
@@ -129,6 +171,9 @@ class ReminderService {
 
   /// 强制取消（退出登录、换账号时用）：无论指纹如何都清一遍。
   Future<void> cancelAll() async {
+    _syncEpoch++;
+    _resyncQueued = false;
+    _resyncForceQueued = false;
     _timer?.cancel();
     _timer = null;
     _cancelled = true;

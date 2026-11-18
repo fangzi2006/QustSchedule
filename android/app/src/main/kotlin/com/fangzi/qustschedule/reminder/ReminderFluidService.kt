@@ -50,8 +50,9 @@ class ReminderFluidService : Service() {
                 casting = true
                 // 必须在 5 秒内进前台，否则系统会抛 ANR 级异常。
                 try {
+                    ReminderNotifier.cancelBanner(this)
                     startForeground(
-                        ReminderNotifier.NOTIFY_ID,
+                        ReminderNotifier.FLUID_NOTIFY_ID,
                         ReminderFluidRenderer.build(this, state),
                     )
                 } catch (error: Exception) {
@@ -161,7 +162,7 @@ class ReminderFluidService : Service() {
             }
             runCatching {
                 context.getSystemService(NotificationManager::class.java)
-                    ?.cancel(ReminderNotifier.NOTIFY_ID)
+                    ?.cancel(ReminderNotifier.FLUID_NOTIFY_ID)
             }
             runCatching { disarmStopAlarm(context) }
         }

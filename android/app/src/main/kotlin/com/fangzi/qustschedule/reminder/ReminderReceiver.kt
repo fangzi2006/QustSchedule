@@ -31,10 +31,13 @@ class ReminderReceiver : BroadcastReceiver() {
                 ACTION_TEST -> handleTest(context, intent)
 
                 // 流体云到点收起兜底闹钟（以及旧版本遗留的 ACTION_DISMISS）
-                ACTION_DISMISS,
+                ACTION_DISMISS -> {
+                    ReminderNotifier.cancelBanner(context)
+                    ReminderFluidService.stop(context)
+                    Log.i(TAG, "reminder dismissed by alarm action=$action")
+                }
+
                 ACTION_FLUID_STOP -> {
-                    context.getSystemService(android.app.NotificationManager::class.java)
-                        ?.cancel(ReminderNotifier.NOTIFY_ID)
                     ReminderFluidService.stop(context)
                     Log.i(TAG, "reminder dismissed by alarm action=$action")
                 }

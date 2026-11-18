@@ -112,16 +112,17 @@ class ReminderScheduler(context: Context) {
         )
     }
 
-    /** 取消全部（关闭提醒 / 退出登录）：闹钟、账本、流体云、payload 一起清。 */
+    /** 取消全部（关闭提醒 / 退出登录）：闹钟、账本、通知/卡片、payload 一起清。 */
     fun cancelAll() {
         synchronized(LOCK) {
             for (code in store.alarmCodes()) cancel(code)
             store.clearAlarmCodes()
             cancelDailyResync()
+            ReminderNotifier.cancelBanner(appContext)
             ReminderFluidService.stop(appContext)
             store.clear()
         }
-        Log.i(TAG, "cancelAll: alarms, fluid card and payload cleared")
+        Log.i(TAG, "cancelAll: alarms, notifications and payload cleared")
     }
 
     /** 只用已保存的 payload 重排（开机、覆盖安装、每日 00:05 自愈）。 */
@@ -177,14 +178,22 @@ class ReminderScheduler(context: Context) {
             action = ReminderReceiver.ACTION_TEST
             putExtra(ReminderReceiver.EXTRA_TEST_STYLE, style)
         }
+        val manager = appContext.getSystemService(AlarmManager::class.java)
+            ?: return null
+        // 重排测试闹钟前先撤销同槽位旧闹钟与 PendingIntent，避免部分系统复用旧触发时间。
+        cancelPendingAlarm(
+            manager,
+            RC_TEST,
+            Intent(appContext, ReminderReceiver::class.java).apply {
+                action = ReminderReceiver.ACTION_TEST
+            },
+        )
         val operation = PendingIntent.getBroadcast(
             appContext,
             RC_TEST,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val manager = appContext.getSystemService(AlarmManager::class.java)
-            ?: return null
         val exact = ReminderPermissions.canScheduleExactAlarms(appContext)
         return try {
             if (exact) {
@@ -248,6 +257,9 @@ class ReminderScheduler(context: Context) {
     ): Boolean {
         val manager = appContext.getSystemService(AlarmManager::class.java)
             ?: return false
+        // 修改提前量/课表重排同一槽位时，先撤销旧闹钟并作废旧 PendingIntent，
+        // 避免部分国产 ROM 对同 requestCode 的 setAlarmClock 原地覆盖保留旧触发时间。
+        cancelReminderOperation(manager, code)
         val operation = pendingIntent(code, event, fingerprint)
         var exact = ReminderPermissions.canScheduleExactAlarms(appContext)
         var armed = false
@@ -288,38 +300,45 @@ class ReminderScheduler(context: Context) {
     private fun cancel(code: Int) {
         val manager = appContext.getSystemService(AlarmManager::class.java)
             ?: return
-        val intent = Intent(appContext, ReminderReceiver::class.java).apply {
-            action = ReminderReceiver.ACTION_REMIND
-        }
-        val operation = PendingIntent.getBroadcast(
-            appContext,
-            code,
-            intent,
-            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
-        )
-        if (operation != null) {
-            manager.cancel(operation)
-            operation.cancel()
-        }
+        cancelReminderOperation(manager, code)
 
         val dismissCode = (code and 0x3fffffff) or 0x40000000
         cancelLegacyDismiss(manager, dismissCode)
     }
 
-    private fun cancelLegacyDismiss(manager: AlarmManager, dismissCode: Int) {
-        val dismissIntent = Intent(appContext, ReminderReceiver::class.java).apply {
-            action = ReminderReceiver.ACTION_DISMISS
-        }
-        val dismissOp = PendingIntent.getBroadcast(
-            appContext,
-            dismissCode,
-            dismissIntent,
-            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
+    private fun cancelReminderOperation(manager: AlarmManager, code: Int) {
+        cancelPendingAlarm(
+            manager,
+            code,
+            Intent(appContext, ReminderReceiver::class.java).apply {
+                action = ReminderReceiver.ACTION_REMIND
+            },
         )
-        if (dismissOp != null) {
-            manager.cancel(dismissOp)
-            dismissOp.cancel()
-        }
+    }
+
+    private fun cancelLegacyDismiss(manager: AlarmManager, dismissCode: Int) {
+        cancelPendingAlarm(
+            manager,
+            dismissCode,
+            Intent(appContext, ReminderReceiver::class.java).apply {
+                action = ReminderReceiver.ACTION_DISMISS
+            },
+        )
+    }
+
+    private fun cancelPendingAlarm(
+        manager: AlarmManager,
+        code: Int,
+        intent: Intent,
+    ) {
+        val operation = PendingIntent.getBroadcast(
+            appContext,
+            code,
+            intent,
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
+        ) ?: return
+        manager.cancel(operation)
+        operation.cancel()
     }
 
     /** 每天 00:05 重挂一次自愈闹钟（一次性链，触发后再挂次日）。 */
@@ -365,14 +384,7 @@ class ReminderScheduler(context: Context) {
     private fun cancelDailyResync() {
         val manager = appContext.getSystemService(AlarmManager::class.java)
             ?: return
-        val operation = PendingIntent.getBroadcast(
-            appContext,
-            RC_DAILY_RESYNC,
-            dailyResyncIntent(),
-            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
-        ) ?: return
-        manager.cancel(operation)
-        operation.cancel()
+        cancelPendingAlarm(manager, RC_DAILY_RESYNC, dailyResyncIntent())
     }
 
     private fun dailyResyncIntent(): Intent =

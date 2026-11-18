@@ -37,6 +37,7 @@ class _ReminderPageState extends State<ReminderPage>
 
   /// 是否正在跑一次原生操作。**故意不进 State，也不 setState**。
   bool _running = false;
+  int? _queuedLeadMinutes;
   bool _initialRefreshScheduled = false;
   RouteSettledHandle? _initialRefreshHandle;
 
@@ -79,12 +80,19 @@ class _ReminderPageState extends State<ReminderPage>
     _statusNotifier.value = status;
   }
 
-  /// 串行执行一次原生操作：重入时直接忽略（避免连点排出一串闹钟）。
+  /// 串行执行一次原生操作：重入时直接忽略，但已排队的提前量更新会在收尾时合并重跑。
   Future<void> _run(Future<void> Function() action) async {
     if (_running) return;
     _running = true;
     try {
       await action();
+      while (_queuedLeadMinutes != null && mounted) {
+        final target = _queuedLeadMinutes!;
+        _queuedLeadMinutes = null;
+        await widget.model.setReminderLeadMinutes(target);
+        await widget.service.syncNow(force: true);
+        await _refreshStatus();
+      }
     } finally {
       _running = false;
     }
@@ -96,13 +104,10 @@ class _ReminderPageState extends State<ReminderPage>
     await _refreshStatus();
   });
 
-  Future<void> _commitLead(int minutes) async {
-    if (_running) return;
-    await _run(() async {
-      await widget.model.setReminderLeadMinutes(minutes);
-      await widget.service.syncNow(force: true);
-      await _refreshStatus();
-    });
+  Future<void> _commitLead(int minutes) {
+    // 不丢弃进行中的新提前量，交由 _run 收尾合并执行最新值。
+    _queuedLeadMinutes = minutes;
+    return _run(() async {});
   }
 
   Future<void> _toggleFluid(bool enabled) => _run(() async {

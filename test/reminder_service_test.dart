@@ -124,6 +124,26 @@ void main() {
       await rig.service.syncNow();
       expect(rig.gateway.syncedPayloads.length, 3);
     });
+
+    test('在途 syncNow 期间再改提前量，串行跟进重排确保最新提前量与指纹落盘', () async {
+      final rig = buildRig(lead: 10);
+      final gate = Completer<void>();
+      rig.gateway.syncGate = gate;
+
+      final first = rig.service.syncNow();
+      await Future<void>.delayed(Duration.zero);
+      expect(rig.gateway.syncedPayloads.length, 1);
+
+      await rig.model.setReminderLeadMinutes(25);
+      final second = rig.service.syncNow(force: true);
+      rig.gateway.syncGate = null;
+      gate.complete();
+
+      await Future.wait(<Future<ReminderSyncResult?>>[first, second]);
+      expect(rig.gateway.syncedPayloads.length, 2);
+      expect(rig.gateway.lastPayload['leadMinutes'], 25);
+      expect(rig.service.lastPlan?.leadMinutes, 25);
+    });
   });
 
   group('取消', () {

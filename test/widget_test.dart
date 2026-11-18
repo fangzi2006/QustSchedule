@@ -3024,6 +3024,20 @@ void main() {
       expect(rig.model.reminderLeadMinutes, 20);
       expect(rig.gateway.lastPayload['leadMinutes'], 20);
 
+      // 2.1 在途同步尚未返回时连续切换胶囊，最后档位必须排队落地不丢失
+      final leadGate = Completer<void>();
+      rig.gateway.syncGate = leadGate;
+      await tester.tap(find.text('15 分钟'));
+      await tester.pump();
+      await tester.tap(find.text('30 分钟'));
+      await tester.pump();
+      rig.gateway.syncGate = null;
+      leadGate.complete();
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+      expect(rig.model.reminderLeadMinutes, 30);
+      expect(rig.gateway.lastPayload['leadMinutes'], 30);
+
       // 3. 拖滑块中不落盘，抬手才下发一次
       final beforeSyncs = rig.gateway.syncedPayloads.length;
       final gesture = await tester.startGesture(
