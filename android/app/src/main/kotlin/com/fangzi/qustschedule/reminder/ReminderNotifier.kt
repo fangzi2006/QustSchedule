@@ -9,6 +9,8 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.os.Build
+import android.os.VibrationEffect
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import com.fangzi.qustschedule.MainActivity
 import com.fangzi.qustschedule.R
@@ -24,8 +26,8 @@ import java.util.Locale
  */
 object ReminderNotifier {
 
-    const val CHANNEL_ID = "course_reminder_v2"
-    private const val LEGACY_CHANNEL_ID = "course_reminder_v1"
+    const val CHANNEL_ID = "course_reminder_v3"
+    private val LEGACY_CHANNEL_IDS = arrayOf("course_reminder_v1", "course_reminder_v2")
     const val CHANNEL_NAME = "上课提醒"
 
     /** 固定通知 id：新课覆盖旧卡，不按事件各发一条。 */
@@ -70,7 +72,7 @@ object ReminderNotifier {
         return true
     }
 
-    /** 注册全部提醒渠道（开机/进页/申请权限时共用，确保系统设置可见且带默认高优先策略）。 */
+    /** 注册全部提醒渠道（仅在已获通知权限后创建，确保默认策略完整生效）。 */
     fun ensureAllChannels(context: Context) {
         ensureChannel(context)
         ReminderFluidRenderer.ensureChannel(context)
@@ -83,7 +85,7 @@ object ReminderNotifier {
             channelName = CHANNEL_NAME,
             descriptionText = "上课前按课表提醒",
             showBadge = true,
-            legacyChannelId = LEGACY_CHANNEL_ID,
+            legacyChannelIds = LEGACY_CHANNEL_IDS,
         )
     }
 
@@ -93,16 +95,18 @@ object ReminderNotifier {
         channelName: String,
         descriptionText: String,
         showBadge: Boolean,
-        legacyChannelId: String? = null,
+        legacyChannelIds: Array<String> = emptyArray(),
     ) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(NotificationManager::class.java)
             ?: return
-        if (manager.getNotificationChannel(channelId) != null) return
         // 系统会永久缓存既有渠道的铃声/震动/锁屏与重要度设置，升级渠道版本时删旧建新。
-        if (legacyChannelId != null) {
-            manager.deleteNotificationChannel(legacyChannelId)
+        for (oldId in legacyChannelIds) {
+            manager.deleteNotificationChannel(oldId)
         }
+        // 未授予通知权限前不预先建渠道，防止国产系统在无权状态下将渠道锁定为静默/折叠。
+        if (!ReminderPermissions.hasNotificationPermission(context)) return
+        if (manager.getNotificationChannel(channelId) != null) return
         val audioAttributes = AudioAttributes.Builder()
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .setUsage(AudioAttributes.USAGE_NOTIFICATION)
@@ -112,16 +116,20 @@ object ReminderNotifier {
             channelName,
             NotificationManager.IMPORTANCE_HIGH,
         ).apply {
+            importance = NotificationManager.IMPORTANCE_HIGH
             description = descriptionText
             setShowBadge(showBadge)
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             enableVibration(true)
             vibrationPattern = DEFAULT_VIBRATION_PATTERN
-            enableLights(true)
-            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            if (soundUri != null) {
-                setSound(soundUri, audioAttributes)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+                vibrationEffect = VibrationEffect.createWaveform(DEFAULT_VIBRATION_PATTERN, -1)
             }
+            enableLights(true)
+            val soundUri =
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                    ?: Settings.System.DEFAULT_NOTIFICATION_URI
+            setSound(soundUri, audioAttributes)
         }
         manager.createNotificationChannel(channel)
     }
