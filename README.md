@@ -59,16 +59,15 @@
 - **原生级精准度与高可靠自愈**：
   - 底层采用系统级 `AlarmManager` 精确闹钟，息屏休眠下也能准时触发，无需常驻后台常唤醒；
   - 自动预排未来 14 天课程，每日凌晨 00:05 原生链式自愈更新；
-  - 手机重启或覆盖安装后，开机自动恢复排程；
+  - 手机重启或覆盖安装后，开机自动恢复排程。
 - **全流程权限引导与诊断探针**：
   - 针对通知、精确闹钟、后台耗电优化、自启动提供精准的状态自检与直达系统设置入口；
   - 诊断区支持「立即显示通知」与「延迟测试提醒」，方便即时预览效果与排查系统拦截。
 
 ### 🚀 自动检查更新
 
-- **自动检查**：冷启动时触发更新检查，发现新版本会弹出通知
-
-- **加速代理**：内置多条 GitHub 镜像加速代理池，保障弱网环境下的稳定检测。
+- **单弹窗后台下载**：冷启动静默检测新版本，更新弹窗支持退入后台下载并在课表顶栏随时恢复查看；多线程并发分片下载，异常中断自动清理残留。
+- **加速代理池**：内置多条 GitHub 镜像加速代理并支持节点测速与自定义代理，保障弱网环境下的稳定检测与高速下载。
 
 ### 🔒 数据、安全与网络
 
@@ -88,18 +87,18 @@
 
 ### 常用操作技巧
 
-- **切周与回正**：在课表页左右滑动或点击顶部箭头翻周；翻离当前周时，右下角浮出「今」按钮，点击立即回弹到本周。
-- **快捷菜单**：点击右上角「⋯」可快速调出周次校准、作息表、换校/换线路、外观调节与调课设置面板。
-- **状态弹窗**：点击右上角刷新图标可在后台拉取最新课表，拉取进度与报错均收敛在右上角浮层弹窗中，不会遮挡或冲掉当前已显示的课表。
+- **切周与回正**：在课表页左右滑动或点击顶部箭头翻周；翻离当前周时，右下角浮出「今」按钮，点击回弹到本周。
+- **弹性菜单与长按手势**：点击或长按右上角「⋯」、顶部周次或学期等按钮可原地弹性展开菜单，支持滑选操作,点击空白区域关闭。
+- **状态弹窗与自由复制**：点击右上角刷新图标可在后台拉取最新课表，拉取进度与报错收敛在右上角浮层弹窗或底部轻胶囊中；课程详情、调试页与协议信息均支持长按自由选字复制。
 
 
 ## 技术架构
 
-- **跨平台框架**：Flutter 3.47 / Dart 3.13.5（支持 Android 与 Windows 桌面端）。
+- **跨平台框架**：Flutter 3.47.7 / Dart 3.13.5（支持 Android 与 Windows 桌面端）。
 - **极简依赖原则**：
-  - 核心运行时仅依赖 `flutter_secure_storage`（加密凭据）、`path_provider`（私有路径）、`url_launcher`（外部链接跳转）。
+  - 核心运行时仅依赖 `flutter_secure_storage`（加密凭据）、`path_provider`（私有路径）、`crypto`（本地摘要/签名运算）、`url_launcher`（外部链接跳转）。
 - **协议层解耦（`zf_academic`）**：
-  - 教务交互与协议解析全部封装在子模块 `packages/zf_academic` 中，为**纯 Dart 实现（零 Flutter 引擎依赖）**；
+  - 教务交互与协议解析全部封装在子模块 `packages/zf_academic` 中，为**纯 Dart 实现（零 Flutter 引擎依赖）**。
 
 ## 目录结构
 
@@ -108,33 +107,38 @@ qustschedule/
 ├── lib/
 │   ├── main.dart                      应用入口：全局生命周期、状态路由
 │   ├── src/
-│   │   ├── app_model.dart             核心状态机：会话、周次校准、作息、调课、学业后台静默同步
-│   │   ├── app_version.dart           应用版本号管理
+│   │   ├── app_model.dart             核心门面状态机：统筹会话、冷启动、前后台调度
+│   │   ├── app_version.dart           应用版本号管理（运行时读取 pubspec.yaml）
+│   │   ├── state/                     五大细粒度控制器（auth_session/schedule/academic/preferences/hint_notice）
+│   │   ├── updater/                   应用内更新状态机、多线程下载器、Windows/Android 安装器
 │   │   ├── schedule_service.dart      课表拉取编排：Cookie 优先、全局 Mutex Flight、熔断与降级
 │   │   ├── academic_service.dart      学业编排：考试/成绩拉取、未评教拦截诊断、原生 GPA 统计
 │   │   ├── academic_cache.dart        学业离线缓存（ExamCache、GradesCache，按学期 JSON 隔离落盘）
 │   │   ├── backends.dart              教务协议抽象接口
 │   │   ├── schedule_cache.dart        课表本地离线缓存
+│   │   ├── safe_json_file.dart        原子写入、滚动备份自愈与 Isolate 阈值后台编解码
 │   │   ├── reschedule.dart            调课规则引擎与冲突计算
 │   │   ├── term_calendar.dart         周次 ↔ 日期转换、同日排课布局
+│   │   ├── term_selector_helper.dart  学期选择与显示辅助
 │   │   ├── timetable.dart             作息表模型与节次快捷运算
 │   │   ├── course_text.dart           卡片文字自适应缩放与截断排版
+│   │   ├── formatted_text_span.dart   轻量更新日志行内富文本解析
+│   │   ├── route_settled.dart         二级页转场落稳后的延迟任务调度工具
 │   │   ├── preferences_repository.dart 用户偏好持久化（Schema 13，向下兼容）
 │   │   ├── credentials_repository.dart 凭据安全存储（Keystore / DPAPI）
 │   │   ├── session_repository.dart    Cookie 容器快照持久化
-│   │   ├── update_service.dart        应用更新：加速代理降级、便携版热更新与 Robocopy 替换
 │   │   ├── reminder_planner.dart      提醒规划纯函数：事件生成、指纹、14 天窗口
 │   │   ├── reminder_gateway.dart      原生闹钟与提醒通道抽象（MethodChannel）
 │   │   ├── reminder_service.dart      提醒编排：防抖聚合、去重与重试
 │   │   └── school.dart                青科大教务线路配置
-│   ├── pages/                         登录 / 课表 / 学业 / 设置 / 提醒 / 作息 / 调课 / 调试等各页面
-│   ├── widgets/                       课程卡片 / 状态弹窗 / 浮动 Dock / 滚轮等通用组件
-│   └── theme/                         Material 3 配色系统与卡片风格
-├── packages/zf_academic/              独立教务协议层库（纯 Dart 核心）
-├── test/                              UI、组件与业务逻辑自动化测试用例
+│   ├── pages/                         首页外壳 / 课表 / 学业 / 设置 / 提醒 / 作息 / 调课 / 更新 / 调试等页面
+│   ├── widgets/                       触感按钮与四层合绘 / 弹性菜单 / 浮动 Dock / 悬浮胶囊 / 公共弹窗 / 课表组件
+│   └── theme/                         Material 3 语义色令牌与课程调色板
+├── packages/zf_academic/              独立教务协议层库（纯 Dart 核心，含 Isolate Cookie 存储）
+├── test/                              单元、状态机、UI 性能契约与并发回归测试
 ├── docs/                              项目文档、Logo 与界面预览截图
 ├── android/                           Android 原生工程（Kotlin + AlarmManager + 流体云）
-├── windows/                           Windows 原生工程（CMake + MSVC + Runner）
+├── windows/                           Windows 原生工程（CMake + MSVC + 单实例互斥锁 + Inno Setup）
 ├── .github/workflows/                 GitHub Actions 持续集成与多端自动发版
 └── pubspec.yaml                       项目包配置与版本号定义
 ```
