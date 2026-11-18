@@ -919,8 +919,21 @@ class AppModel extends ChangeNotifier {
   @visibleForTesting
   Future<void>? get identitySyncForTest => session.identitySyncForTest;
 
+  String _resolveAccountForPasswordChange() {
+    for (final candidate in <String?>[
+      session.service.sessionInfo?.username,
+      username,
+      session.service.accountHint,
+      studentId,
+    ]) {
+      final trimmed = candidate?.trim() ?? '';
+      if (trimmed.isNotEmpty) return trimmed;
+    }
+    return '';
+  }
+
   Future<void> changePassword(String newPassword) async {
-    final account = session.service.sessionInfo?.username ?? username;
+    final account = _resolveAccountForPasswordChange();
     if (account.isEmpty) {
       throw AcademicError(ErrorCode.validationFailed, '还不知道账号，请先退出后重新登录一次');
     }

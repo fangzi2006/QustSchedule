@@ -495,6 +495,72 @@ void main() {
         'brand-new-pass',
       );
     });
+
+    test('修改密码：Cookie 恢复客户端且 sessionInfo.username 为空串时回退本地已保存账号', () async {
+      final prefs = Preferences.inMemory();
+      await prefs.setIdentityOf(
+        _baseUrl,
+        studentId: '20240001',
+        studentName: '测试学生',
+      );
+      final credentials = InMemoryCredentialStore();
+      await credentials.save(
+        '$_baseUrl|20240001',
+        const Credentials('20240001', 'old-pass'),
+      );
+      Credentials? recordedLogin;
+      final backend = FakeBackend(
+        studentId: '',
+        studentName: '',
+        loginBehavior: (call, creds) async {
+          recordedLogin = creds;
+          return const AuthenticatedState(
+            studentId: '20240001',
+            studentName: '测试学生',
+          );
+        },
+      );
+      final repo = FakeSessionRepository(snapshotOf(_baseUrl));
+      final cache = FakeScheduleCache(
+        CachedSchedule(
+          baseUrl: _baseUrl,
+          fetchedAt: DateTime.now(),
+          schedule: sampleSchedule(),
+        ),
+      );
+      final model = AppModel(
+        service: ScheduleService(
+          credentials: credentials,
+          cookieStorage: repo,
+          backendFactory: (_) => backend,
+          baseUrl: _baseUrl,
+        ),
+        repository: repo,
+        preferences: prefs,
+        scheduleCache: cache,
+        examCache: InMemoryExamCache(),
+        gradesCache: InMemoryGradesCache(),
+        schoolBaseUrl: _baseUrl,
+      );
+      addTearDown(model.dispose);
+
+      await model.boot();
+      await model.refresh();
+
+      // Cookie 有效且本地已有姓名学号时：客户端已创建，但 sessionInfo.username 仍为 ''。
+      expect(model.service.sessionInfo, isNotNull);
+      expect(model.service.sessionInfo!.username, isEmpty);
+      expect(backend.checkSessionCount, 0);
+      expect(backend.loginCount, 0);
+
+      await model.changePassword('brand-new-pass');
+      expect(recordedLogin?.username, '20240001');
+      expect(recordedLogin?.password, 'brand-new-pass');
+      expect(
+        (await credentials.get('$_baseUrl|20240001'))?.password,
+        'brand-new-pass',
+      );
+    });
   });
 
   group('教务地址簿', () {
