@@ -179,6 +179,7 @@ class AppModel extends ChangeNotifier {
   UpdateFlowController get updateFlow => prefs.updateFlow;
 
   String get academicTermId => academic.academicTermId;
+  String get loadedAcademicTerm => academic.loadedAcademicTerm;
   List<ExamItem> get exams => academic.exams;
   List<GradeItem> get grades => academic.grades;
   GradeStats get gradeStats => academic.gradeStats;
@@ -516,6 +517,7 @@ class AppModel extends ChangeNotifier {
   }
 
   Future<void> resetCalendar() async {
+    if (termId.isEmpty) return;
     await scheduleState.resetCalendar();
     _notifyStateChanged();
   }

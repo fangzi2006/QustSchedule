@@ -12,6 +12,7 @@ import 'package:zf_academic/zf_academic.dart';
 
 import '../src/academic_service.dart';
 import '../src/app_model.dart';
+import '../src/term_calendar.dart';
 import '../src/term_selector_helper.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_menu.dart';
@@ -135,10 +136,19 @@ class _AcademicPageState extends State<AcademicPage> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: model.academicNotifier,
+      listenable: Listenable.merge(<Listenable>[
+        model.academicNotifier,
+        model.scheduleState,
+      ]),
       builder: (context, _) {
         final currentTermId = model.academicTermId;
         final terms = model.terms?.items ?? const <Term>[];
+        final currentTermStart =
+            (currentTermId.isNotEmpty &&
+                currentTermId == model.termId &&
+                model.loadedAcademicTerm == model.termId)
+            ? model.termStart
+            : null;
 
         return Scaffold(
           appBar: TactileAppBar(
@@ -214,6 +224,7 @@ class _AcademicPageState extends State<AcademicPage> {
                                     model.exams.isEmpty
                                 ? null
                                 : _getExamPresentation(model.exams),
+                            currentTermStart: currentTermStart,
                           ),
                           const SliverToBoxAdapter(child: SizedBox(height: 20)),
                           SliverToBoxAdapter(
@@ -447,6 +458,40 @@ bool isExamPast(ExamItem exam, DateTime now) {
 }
 
 final RegExp _examTimeOfDayRegex = RegExp(r'\d{1,2}:\d{2}');
+final RegExp _examHasWeekOrWeekdayRegex = RegExp(
+  r'(第\s*\d+\s*周|周[一二三四五六日天]|星期[一二三四五六日天])',
+);
+
+const List<String> _examWeekdayLabels = <String>[
+  '周一',
+  '周二',
+  '周三',
+  '周四',
+  '周五',
+  '周六',
+  '周日',
+];
+
+/// 格式化考试时间文本：当前学期存在 `currentTermStart` 且考试落在第 1 周及以后时追加 `·第X周 周X`。
+@visibleForTesting
+String formatExamTimeLabel(ExamItem exam, {DateTime? currentTermStart}) {
+  if (exam.rawTimeStr.isEmpty) return '时间未公布';
+  final start = exam.startTime;
+  if (start == null || currentTermStart == null) {
+    return exam.rawTimeStr;
+  }
+  if (_examHasWeekOrWeekdayRegex.hasMatch(exam.rawTimeStr)) {
+    return exam.rawTimeStr;
+  }
+  final startMonday = mondayOf(currentTermStart);
+  final examDay = dayOnly(start);
+  if (examDay.isBefore(startMonday)) {
+    return exam.rawTimeStr;
+  }
+  final week = weekOf(startMonday, examDay);
+  final weekday = _examWeekdayLabels[start.weekday - 1];
+  return '${exam.rawTimeStr}·第$week周 $weekday';
+}
 
 class _ExamPresentation {
   const _ExamPresentation({
@@ -539,6 +584,7 @@ List<Widget> _buildExamSectionSlivers(
   required List<ExamItem> exams,
   required bool loading,
   required _ExamPresentation? presentation,
+  DateTime? currentTermStart,
 }) {
   final theme = Theme.of(context);
   final scheme = theme.colorScheme;
@@ -610,7 +656,11 @@ List<Widget> _buildExamSectionSlivers(
   return <Widget>[
     if (nextUpcoming != null) ...<Widget>[
       SliverToBoxAdapter(
-        child: NextExamHeroCard(exam: nextUpcoming, now: presentation.now),
+        child: NextExamHeroCard(
+          exam: nextUpcoming,
+          now: presentation.now,
+          currentTermStart: currentTermStart,
+        ),
       ),
       if (remainingExams.isNotEmpty)
         const SliverToBoxAdapter(child: SizedBox(height: 12)),
@@ -630,6 +680,7 @@ List<Widget> _buildExamSectionSlivers(
               child: _ExamListTile(
                 exam: remainingExams[i],
                 isPast: remainingPastFlags[i],
+                currentTermStart: currentTermStart,
               ),
             ),
           ),
@@ -640,10 +691,16 @@ List<Widget> _buildExamSectionSlivers(
 
 @visibleForTesting
 class NextExamHeroCard extends StatelessWidget {
-  const NextExamHeroCard({super.key, required this.exam, required this.now});
+  const NextExamHeroCard({
+    super.key,
+    required this.exam,
+    required this.now,
+    this.currentTermStart,
+  });
 
   final ExamItem exam;
   final DateTime now;
+  final DateTime? currentTermStart;
 
   @override
   Widget build(BuildContext context) {
@@ -763,7 +820,10 @@ class NextExamHeroCard extends StatelessWidget {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    exam.rawTimeStr.isNotEmpty ? exam.rawTimeStr : '时间未公布',
+                    formatExamTimeLabel(
+                      exam,
+                      currentTermStart: currentTermStart,
+                    ),
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: scheme.onSurfaceVariant,
                     ),
@@ -808,10 +868,15 @@ class NextExamHeroCard extends StatelessWidget {
 }
 
 class _ExamListTile extends StatelessWidget {
-  const _ExamListTile({required this.exam, required this.isPast});
+  const _ExamListTile({
+    required this.exam,
+    required this.isPast,
+    this.currentTermStart,
+  });
 
   final ExamItem exam;
   final bool isPast;
+  final DateTime? currentTermStart;
 
   @override
   Widget build(BuildContext context) {
@@ -869,7 +934,7 @@ class _ExamListTile extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  exam.rawTimeStr.isNotEmpty ? exam.rawTimeStr : '时间未公布',
+                  formatExamTimeLabel(exam, currentTermStart: currentTermStart),
                   style: secondaryText,
                 ),
                 const SizedBox(height: 2),

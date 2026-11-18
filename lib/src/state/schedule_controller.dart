@@ -362,6 +362,7 @@ class ScheduleController extends ChangeNotifier {
     final termId = _termId;
     if (termId.isNotEmpty) {
       await _prefs.raw.setTermStart(termId, start);
+      if (_disposed) return;
     }
     _invalidateWeekCaches();
     notifyListeners();
@@ -379,6 +380,7 @@ class ScheduleController extends ChangeNotifier {
         : maxWeeksOf(currentSchedule.entries);
     _setWeek(weekOf(_termStart!, DateTime.now()));
     await _prefs.raw.setTermStart(termId, _termStart!);
+    if (_disposed) return;
     _invalidateWeekCaches();
     notifyListeners();
     _prefs.notifyPrefs();

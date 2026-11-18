@@ -15,10 +15,11 @@ DateTime dayOnly(DateTime value) =>
     DateTime(value.year, value.month, value.day);
 
 /// 该日期所在周的周一（周一为一周之始，与国际标准一致）。
-DateTime mondayOf(DateTime value) {
-  final day = dayOnly(value);
-  return day.subtract(Duration(days: day.weekday - DateTime.monday));
-}
+DateTime mondayOf(DateTime value) => DateTime(
+  value.year,
+  value.month,
+  value.day - (value.weekday - DateTime.monday),
+);
 
 /// 估算学期第 1 周的周一。
 ///
@@ -43,7 +44,9 @@ DateTime estimateTermStart(Term term, {DateTime? now}) {
 /// 某天是第几周（1-based）。早于开学日时返回 1（而不是 0 或负数）。
 int weekOf(DateTime termStart, DateTime date) {
   final start = mondayOf(termStart);
-  final diff = dayOnly(date).difference(start).inDays;
+  final startUtc = DateTime.utc(start.year, start.month, start.day);
+  final dateUtc = DateTime.utc(date.year, date.month, date.day);
+  final diff = dateUtc.difference(startUtc).inDays;
   if (diff < 0) return 1;
   return diff ~/ 7 + 1;
 }
@@ -51,14 +54,22 @@ int weekOf(DateTime termStart, DateTime date) {
 /// 第 [week] 周、星期 [day]（1=周一 … 7=周日）对应的日期。
 DateTime dateOf(DateTime termStart, int week, int day) {
   final start = mondayOf(termStart);
-  return start.add(Duration(days: (week - 1) * 7 + (day - 1)));
+  return DateTime(
+    start.year,
+    start.month,
+    start.day + (week - 1) * 7 + (day - 1),
+  );
 }
 
 /// 用户校准："今天是第 [week] 周" → 反推第 1 周周一。
 DateTime termStartFromWeek(DateTime today, int week) {
   final thisMonday = mondayOf(today);
   final safeWeek = week < 1 ? 1 : week;
-  return thisMonday.subtract(Duration(days: (safeWeek - 1) * 7));
+  return DateTime(
+    thisMonday.year,
+    thisMonday.month,
+    thisMonday.day - (safeWeek - 1) * 7,
+  );
 }
 
 /// 这一周的日期范围文案：`3/2 – 3/8`。

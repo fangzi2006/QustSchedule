@@ -8,11 +8,33 @@ import 'package:qustschedule/src/academic_cache.dart';
 import 'package:qustschedule/src/app_model.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
 import 'package:qustschedule/src/schedule_service.dart';
+import 'package:qustschedule/src/term_calendar.dart';
 import 'package:zf_academic/zf_academic.dart';
 
 import 'support/fake_backend.dart';
 
 const _baseUrl = 'https://jw.example.edu.cn';
+
+class _GatedExamCache extends InMemoryExamCache {
+  _GatedExamCache({required String gateForTerm, required this._gate})
+    : _gateTerm = gateForTerm;
+
+  String _gateTerm;
+  Completer<void> _gate;
+
+  void setGate(String termId, Completer<void> gate) {
+    _gateTerm = termId;
+    _gate = gate;
+  }
+
+  @override
+  Future<CachedTermExams?> load(String termId) async {
+    if (termId == _gateTerm && !_gate.isCompleted) {
+      await _gate.future;
+    }
+    return super.load(termId);
+  }
+}
 
 AppModel _buildTestModel({
   FakeBackend? backend,
@@ -611,6 +633,355 @@ void main() {
         expect(find.byKey(const Key('academic-exam-list-card')), findsNothing);
       },
     );
+
+    test('formatExamTimeLabel 仅在提供 currentTermStart 且考试含日期时追加第X周 周X', () {
+      final exam = ExamItem(
+        courseName: '毛概',
+        startTime: DateTime(2026, 12, 8, 13, 30),
+        endTime: DateTime(2026, 12, 8, 15, 5),
+        rawTimeStr: '2026-12-08(13:30-15:05)',
+      );
+      expect(
+        formatExamTimeLabel(exam, currentTermStart: DateTime(2026, 8, 31)),
+        '2026-12-08(13:30-15:05)·第15周 周二',
+      );
+      expect(formatExamTimeLabel(exam), '2026-12-08(13:30-15:05)');
+      expect(
+        formatExamTimeLabel(
+          const ExamItem(courseName: '无时间'),
+          currentTermStart: DateTime(2026, 8, 31),
+        ),
+        '时间未公布',
+      );
+      expect(
+        formatExamTimeLabel(
+          const ExamItem(courseName: '待定', rawTimeStr: '待定'),
+          currentTermStart: DateTime(2026, 8, 31),
+        ),
+        '待定',
+      );
+      // 早于开学周周一的考前补考/未校准偏差日期：不误标为第1周
+      expect(
+        formatExamTimeLabel(
+          ExamItem(
+            courseName: '开学前补考',
+            startTime: DateTime(2026, 8, 28, 9, 0),
+            rawTimeStr: '2026-08-28(09:00-11:00)',
+          ),
+          currentTermStart: DateTime(2026, 8, 31),
+        ),
+        '2026-08-28(09:00-11:00)',
+      );
+      // 原文已含周次或星期时：不重复拼接
+      expect(
+        formatExamTimeLabel(
+          ExamItem(
+            courseName: '已带周次',
+            startTime: DateTime(2026, 12, 8, 13, 30),
+            rawTimeStr: '2026-12-08 第15周 13:30',
+          ),
+          currentTermStart: DateTime(2026, 8, 31),
+        ),
+        '2026-12-08 第15周 13:30',
+      );
+      expect(
+        formatExamTimeLabel(
+          ExamItem(
+            courseName: '已带星期',
+            startTime: DateTime(2026, 12, 8, 13, 30),
+            rawTimeStr: '2026-12-08 周二 13:30',
+          ),
+          currentTermStart: DateTime(2026, 8, 31),
+        ),
+        '2026-12-08 周二 13:30',
+      );
+    });
+
+    testWidgets('AcademicPage 当前课表学期考试追加 ·第X周 周X 并在校准周次后刷新，切换历史学期不追加', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(800, 1800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final nextExamDate = today.add(const Duration(days: 14));
+      final laterExamDate = today.add(const Duration(days: 21));
+      final initTermStart = mondayOf(today).subtract(const Duration(days: 14));
+      const weekdays = <String>['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+      String fmtDate(DateTime d) =>
+          '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+      final nextRaw = '${fmtDate(nextExamDate)}(13:30-15:05)';
+      final laterRaw = '${fmtDate(laterExamDate)}(09:00-11:00)';
+      const pastRaw = '2025-12-01(09:00-11:00)';
+
+      final currentExams = <ExamItem>[
+        ExamItem(
+          courseName: '置顶考试科目',
+          startTime: DateTime(
+            nextExamDate.year,
+            nextExamDate.month,
+            nextExamDate.day,
+            13,
+            30,
+          ),
+          endTime: DateTime(
+            nextExamDate.year,
+            nextExamDate.month,
+            nextExamDate.day,
+            15,
+            5,
+          ),
+          rawTimeStr: nextRaw,
+        ),
+        ExamItem(
+          courseName: '后续考试科目',
+          startTime: DateTime(
+            laterExamDate.year,
+            laterExamDate.month,
+            laterExamDate.day,
+            9,
+            0,
+          ),
+          endTime: DateTime(
+            laterExamDate.year,
+            laterExamDate.month,
+            laterExamDate.day,
+            11,
+            0,
+          ),
+          rawTimeStr: laterRaw,
+        ),
+        const ExamItem(courseName: '未公布科目', rawTimeStr: ''),
+      ];
+      final historyExams = <ExamItem>[
+        ExamItem(
+          courseName: '历史学期科目',
+          startTime: DateTime(2025, 12, 1, 9, 0),
+          endTime: DateTime(2025, 12, 1, 11, 0),
+          rawTimeStr: pastRaw,
+        ),
+      ];
+
+      final backend = FakeBackend();
+      backend.examsBehavior = (_, termId) async =>
+          termId == '2025-2026-2' ? historyExams : currentExams;
+
+      final model = _buildTestModel(backend: backend);
+      addTearDown(model.dispose);
+      model.hydrateForTest(
+        schedule: const Schedule(
+          termId: '2026-2027-1',
+          maxWeeks: 18,
+          entries: <ScheduleEntry>[],
+        ),
+        terms: const Terms(
+          currentId: '2026-2027-1',
+          items: <Term>[
+            Term(
+              id: '2026-2027-1',
+              name: '2026-2027 第1学期',
+              year: 2026,
+              semester: 1,
+            ),
+            Term(
+              id: '2025-2026-2',
+              name: '2025-2026 第2学期',
+              year: 2025,
+              semester: 2,
+            ),
+          ],
+        ),
+        termStart: initTermStart,
+      );
+      model.setAcademicTerm('2026-2027-1');
+
+      await tester.pumpWidget(_wrap(AcademicPage(model: model)));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 5));
+
+      final wNextBefore = weekOf(initTermStart, nextExamDate);
+      final wLaterBefore = weekOf(initTermStart, laterExamDate);
+      expect(
+        find.text(
+          '$nextRaw·第$wNextBefore周 ${weekdays[nextExamDate.weekday - 1]}',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          '$laterRaw·第$wLaterBefore周 ${weekdays[laterExamDate.weekday - 1]}',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('时间未公布'), findsOneWidget);
+
+      // 校准周次后，学业页自动刷新并展示最新周次
+      await model.calibrateCurrentWeek(6);
+      await tester.pump();
+      final calibratedStart = model.termStart!;
+      final wNextAfter = weekOf(calibratedStart, nextExamDate);
+      final wLaterAfter = weekOf(calibratedStart, laterExamDate);
+      expect(wNextAfter, isNot(wNextBefore));
+      expect(
+        find.text(
+          '$nextRaw·第$wNextAfter周 ${weekdays[nextExamDate.weekday - 1]}',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          '$laterRaw·第$wLaterAfter周 ${weekdays[laterExamDate.weekday - 1]}',
+        ),
+        findsOneWidget,
+      );
+
+      // 切换到历史学期时，仅展示原始时间文本，不追加周次与星期
+      model.setAcademicTerm('2025-2026-2');
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 5));
+      expect(find.text(pastRaw), findsOneWidget);
+      expect(find.textContaining('·第'), findsNothing);
+
+      // 重置校历（恢复默认估算）同样触发已挂载学业页刷新周次
+      model.setAcademicTerm('2026-2027-1');
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 5));
+      expect(
+        find.text(
+          '$nextRaw·第$wNextAfter周 ${weekdays[nextExamDate.weekday - 1]}',
+        ),
+        findsOneWidget,
+      );
+      await model.resetCalendar();
+      await tester.pump();
+      final resetStart = model.termStart!;
+      final wNextReset = weekOf(resetStart, nextExamDate);
+      expect(wNextReset, isNot(wNextAfter));
+      expect(
+        find.text(
+          '$nextRaw·第$wNextReset周 ${weekdays[nextExamDate.weekday - 1]}',
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('先挂载 AcademicPage 后才加载课表、以及 setAcademicTerm 异步切回窗口均保证周次同步与归属隔离', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(800, 1800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final nextExamDate = today.add(const Duration(days: 14));
+      final initTermStart = mondayOf(today).subtract(const Duration(days: 14));
+      const weekdays = <String>['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+      final dateStr =
+          '${nextExamDate.year}-${nextExamDate.month.toString().padLeft(2, '0')}-${nextExamDate.day.toString().padLeft(2, '0')}';
+      final currentRaw = '$dateStr(13:30-15:05)';
+      const historyRaw = '2025-12-01(09:00-11:00)';
+
+      final gate = Completer<void>();
+      final examCache = _GatedExamCache(gateForTerm: '2026-2027-1', gate: gate);
+      await examCache.save('2026-2027-1', <ExamItem>[
+        ExamItem(
+          courseName: '当前学期课程',
+          startTime: DateTime(
+            nextExamDate.year,
+            nextExamDate.month,
+            nextExamDate.day,
+            13,
+            30,
+          ),
+          endTime: DateTime(
+            nextExamDate.year,
+            nextExamDate.month,
+            nextExamDate.day,
+            15,
+            5,
+          ),
+          rawTimeStr: currentRaw,
+        ),
+      ]);
+      await examCache.save('2025-2026-2', <ExamItem>[
+        ExamItem(
+          courseName: '历史学期课程',
+          startTime: DateTime(2025, 12, 1, 9, 0),
+          endTime: DateTime(2025, 12, 1, 11, 0),
+          rawTimeStr: historyRaw,
+        ),
+      ]);
+
+      final backend = FakeBackend();
+      backend.examsBehavior = (_, termId) async => termId == '2025-2026-2'
+          ? <ExamItem>[
+              ExamItem(
+                courseName: '历史学期课程',
+                startTime: DateTime(2025, 12, 1, 9, 0),
+                endTime: DateTime(2025, 12, 1, 11, 0),
+                rawTimeStr: historyRaw,
+              ),
+            ]
+          : const <ExamItem>[];
+
+      final model = _buildTestModel(backend: backend, examCache: examCache);
+      addTearDown(model.dispose);
+
+      // 1. 课表尚未加载时先挂载学业页并加载当前学期缓存（不依赖阻塞门）
+      gate.complete();
+      await model.loadAcademicData(termId: '2026-2027-1');
+      model.setAcademicTerm('2026-2027-1');
+      await tester.pumpWidget(_wrap(AcademicPage(model: model)));
+      await tester.pumpAndSettle();
+      expect(find.text(currentRaw), findsOneWidget);
+      expect(find.textContaining('·第'), findsNothing);
+
+      // 2. 随后课表加载完成写入 termId 与 termStart，已挂载学业页应自动补全 ·第X周 周X
+      model.hydrateForTest(
+        schedule: const Schedule(
+          termId: '2026-2027-1',
+          maxWeeks: 18,
+          entries: <ScheduleEntry>[],
+        ),
+        termStart: initTermStart,
+      );
+      await tester.pump();
+      final expectedWeek = weekOf(initTermStart, nextExamDate);
+      expect(
+        find.text(
+          '$currentRaw·第$expectedWeek周 ${weekdays[nextExamDate.weekday - 1]}',
+        ),
+        findsOneWidget,
+      );
+
+      // 3. 切到历史学期后再切回当前学期，读盘门未放行期间历史考试绝不被错拼当前学期周次
+      model.setAcademicTerm('2025-2026-2');
+      await tester.pumpAndSettle();
+      expect(find.text(historyRaw), findsOneWidget);
+
+      final secondGate = Completer<void>();
+      examCache.setGate('2026-2027-1', secondGate);
+      model.setAcademicTerm('2026-2027-1');
+      await tester.pump();
+      expect(find.text(historyRaw), findsOneWidget);
+      expect(find.textContaining('·第'), findsNothing);
+
+      secondGate.complete();
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          '$currentRaw·第$expectedWeek周 ${weekdays[nextExamDate.weekday - 1]}',
+        ),
+        findsOneWidget,
+      );
+    });
   });
 
   group('学业更新差异比对与全局气泡通知', () {

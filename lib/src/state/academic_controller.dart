@@ -57,6 +57,9 @@ class AcademicController extends ChangeNotifier {
   String _academicTermId = '';
   String _loadedAcademicTerm = '';
 
+  /// 当前内存中的 `exams` / `grades` 实际归属的学期 ID。
+  String get loadedAcademicTerm => _loadedAcademicTerm;
+
   String get academicTermId {
     if (_academicTermId.isNotEmpty) return _academicTermId;
     final currentScheduleTerm = _fallbackTermIdReader();
@@ -152,6 +155,15 @@ class AcademicController extends ChangeNotifier {
         _exams = cachedExams?.items ?? const <ExamItem>[];
         _grades = cachedGrades?.items ?? const <GradeItem>[];
         _isNotEvaluated = cachedGrades?.isNotEvaluated ?? false;
+        _loadedAcademicTerm = termId;
+        _academicError = null;
+        notifyListeners();
+      } else if (_loadedAcademicTerm.isNotEmpty &&
+          _loadedAcademicTerm != termId &&
+          academicTermId == termId) {
+        _exams = const <ExamItem>[];
+        _grades = const <GradeItem>[];
+        _isNotEvaluated = false;
         _loadedAcademicTerm = termId;
         _academicError = null;
         notifyListeners();
