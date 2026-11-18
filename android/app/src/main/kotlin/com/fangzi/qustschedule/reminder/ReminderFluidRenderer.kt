@@ -1,12 +1,9 @@
 package com.fangzi.qustschedule.reminder
 
 import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.fangzi.qustschedule.MainActivity
 import com.fangzi.qustschedule.R
@@ -59,26 +56,21 @@ data class FluidCardState(
  */
 object ReminderFluidRenderer {
 
-    const val CHANNEL_FLUID = "course_fluid_v1"
+    const val CHANNEL_FLUID = "course_fluid_v2"
+    private const val LEGACY_CHANNEL_FLUID = "course_fluid_v1"
     const val CHANNEL_FLUID_NAME = "上课进度"
 
     private const val REQUEST_CONTENT = 4403
 
     fun ensureChannel(context: Context) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val manager = context.getSystemService(NotificationManager::class.java)
-            ?: return
-        if (manager.getNotificationChannel(CHANNEL_FLUID) != null) return
-        val channel = NotificationChannel(
-            CHANNEL_FLUID,
-            CHANNEL_FLUID_NAME,
-            // 参考实现要求 IMPORTANCE_HIGH 才可能被提成胶囊。
-            NotificationManager.IMPORTANCE_HIGH,
-        ).apply {
-            description = "上课倒计时常驻卡片"
-            setShowBadge(false)
-        }
-        manager.createNotificationChannel(channel)
+        ReminderNotifier.ensureHighAlertChannel(
+            context = context,
+            channelId = CHANNEL_FLUID,
+            channelName = CHANNEL_FLUID_NAME,
+            descriptionText = "上课倒计时常驻卡片",
+            showBadge = false,
+            legacyChannelId = LEGACY_CHANNEL_FLUID,
+        )
     }
 
     fun build(context: Context, state: FluidCardState): Notification {
@@ -98,9 +90,9 @@ object ReminderFluidRenderer {
             .setShortCriticalText(primary.take(7))
             .setRequestPromotedOngoing(true)
             .setOngoing(true)
-            .setSilent(true)
-            .setOnlyAlertOnce(true)
+            .setAutoCancel(false)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)

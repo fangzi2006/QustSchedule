@@ -3,9 +3,10 @@
          （debug/profile 的 manifest 里已自带，release 没有），表现就是"网络不稳定"。
          不要删这行。 -->
     <uses-permission android:name="android.permission.INTERNET"/>
-    <!-- 课程提醒：Android 13+ 运行时通知权限；Android 12+ 精确闹钟特殊权限。 -->
+    <!-- 课程提醒：Android 13+ 运行时通知权限；Android 12+ 精确闹钟特殊权限；震动反馈权限。 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <uses-permission android:name="android.permission.VIBRATE"/>
     <!-- 重启 / 覆盖安装后重排闹钟（系统会清空全部闹钟，必须自己恢复）。 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <!-- 流体云：上课期间维持一条常驻进度卡片（前台服务，specialUse 子类型）。

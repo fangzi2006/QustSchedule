@@ -54,8 +54,7 @@ class ReminderScheduler(context: Context) {
         rawJson: String,
         fromFlutter: Boolean,
     ): ReminderSyncOutcome = synchronized(LOCK) {
-        ReminderNotifier.ensureChannel(appContext)
-        ReminderFluidRenderer.ensureChannel(appContext)
+        ReminderNotifier.ensureAllChannels(appContext)
         store.savePayload(rawJson, payload)
         if (fromFlutter) store.clearDirty()
 

@@ -33,6 +33,10 @@ class ReminderBridge(
     fun attach() {
         disposed = false
         channel.setMethodCallHandler(this)
+        val appContext = activity.applicationContext
+        ReminderWorker.execute {
+            ReminderNotifier.ensureAllChannels(appContext)
+        }
     }
 
     fun dispose() {
@@ -74,6 +78,7 @@ class ReminderBridge(
                 requestNotificationPermission(result)
 
             "openNotificationSettings" -> {
+                ReminderNotifier.ensureAllChannels(activity.applicationContext)
                 ReminderPermissions.openNotificationSettings(activity)
                 result.success(null)
             }
@@ -146,6 +151,7 @@ class ReminderBridge(
 
     /** 通知权限：Android 13+ 走运行时申请，更低版本直接看渠道开关。 */
     private fun requestNotificationPermission(result: MethodChannel.Result) {
+        ReminderNotifier.ensureAllChannels(activity.applicationContext)
         if (ReminderPermissions.hasNotificationPermission(activity)) {
             result.success(true)
             return
@@ -173,6 +179,9 @@ class ReminderBridge(
         if (requestCode != REQUEST_NOTIFICATION) return false
         val granted = grantResults.isNotEmpty() &&
             grantResults[0] == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            ReminderNotifier.ensureAllChannels(activity.applicationContext)
+        }
         pendingNotificationResult?.success(granted)
         pendingNotificationResult = null
         return true
