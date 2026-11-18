@@ -18,6 +18,7 @@ import 'package:flutter/gestures.dart'
         kTouchSlop;
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart' show SpringDescription, SpringSimulation;
+import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
 
 import 'app_menu.dart' show activeAppMenuMorph, activeTactileDragStart;
@@ -415,6 +416,8 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
 
     final hasMenuTrigger = widget.onMenuOpen != null;
     final style = widget.effectiveSurfaceStyle;
+    final coordinator = _TactileSurfaceScopeInherited.maybeOf(context);
+    final textDirection = Directionality.maybeOf(context) ?? TextDirection.ltr;
 
     Widget surface = AnimatedBuilder(
       animation: _motionListenable,
@@ -447,6 +450,35 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
             : p;
         final scale = 1.0 + pressAmplitude * effectiveP;
 
+        final Animation<double> fadeOpacity = morphOpacity >= 1.0
+            ? kAlwaysCompleteAnimation
+            : AlwaysStoppedAnimation<double>(morphOpacity);
+
+        if (coordinator != null && style == TactileSurfaceStyle.elevated) {
+          // 处于 TactileSurfaceScope 内时，将阴影与纯白填充交给外层四层合绘，
+          // 确保邻近按钮阴影互不遮挡、重叠时同色纯白融合，且整体高于静态标题。
+          // FadeTransition（RenderAnimatedOpacity）带有 isRepaintBoundary=true，
+          // 必须放在 _TactileSurfaceSlotWidget 内部包裹前景 child，避免阻断外层插槽收集。
+          final Widget slotChild = hasMenuTrigger
+              ? FadeTransition(opacity: fadeOpacity, child: child!)
+              : child!;
+          return Transform.translate(
+            offset: drag,
+            child: Transform.scale(
+              scale: scale,
+              child: _TactileSurfaceSlotWidget(
+                coordinator: coordinator,
+                borderRadius: radius,
+                textDirection: textDirection,
+                surfaceColor: scheme.surfaceContainerLowest,
+                boxShadows: _elevatedShadows(_interactive),
+                morphOpacity: morphOpacity,
+                child: slotChild,
+              ),
+            ),
+          );
+        }
+
         Widget body = child!;
 
         if (style != TactileSurfaceStyle.transparent) {
@@ -455,15 +487,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
           switch (style) {
             case TactileSurfaceStyle.elevated:
               bgColor = scheme.surfaceContainerLowest;
-              boxShadow = <BoxShadow>[
-                BoxShadow(
-                  color: Colors.black.withValues(
-                    alpha: _interactive ? 0.045 : 0.02,
-                  ),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ];
+              boxShadow = _elevatedShadows(_interactive);
             case TactileSurfaceStyle.tinted:
               bgColor = scheme.surfaceContainerHigh.withValues(
                 alpha: _interactive ? 0.56 : 0.28,
@@ -490,17 +514,14 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
           child: Transform.scale(scale: scale, child: body),
         );
         if (hasMenuTrigger) {
-          body = FadeTransition(
-            opacity: AlwaysStoppedAnimation<double>(morphOpacity),
-            child: body,
-          );
+          body = FadeTransition(opacity: fadeOpacity, child: body);
         }
         return body;
       },
       child: content,
     );
 
-    if (hasMenuTrigger) {
+    if (hasMenuTrigger && coordinator == null) {
       surface = RepaintBoundary(child: surface);
     }
 
@@ -846,5 +867,376 @@ class TactileActionButton extends StatelessWidget {
       enabled: onPressed != null,
       child: inner,
     );
+  }
+}
+
+const List<BoxShadow> _kElevatedEnabledShadows = <BoxShadow>[
+  BoxShadow(
+    color: Color.fromRGBO(0, 0, 0, 0.045),
+    blurRadius: 8,
+    offset: Offset(0, 2),
+  ),
+];
+
+const List<BoxShadow> _kElevatedDisabledShadows = <BoxShadow>[
+  BoxShadow(
+    color: Color.fromRGBO(0, 0, 0, 0.02),
+    blurRadius: 8,
+    offset: Offset(0, 2),
+  ),
+];
+
+List<BoxShadow> _elevatedShadows(bool interactive) =>
+    interactive ? _kElevatedEnabledShadows : _kElevatedDisabledShadows;
+
+/// 为顶栏按钮统一分四层合绘的组件：
+///   1. 底层背景与静态标题文字（如二级页标题）；
+///   2. 组内全部 `elevated` 按钮阴影（彼此永不压到对方白底上）；
+///   3. 组内全部 `elevated` 按钮纯白填充（按压放大 / 拖拽重叠时自然同色融合）；
+///   4. 组内全部按钮前景图标与文字（按固定顺序清晰绘制在融合白底之上）。
+class TactileSurfaceScope extends StatefulWidget {
+  const TactileSurfaceScope({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<TactileSurfaceScope> createState() => _TactileSurfaceScopeState();
+}
+
+class _TactileSurfaceScopeState extends State<TactileSurfaceScope> {
+  final _TactileSurfaceCoordinator _coordinator = _TactileSurfaceCoordinator();
+
+  @override
+  Widget build(BuildContext context) {
+    return _TactileSurfaceScopeInherited(
+      coordinator: _coordinator,
+      child: _TactileSurfaceScopeRenderWidget(
+        coordinator: _coordinator,
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+/// 统一带阴影按钮分层合绘且解除默认 56dp 硬裁剪的顶栏容器（内部保留原生 [AppBar]）。
+class TactileAppBar extends StatelessWidget implements PreferredSizeWidget {
+  const TactileAppBar({
+    super.key,
+    this.leading,
+    this.title,
+    this.titleSpacing,
+    this.actions,
+    this.bottom,
+    this.toolbarHeight,
+    this.automaticallyImplyLeading = true,
+    this.backgroundColor,
+    this.clipBehavior = Clip.none,
+  });
+
+  final Widget? leading;
+  final Widget? title;
+  final double? titleSpacing;
+  final List<Widget>? actions;
+  final PreferredSizeWidget? bottom;
+  final double? toolbarHeight;
+  final bool automaticallyImplyLeading;
+  final Color? backgroundColor;
+  final Clip clipBehavior;
+
+  @override
+  Size get preferredSize => Size.fromHeight(
+    (toolbarHeight ?? kToolbarHeight) + (bottom?.preferredSize.height ?? 0.0),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return TactileSurfaceScope(
+      child: AppBar(
+        leading: leading,
+        title: title,
+        titleSpacing: titleSpacing,
+        actions: actions,
+        bottom: bottom,
+        toolbarHeight: toolbarHeight,
+        automaticallyImplyLeading: automaticallyImplyLeading,
+        backgroundColor: backgroundColor,
+        clipBehavior: clipBehavior,
+      ),
+    );
+  }
+}
+
+class _TactileSurfaceCoordinator {
+  RenderObject? scopeRenderObject;
+  final List<_RenderTactileSurfaceSlot> frameSlots =
+      <_RenderTactileSurfaceSlot>[];
+
+  void registerFrameSlot(_RenderTactileSurfaceSlot slot) {
+    frameSlots.add(slot);
+  }
+
+  void markScopeNeedsPaint() {
+    final ro = scopeRenderObject;
+    if (ro != null && ro.debugDisposed != true && ro.attached) {
+      ro.markNeedsPaint();
+    }
+  }
+}
+
+class _TactileSurfaceScopeInherited extends InheritedWidget {
+  const _TactileSurfaceScopeInherited({
+    required this.coordinator,
+    required super.child,
+  });
+
+  final _TactileSurfaceCoordinator coordinator;
+
+  static _TactileSurfaceCoordinator? maybeOf(BuildContext context) {
+    return context
+        .dependOnInheritedWidgetOfExactType<_TactileSurfaceScopeInherited>()
+        ?.coordinator;
+  }
+
+  @override
+  bool updateShouldNotify(_TactileSurfaceScopeInherited oldWidget) =>
+      coordinator != oldWidget.coordinator;
+}
+
+class _TactileSurfaceScopeRenderWidget extends SingleChildRenderObjectWidget {
+  const _TactileSurfaceScopeRenderWidget({
+    required this.coordinator,
+    required super.child,
+  });
+
+  final _TactileSurfaceCoordinator coordinator;
+
+  @override
+  _RenderTactileSurfaceScope createRenderObject(BuildContext context) =>
+      _RenderTactileSurfaceScope(coordinator);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderTactileSurfaceScope renderObject,
+  ) {
+    renderObject.coordinator = coordinator;
+  }
+}
+
+class _RenderTactileSurfaceScope extends RenderProxyBox {
+  _RenderTactileSurfaceScope(this._coordinator);
+
+  _TactileSurfaceCoordinator _coordinator;
+
+  set coordinator(_TactileSurfaceCoordinator value) {
+    if (identical(_coordinator, value)) return;
+    if (identical(_coordinator.scopeRenderObject, this)) {
+      _coordinator.scopeRenderObject = null;
+    }
+    _coordinator = value;
+    _coordinator.scopeRenderObject = this;
+    markNeedsPaint();
+  }
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    _coordinator.scopeRenderObject = this;
+  }
+
+  @override
+  void detach() {
+    if (identical(_coordinator.scopeRenderObject, this)) {
+      _coordinator.scopeRenderObject = null;
+    }
+    super.detach();
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    final slots = _coordinator.frameSlots;
+    slots.clear();
+    try {
+      // 第 1 层：普通背景与静态标题文字（组内按钮在此时仅登记顺序、跳过直接绘制）。
+      super.paint(context, offset);
+      if (slots.isEmpty) return;
+
+      final entries = <(_RenderTactileSurfaceSlot, Matrix4)>[];
+      for (final slot in slots) {
+        if (!slot.attached || !slot.hasSize || slot.size.isEmpty) continue;
+        if (slot.morphOpacity <= 0.001) continue;
+        entries.add((slot, slot.getTransformTo(this)));
+      }
+      if (entries.isEmpty) return;
+
+      final canvas = context.canvas;
+      // 第 2 层：全部按钮的阴影（低于所有白底）。
+      for (final (slot, matrix) in entries) {
+        canvas.save();
+        canvas.translate(offset.dx, offset.dy);
+        canvas.transform(matrix.storage);
+        slot.paintShadows(canvas);
+        canvas.restore();
+      }
+
+      // 第 3 层：全部按钮的纯白底面（同色重叠时无缝融合）。
+      for (final (slot, matrix) in entries) {
+        canvas.save();
+        canvas.translate(offset.dx, offset.dy);
+        canvas.transform(matrix.storage);
+        slot.paintSurface(canvas);
+        canvas.restore();
+      }
+
+      // 第 4 层：固定顺序的按钮前景（图标与文字）。
+      for (final (slot, matrix) in entries) {
+        context.pushTransform(
+          slot.needsCompositing,
+          offset,
+          matrix,
+          slot.paintForeground,
+        );
+      }
+    } finally {
+      slots.clear();
+    }
+  }
+}
+
+class _TactileSurfaceSlotWidget extends SingleChildRenderObjectWidget {
+  const _TactileSurfaceSlotWidget({
+    required this.coordinator,
+    required this.borderRadius,
+    required this.textDirection,
+    required this.surfaceColor,
+    required this.boxShadows,
+    required this.morphOpacity,
+    required super.child,
+  });
+
+  final _TactileSurfaceCoordinator coordinator;
+  final BorderRadius borderRadius;
+  final TextDirection textDirection;
+  final Color surfaceColor;
+  final List<BoxShadow> boxShadows;
+  final double morphOpacity;
+
+  @override
+  _RenderTactileSurfaceSlot createRenderObject(BuildContext context) {
+    return _RenderTactileSurfaceSlot(
+      coordinator,
+      borderRadius,
+      textDirection,
+      surfaceColor,
+      boxShadows,
+      morphOpacity,
+    );
+  }
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderTactileSurfaceSlot renderObject,
+  ) {
+    renderObject
+      ..coordinator = coordinator
+      ..borderRadius = borderRadius
+      ..textDirection = textDirection
+      ..surfaceColor = surfaceColor
+      ..boxShadows = boxShadows
+      ..morphOpacity = morphOpacity;
+  }
+}
+
+class _RenderTactileSurfaceSlot extends RenderProxyBox {
+  _RenderTactileSurfaceSlot(
+    this._coordinator,
+    this._borderRadius,
+    this._textDirection,
+    this._surfaceColor,
+    this._boxShadows,
+    this._morphOpacity,
+  );
+
+  _TactileSurfaceCoordinator _coordinator;
+  set coordinator(_TactileSurfaceCoordinator value) {
+    if (identical(_coordinator, value)) return;
+    _coordinator = value;
+    markNeedsPaint();
+  }
+
+  BorderRadius _borderRadius;
+  set borderRadius(BorderRadius value) {
+    if (_borderRadius == value) return;
+    _borderRadius = value;
+    markNeedsPaint();
+  }
+
+  TextDirection _textDirection;
+  set textDirection(TextDirection value) {
+    if (_textDirection == value) return;
+    _textDirection = value;
+    markNeedsPaint();
+  }
+
+  Color _surfaceColor;
+  set surfaceColor(Color value) {
+    if (_surfaceColor == value) return;
+    _surfaceColor = value;
+    markNeedsPaint();
+  }
+
+  List<BoxShadow> _boxShadows;
+  set boxShadows(List<BoxShadow> value) {
+    if (identical(_boxShadows, value)) return;
+    _boxShadows = value;
+    markNeedsPaint();
+  }
+
+  double _morphOpacity;
+  double get morphOpacity => _morphOpacity;
+  set morphOpacity(double value) {
+    if (_morphOpacity == value) return;
+    _morphOpacity = value;
+    markNeedsPaint();
+  }
+
+  @override
+  void markNeedsPaint() {
+    super.markNeedsPaint();
+    _coordinator.markScopeNeedsPaint();
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    _coordinator.registerFrameSlot(this);
+  }
+
+  RRect _resolvedRRect() =>
+      _borderRadius.resolve(_textDirection).toRRect(Offset.zero & size);
+
+  void paintShadows(Canvas canvas) {
+    final rrect = _resolvedRRect();
+    for (final shadow in _boxShadows) {
+      final paint = shadow.toPaint();
+      if (_morphOpacity < 0.999) {
+        paint.color = paint.color.withValues(
+          alpha: paint.color.a * _morphOpacity,
+        );
+      }
+      canvas.drawRRect(rrect.shift(shadow.offset), paint);
+    }
+  }
+
+  void paintSurface(Canvas canvas) {
+    final paint = Paint()
+      ..color = _morphOpacity < 0.999
+          ? _surfaceColor.withValues(alpha: _surfaceColor.a * _morphOpacity)
+          : _surfaceColor;
+    canvas.drawRRect(_resolvedRRect(), paint);
+  }
+
+  void paintForeground(PaintingContext context, Offset offset) {
+    super.paint(context, offset);
   }
 }

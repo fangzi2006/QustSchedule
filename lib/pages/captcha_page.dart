@@ -102,7 +102,7 @@ class _CaptchaPageState extends State<CaptchaPage> {
     final scheme = theme.colorScheme;
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: TactileAppBar(
         leading: Align(
           alignment: Alignment.centerLeft,
           child: Padding(

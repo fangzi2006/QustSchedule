@@ -145,7 +145,7 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
     final draft = _draft;
     if (draft == null) {
       return Scaffold(
-        appBar: AppBar(
+        appBar: TactileAppBar(
           leading: const TactileBackButton(),
           title: const Text('作息时间表'),
         ),
@@ -163,7 +163,7 @@ class _TimetableEditPageState extends State<TimetableEditPage> {
         _confirmLeave();
       },
       child: Scaffold(
-        appBar: AppBar(
+        appBar: TactileAppBar(
           leading: const TactileBackButton(),
           title: Text(
             _isNew ? '新建作息表' : draft.name,

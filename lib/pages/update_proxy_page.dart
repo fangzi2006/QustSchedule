@@ -131,7 +131,7 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
         ];
 
         return Scaffold(
-          appBar: AppBar(
+          appBar: TactileAppBar(
             leading: const TactileBackButton(),
             title: const Text('更新代理设置'),
             actions: [

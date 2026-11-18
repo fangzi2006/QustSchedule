@@ -185,7 +185,7 @@ class _AboutPageState extends State<AboutPage> {
       listenable: widget.model.prefsNotifier,
       builder: (context, _) {
         return Scaffold(
-          appBar: AppBar(
+          appBar: TactileAppBar(
             leading: const TactileBackButton(),
             title: const Text('关于青科课表通'),
           ),
@@ -438,7 +438,7 @@ class _LicenseTextPageState extends State<LicenseTextPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(
+      appBar: TactileAppBar(
         leading: const TactileBackButton(),
         title: const Text('开源协议'),
       ),

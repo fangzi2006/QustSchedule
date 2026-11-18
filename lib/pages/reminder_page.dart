@@ -214,7 +214,7 @@ class _ReminderPageState extends State<ReminderPage>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(
+      appBar: TactileAppBar(
         leading: const TactileBackButton(),
         title: const Text('课程提醒'),
       ),

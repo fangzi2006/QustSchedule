@@ -44,7 +44,7 @@ class DebugPage extends StatelessWidget {
     return DefaultTabController(
       length: tabs.length,
       child: Scaffold(
-        appBar: AppBar(
+        appBar: TactileAppBar(
           leading: const TactileBackButton(),
           title: const Text('调试信息'),
           bottom: TabBar(isScrollable: true, tabs: tabs),

@@ -25,7 +25,7 @@ class ReschedulePage extends StatelessWidget {
       builder: (context, _) {
         final rules = model.reschedules;
         return Scaffold(
-          appBar: AppBar(
+          appBar: TactileAppBar(
             leading: const TactileBackButton(),
             title: const Text('调课'),
           ),

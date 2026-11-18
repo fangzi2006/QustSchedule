@@ -4,6 +4,7 @@
 library;
 
 import 'dart:async';
+import 'dart:typed_data' show Float64List;
 import 'dart:ui' as ui;
 
 import 'package:qustschedule/main.dart' show pageForStatus;
@@ -45,7 +46,8 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter/gestures.dart'
     show PointerDeviceKind, PointerScrollEvent, kSecondaryButton;
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show RenderParagraph;
+import 'package:flutter/rendering.dart'
+    show ContainerLayer, PaintingContext, RenderObject, RenderParagraph;
 import 'package:flutter/services.dart' show SystemChannels;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zf_academic/zf_academic_io.dart';
@@ -4410,6 +4412,151 @@ void main() {
       expect(picked, 'b');
       expect(tester.takeException(), isNull);
     });
+
+    testWidgets('TactileAppBar 解除硬裁剪并按“静态标题 → 全部阴影 → 纯白融合 → 按钮前景”四层顺序绘制', (
+      tester,
+    ) async {
+      // 1. 验证二级页顶栏：返回按钮、静态标题与右侧双按钮严格分四层绘制。
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildLightTheme(),
+          home: Scaffold(
+            appBar: TactileAppBar(
+              leading: TactileBackButton(onPressed: () {}),
+              title: const Text('测试页面标题'),
+              actions: <Widget>[
+                TactileIconButton(
+                  icon: const Icon(Icons.speed_rounded),
+                  onPressed: () {},
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(left: 6, right: 10),
+                  child: TactileIconButton(
+                    icon: const Icon(Icons.add_rounded),
+                    onPressed: () {},
+                  ),
+                ),
+              ],
+            ),
+            body: const SizedBox.shrink(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<AppBar>(find.byType(AppBar)).clipBehavior,
+        Clip.none,
+      );
+
+      final scopeRender = tester.renderObject(find.byType(TactileSurfaceScope));
+      final secondaryCanvas = _RecordingPaintCanvas();
+      final secondaryCtx = _RecordingPaintingContext(
+        ContainerLayer(),
+        scopeRender.paintBounds,
+        secondaryCanvas,
+      );
+      final prevDisableShadows = debugDisableShadows;
+      debugDisableShadows = false;
+      try {
+        scopeRender.paint(secondaryCtx, Offset.zero);
+      } finally {
+        debugDisableShadows = prevDisableShadows;
+      }
+
+      final ops = secondaryCanvas.ops;
+      // 第 1 层：静态标题文本最先绘制（位于所有阴影与白底之下）
+      final titleIndex = ops.indexOf('paragraph');
+      final firstShadowIndex = ops.indexOf('shadow');
+      final lastShadowIndex = ops.lastIndexOf('shadow');
+      final firstSurfaceIndex = ops.indexOf('surface');
+      final lastSurfaceIndex = ops.lastIndexOf('surface');
+      final lastParagraphIndex = ops.lastIndexOf('paragraph');
+
+      expect(titleIndex, greaterThanOrEqualTo(0));
+      expect(firstShadowIndex, greaterThan(titleIndex));
+      expect(ops.where((e) => e == 'shadow').length, 3);
+      expect(ops.where((e) => e == 'surface').length, 3);
+      expect(firstSurfaceIndex, greaterThan(lastShadowIndex));
+      expect(lastParagraphIndex, greaterThan(lastSurfaceIndex));
+      expect(
+        ops
+            .sublist(firstShadowIndex, lastShadowIndex + 1)
+            .every((e) => e == 'shadow'),
+        isTrue,
+      );
+      expect(
+        ops
+            .sublist(firstSurfaceIndex, lastSurfaceIndex + 1)
+            .every((e) => e == 'surface'),
+        isTrue,
+      );
+
+      // 2. 验证课表页顶栏：[←][第 N 周][→] 与 [刷新][更多] 全部纳入同一融合组且支持按压拖拽重叠
+      final model = buildModel();
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      await tester.pumpWidget(wrap(SchedulePage(model: model)));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<AppBar>(find.byType(AppBar)).clipBehavior,
+        Clip.none,
+      );
+      final scheduleScope = tester.renderObject(
+        find.byType(TactileSurfaceScope),
+      );
+      final scheduleCanvas = _RecordingPaintCanvas();
+      final scheduleCtx = _RecordingPaintingContext(
+        ContainerLayer(),
+        scheduleScope.paintBounds,
+        scheduleCanvas,
+      );
+      final prevScheduleShadows = debugDisableShadows;
+      debugDisableShadows = false;
+      try {
+        scheduleScope.paint(scheduleCtx, Offset.zero);
+      } finally {
+        debugDisableShadows = prevScheduleShadows;
+      }
+
+      final sOps = scheduleCanvas.ops;
+      expect(sOps.where((e) => e == 'shadow').length, 5);
+      expect(sOps.where((e) => e == 'surface').length, 5);
+      expect(sOps.lastIndexOf('shadow'), lessThan(sOps.indexOf('surface')));
+      expect(
+        sOps.lastIndexOf('surface'),
+        lessThan(sOps.lastIndexOf('paragraph')),
+      );
+
+      // 按住「下一周」向右拉向右侧操作区，再开合「更多」菜单，恢复后 5 个槽位仍完整合绘。
+      final nextBtn = find.widgetWithIcon(
+        TactileIconButton,
+        Icons.chevron_right_rounded,
+      );
+      final gesture = await tester.startGesture(tester.getCenter(nextBtn));
+      await tester.pump(const Duration(milliseconds: 40));
+      await gesture.moveBy(const Offset(18, 8));
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.more_horiz_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('校准当前周次'), findsOneWidget);
+      await tester.tapAt(const Offset(12, 12));
+      await tester.pumpAndSettle();
+
+      scheduleCanvas.ops.clear();
+      debugDisableShadows = false;
+      try {
+        scheduleScope.paint(scheduleCtx, Offset.zero);
+      } finally {
+        debugDisableShadows = prevScheduleShadows;
+      }
+      expect(scheduleCanvas.ops.where((e) => e == 'shadow').length, 5);
+      expect(scheduleCanvas.ops.where((e) => e == 'surface').length, 5);
+      expect(tester.takeException(), isNull);
+    });
   });
 
   group('文本可选中统一与底部弹窗公用容器', () {
@@ -4547,4 +4694,95 @@ class _DisposeNotifyHelperState extends State<_DisposeNotifyHelper> {
 
   @override
   Widget build(BuildContext context) => const SizedBox.shrink();
+}
+
+class _RecordingPaintCanvas extends Fake implements ui.Canvas {
+  _RecordingPaintCanvas() : _delegate = ui.Canvas(ui.PictureRecorder());
+
+  final ui.Canvas _delegate;
+  final List<String> ops = <String>[];
+
+  @override
+  void save() => _delegate.save();
+
+  @override
+  void saveLayer(Rect? bounds, Paint paint) =>
+      _delegate.saveLayer(bounds, paint);
+
+  @override
+  void restore() => _delegate.restore();
+
+  @override
+  int getSaveCount() => _delegate.getSaveCount();
+
+  @override
+  void translate(double dx, double dy) => _delegate.translate(dx, dy);
+
+  @override
+  void scale(double sx, [double? sy]) => _delegate.scale(sx, sy);
+
+  @override
+  void transform(Float64List matrix4) => _delegate.transform(matrix4);
+
+  @override
+  void clipRect(
+    Rect rect, {
+    ui.ClipOp clipOp = ui.ClipOp.intersect,
+    bool doAntiAlias = true,
+  }) => _delegate.clipRect(rect, clipOp: clipOp, doAntiAlias: doAntiAlias);
+
+  @override
+  void clipRRect(RRect rrect, {bool doAntiAlias = true}) =>
+      _delegate.clipRRect(rrect, doAntiAlias: doAntiAlias);
+
+  @override
+  void drawColor(Color color, BlendMode blendMode) =>
+      _delegate.drawColor(color, blendMode);
+
+  @override
+  void drawPaint(Paint paint) => _delegate.drawPaint(paint);
+
+  @override
+  void drawRect(Rect rect, Paint paint) => _delegate.drawRect(rect, paint);
+
+  @override
+  void drawPath(Path path, Paint paint) => _delegate.drawPath(path, paint);
+
+  @override
+  void drawRRect(RRect rrect, Paint paint) {
+    if (paint.maskFilter != null) {
+      ops.add('shadow');
+    } else if (paint.color == Colors.white) {
+      ops.add('surface');
+    }
+    _delegate.drawRRect(rrect, paint);
+  }
+
+  @override
+  void drawParagraph(ui.Paragraph paragraph, Offset offset) {
+    ops.add('paragraph');
+    _delegate.drawParagraph(paragraph, offset);
+  }
+}
+
+class _RecordingPaintingContext extends PaintingContext {
+  _RecordingPaintingContext(
+    super.containerLayer,
+    super.estimatedBounds,
+    this._canvas,
+  );
+
+  final _RecordingPaintCanvas _canvas;
+
+  @override
+  ui.Canvas get canvas => _canvas;
+
+  @override
+  PaintingContext createChildContext(ContainerLayer childLayer, Rect bounds) =>
+      _RecordingPaintingContext(childLayer, bounds, _canvas);
+
+  @override
+  void paintChild(RenderObject child, Offset offset) {
+    child.paint(this, offset);
+  }
 }

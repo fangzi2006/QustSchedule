@@ -341,7 +341,7 @@ class _ChangelogPageState extends State<ChangelogPage> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: TactileAppBar(
         leading: const TactileBackButton(),
         title: const Text('更新日志'),
       ),

@@ -141,7 +141,7 @@ class _AcademicPageState extends State<AcademicPage> {
         final terms = model.terms?.items ?? const <Term>[];
 
         return Scaffold(
-          appBar: AppBar(
+          appBar: TactileAppBar(
             title: const Text('学业概览'),
             actions: <Widget>[
               _TermSelectorButton(

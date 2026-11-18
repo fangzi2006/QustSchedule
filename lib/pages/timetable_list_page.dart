@@ -28,7 +28,7 @@ class TimetableListPage extends StatelessWidget {
         final sectionCount = countsSum(counts);
         final theme = Theme.of(context);
         return Scaffold(
-          appBar: AppBar(
+          appBar: TactileAppBar(
             leading: const TactileBackButton(),
             title: const Text('作息时间表'),
             actions: <Widget>[

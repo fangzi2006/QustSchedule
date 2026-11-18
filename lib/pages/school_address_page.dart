@@ -27,7 +27,7 @@ class SchoolAddressPage extends StatelessWidget {
         final theme = Theme.of(context);
         final addresses = model.schools;
         return Scaffold(
-          appBar: AppBar(
+          appBar: TactileAppBar(
             leading: const TactileBackButton(),
             title: const Text('教务地址'),
             actions: <Widget>[

@@ -104,7 +104,7 @@ class _SchedulePageState extends State<SchedulePage> {
     return Scaffold(
       // 这一行不写"某某的课表"：AppBar 左边留给周次选择，右边是刷新与更多。
       // 之前是"标题一行 + 周次条一行"，两行占了近百像素，格子反而更挤。
-      appBar: AppBar(
+      appBar: TactileAppBar(
         titleSpacing: 4,
         title: ListenableBuilder(
           listenable: Listenable.merge(<Listenable>[

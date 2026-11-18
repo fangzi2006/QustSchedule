@@ -55,7 +55,7 @@ class SettingsPage extends StatelessWidget {
         final theme = Theme.of(context);
         final active = model.activeTimetable;
         return Scaffold(
-          appBar: AppBar(title: const Text('设置')),
+          appBar: TactileAppBar(title: const Text('设置')),
           body: ListView(
             padding: EdgeInsets.fromLTRB(
               16,
