@@ -48,7 +48,7 @@ class ScheduleController extends ChangeNotifier {
   /// 周次单独的通知源：翻页与点「今」不重绘课表网格。
   final WeekNotifier weekNotifier = WeekNotifier(1);
 
-  int _maxWeek = 20;
+  int _maxWeek = defaultMaxWeeks;
   int get maxWeek => _maxWeek;
 
   DateTime? _termStart;
@@ -317,13 +317,7 @@ class ScheduleController extends ChangeNotifier {
 
   void applyCalendar(Schedule schedule, {bool resetToToday = true}) {
     final DateTime? previousStart = _termStart;
-    var maxWeek = 0;
-    for (final entry in schedule.entries) {
-      for (final week in entry.weeks) {
-        if (week > maxWeek) maxWeek = week;
-      }
-    }
-    _maxWeek = maxWeek > 0 ? maxWeek : 20;
+    _maxWeek = maxWeeksOf(schedule.entries);
 
     final saved = _prefs.raw.termStartOf(schedule.termId);
     if (saved != null) {
@@ -379,6 +373,10 @@ class ScheduleController extends ChangeNotifier {
     if (termId.isEmpty) return;
     final term = _termById(termId) ?? _fallbackTerm(termId);
     _termStart = estimateTermStart(term);
+    final currentSchedule = _schedule;
+    _maxWeek = currentSchedule == null
+        ? defaultMaxWeeks
+        : maxWeeksOf(currentSchedule.entries);
     _setWeek(weekOf(_termStart!, DateTime.now()));
     await _prefs.raw.setTermStart(termId, _termStart!);
     _invalidateWeekCaches();

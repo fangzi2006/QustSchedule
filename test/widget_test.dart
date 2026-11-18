@@ -202,7 +202,7 @@ void main() {
       expect(find.text('期初课'), findsOneWidget);
       expect(find.text('期末课'), findsNothing, reason: '第 1 周不上期末课');
       expect(find.text('第 1 周'), findsOneWidget);
-      expect(find.text(' / 共 16 周'), findsOneWidget);
+      expect(find.text(' / 共 18 周'), findsOneWidget);
       expect(find.text('3/2 – 3/8'), findsOneWidget);
       expect(find.textContaining('的课表'), findsNothing);
       expect(find.text('我的课表'), findsNothing);

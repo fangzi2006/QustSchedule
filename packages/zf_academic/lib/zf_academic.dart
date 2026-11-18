@@ -105,6 +105,7 @@ export 'src/respond.dart'
 export 'src/academic_query.dart' show jsonExams, jsonGrades, parseExamTime;
 export 'src/schedule.dart'
     show
+        defaultMaxWeeks,
         jsonSchedule,
         looksLikeTimetable,
         maxWeeksOf,

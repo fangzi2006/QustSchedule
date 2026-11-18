@@ -217,7 +217,7 @@ void main() {
   });
 
   group('周次、校历校准与全局节数', () {
-    test('maxWeek 计算、空课表兜底 20、goToWeek 边界夹取与 weekEntries 按周过滤', () {
+    test('maxWeek 默认保底 18、超出 18 自动扩充、goToWeek 边界夹取与 weekEntries 按周过滤', () {
       final model = buildModel();
       addTearDown(model.dispose);
 
@@ -225,13 +225,19 @@ void main() {
         schedule: scheduleWithWeeks(<int>[1, 5, 17]),
         week: 5,
       );
-      expect(model.maxWeek, 17);
+      expect(model.maxWeek, 18);
       expect(model.weekEntries.map((e) => e.name), <String>['第5周课']);
 
       model.goToWeek(0);
       expect(model.week, 1);
       model.goToWeek(99);
-      expect(model.week, 17);
+      expect(model.week, 18);
+
+      model.hydrateForTest(
+        schedule: scheduleWithWeeks(<int>[1, 5, 21]),
+        week: 5,
+      );
+      expect(model.maxWeek, 21);
 
       model.hydrateForTest(
         schedule: const Schedule(
@@ -240,7 +246,7 @@ void main() {
           entries: <ScheduleEntry>[],
         ),
       );
-      expect(model.maxWeek, 20);
+      expect(model.maxWeek, 18);
     });
 
     test('开学日默认按学期估算，calibrateCurrentWeek 校准持久化，resetCalendar 恢复估算', () async {
@@ -257,14 +263,16 @@ void main() {
       expect(estimated!.weekday, DateTime.monday);
       expect(estimated.month, greaterThanOrEqualTo(8));
 
-      await model.calibrateCurrentWeek(5);
-      expect(model.currentWeekOfToday, 5);
+      await model.calibrateCurrentWeek(22);
+      expect(model.currentWeekOfToday, 22);
+      expect(model.maxWeek, 22);
       final saved = prefs.termStartOf('2026-2027-1');
       expect(saved, isNotNull);
-      expect(weekOf(saved!, DateTime.now()), 5);
+      expect(weekOf(saved!, DateTime.now()), 22);
 
       await model.resetCalendar();
-      expect(model.currentWeekOfToday, isNot(5));
+      expect(model.currentWeekOfToday, isNot(22));
+      expect(model.maxWeek, 18);
       expect(prefs.termStartOf('2026-2027-1'), isNotNull);
     });
 
@@ -1123,7 +1131,7 @@ void main() {
     test('同学期静默更新与手动刷新保留当前查看周次，若新课表 maxWeek 变小则自动收敛', () async {
       const longSchedule = Schedule(
         termId: '2026-2027-1',
-        maxWeeks: 10,
+        maxWeeks: 22,
         entries: <ScheduleEntry>[
           ScheduleEntry(
             id: 'e1',
@@ -1131,7 +1139,7 @@ void main() {
             day: 1,
             startPeriod: 1,
             endPeriod: 2,
-            weeks: <int>[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            weeks: <int>[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 22],
           ),
         ],
       );
@@ -1150,10 +1158,11 @@ void main() {
       await model.refresh();
       expect(model.week, targetWeek);
 
-      // 新课表最大周次缩水至 5 时，当前查看周次自动收敛到 5
+      // 新课表最大周次回落至默认保底 18 时，当前查看周次（> 18）自动收敛到 18
+      model.goToWeek(20);
       backend.fetchBehavior = (call, termId) async => const Schedule(
         termId: '2026-2027-1',
-        maxWeeks: 5,
+        maxWeeks: 18,
         entries: <ScheduleEntry>[
           ScheduleEntry(
             id: 'e2',
@@ -1166,8 +1175,8 @@ void main() {
         ],
       );
       await model.refresh();
-      expect(model.maxWeek, 5);
-      expect(model.week, 5);
+      expect(model.maxWeek, 18);
+      expect(model.week, 18);
     });
   });
 

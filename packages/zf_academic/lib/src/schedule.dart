@@ -300,8 +300,11 @@ List<ScheduleRemark> jsonScheduleRemarks(List<Map<String, dynamic>> rows) {
   return result;
 }
 
+/// 学期默认最小最大周次：当课表为空或所有课程周次均不超过该值时，默认显示到第 18 周。
+const int defaultMaxWeeks = 18;
+
 int maxWeeksOf(List<ScheduleEntry> entries) {
-  var max = 25;
+  var max = defaultMaxWeeks;
   for (final entry in entries) {
     for (final week in entry.weeks) {
       if (week > max) max = week;
