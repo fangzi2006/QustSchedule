@@ -47,7 +47,7 @@ import 'package:flutter/gestures.dart'
     show PointerDeviceKind, PointerScrollEvent, kSecondaryButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart'
-    show ContainerLayer, PaintingContext, RenderObject, RenderParagraph;
+    show ContainerLayer, MatrixUtils, PaintingContext, RenderParagraph;
 import 'package:flutter/services.dart' show SystemChannels;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zf_academic/zf_academic_io.dart';
@@ -1267,12 +1267,10 @@ void main() {
       expect(find.byType(BackButton), findsNothing);
       expect(find.byType(CloseButton), findsNothing);
 
-      final openFade = tester.widget<FadeTransition>(
-        find
-            .ancestor(of: triggerFinder, matching: find.byType(FadeTransition))
-            .first,
+      expect(
+        TactileSurfaceButton.debugMorphOpacityOf(tester.element(triggerFinder)),
+        lessThan(0.05),
       );
-      expect(openFade.opacity.value, lessThan(0.05));
 
       final inkWell = tester.widget<InkWell>(
         find
@@ -1302,12 +1300,10 @@ void main() {
       await tester.tapAt(const Offset(12, 12));
       await tester.pumpAndSettle();
       expect(find.text('校准当前周次'), findsNothing);
-      final closedFade = tester.widget<FadeTransition>(
-        find
-            .ancestor(of: triggerFinder, matching: find.byType(FadeTransition))
-            .first,
+      expect(
+        TactileSurfaceButton.debugMorphOpacityOf(tester.element(triggerFinder)),
+        1.0,
       );
-      expect(closedFade.opacity.value, 1.0);
     });
 
     testWidgets('点击导航、按住上下滑选、滑出边界松手不误选、分割线无缝吸附与长按直滑选中', (tester) async {
@@ -1395,17 +1391,9 @@ void main() {
             );
         double shellOpacity() => menuMorphBox().shellOpacity;
         double cardScale() => menuMorphBox().contentScale;
-        double triggerOpacity() => tester
-            .widget<FadeTransition>(
-              find
-                  .ancestor(
-                    of: triggerFinder,
-                    matching: find.byType(FadeTransition),
-                  )
-                  .first,
-            )
-            .opacity
-            .value;
+        double triggerOpacity() => TactileSurfaceButton.debugMorphOpacityOf(
+          tester.element(triggerFinder),
+        );
 
         // 先测完整菜单终态矩形，验证 20ms 展开初期点击视觉卡片外、目标占位框内仅关闭菜单不误触
         await tester.tap(triggerFinder);
@@ -1519,14 +1507,8 @@ void main() {
       final moreTrigger = find.byIcon(Icons.more_horiz_rounded);
       final weekTrigger = find.text('第 1 周');
 
-      double triggerOpacityOf(Finder finder) => tester
-          .widget<FadeTransition>(
-            find
-                .ancestor(of: finder, matching: find.byType(FadeTransition))
-                .first,
-          )
-          .opacity
-          .value;
+      double triggerOpacityOf(Finder finder) =>
+          TactileSurfaceButton.debugMorphOpacityOf(tester.element(finder));
 
       // 1. 长按交接展开途中被返回键打断
       final holdPos = tester.getCenter(moreTrigger);
@@ -4528,7 +4510,8 @@ void main() {
         lessThan(sOps.lastIndexOf('paragraph')),
       );
 
-      // 按住「下一周」向右拉向右侧操作区，再开合「更多」菜单，恢复后 5 个槽位仍完整合绘。
+      // 按住「下一周」向右拉向右侧操作区，再分别开合「第 1 周」与「更多」菜单，
+      // 恢复后 5 个槽位仍完整合绘且菜单按钮前景坐标不向左上角偏移。
       final nextBtn = find.widgetWithIcon(
         TactileIconButton,
         Icons.chevron_right_rounded,
@@ -4540,6 +4523,11 @@ void main() {
       await gesture.up();
       await tester.pumpAndSettle();
 
+      await tester.tap(find.text('第 1 周'));
+      await tester.pumpAndSettle();
+      await tester.tapAt(const Offset(12, 12));
+      await tester.pumpAndSettle();
+
       await tester.tap(find.byIcon(Icons.more_horiz_rounded));
       await tester.pumpAndSettle();
       expect(find.text('校准当前周次'), findsOneWidget);
@@ -4547,6 +4535,7 @@ void main() {
       await tester.pumpAndSettle();
 
       scheduleCanvas.ops.clear();
+      scheduleCanvas.paragraphOrigins.clear();
       debugDisableShadows = false;
       try {
         scheduleScope.paint(scheduleCtx, Offset.zero);
@@ -4555,6 +4544,12 @@ void main() {
       }
       expect(scheduleCanvas.ops.where((e) => e == 'shadow').length, 5);
       expect(scheduleCanvas.ops.where((e) => e == 'surface').length, 5);
+      expect(scheduleCanvas.paragraphOrigins, isNotEmpty);
+      expect(
+        scheduleCanvas.paragraphOrigins.every((p) => p.dx > 0 && p.dy > 0),
+        isTrue,
+      );
+      expect(scheduleCanvas.paragraphOrigins.last.dx, greaterThan(700));
       expect(tester.takeException(), isNull);
     });
   });
@@ -4701,28 +4696,47 @@ class _RecordingPaintCanvas extends Fake implements ui.Canvas {
 
   final ui.Canvas _delegate;
   final List<String> ops = <String>[];
+  final List<Offset> paragraphOrigins = <Offset>[];
+  final List<Matrix4> _matrixStack = <Matrix4>[Matrix4.identity()];
 
   @override
-  void save() => _delegate.save();
+  void save() {
+    _matrixStack.add(_matrixStack.last.clone());
+    _delegate.save();
+  }
 
   @override
-  void saveLayer(Rect? bounds, Paint paint) =>
-      _delegate.saveLayer(bounds, paint);
+  void saveLayer(Rect? bounds, Paint paint) {
+    _matrixStack.add(_matrixStack.last.clone());
+    _delegate.saveLayer(bounds, paint);
+  }
 
   @override
-  void restore() => _delegate.restore();
+  void restore() {
+    if (_matrixStack.length > 1) _matrixStack.removeLast();
+    _delegate.restore();
+  }
 
   @override
   int getSaveCount() => _delegate.getSaveCount();
 
   @override
-  void translate(double dx, double dy) => _delegate.translate(dx, dy);
+  void translate(double dx, double dy) {
+    _matrixStack.last.multiply(Matrix4.translationValues(dx, dy, 0.0));
+    _delegate.translate(dx, dy);
+  }
 
   @override
-  void scale(double sx, [double? sy]) => _delegate.scale(sx, sy);
+  void scale(double sx, [double? sy]) {
+    _matrixStack.last.multiply(Matrix4.diagonal3Values(sx, sy ?? sx, 1.0));
+    _delegate.scale(sx, sy);
+  }
 
   @override
-  void transform(Float64List matrix4) => _delegate.transform(matrix4);
+  void transform(Float64List matrix4) {
+    _matrixStack.last.multiply(Matrix4.fromFloat64List(matrix4));
+    _delegate.transform(matrix4);
+  }
 
   @override
   void clipRect(
@@ -4761,6 +4775,7 @@ class _RecordingPaintCanvas extends Fake implements ui.Canvas {
   @override
   void drawParagraph(ui.Paragraph paragraph, Offset offset) {
     ops.add('paragraph');
+    paragraphOrigins.add(MatrixUtils.transformPoint(_matrixStack.last, offset));
     _delegate.drawParagraph(paragraph, offset);
   }
 }
@@ -4780,9 +4795,4 @@ class _RecordingPaintingContext extends PaintingContext {
   @override
   PaintingContext createChildContext(ContainerLayer childLayer, Rect bounds) =>
       _RecordingPaintingContext(childLayer, bounds, _canvas);
-
-  @override
-  void paintChild(RenderObject child, Offset offset) {
-    child.paint(this, offset);
-  }
 }

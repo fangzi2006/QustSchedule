@@ -96,6 +96,16 @@ class TactileSurfaceButton extends StatefulWidget {
     );
   }
 
+  /// 读取触发按钮当前的菜单形变不透明度（1.0 = 常态完全显示，0.0 = 完全隐退融入菜单）。
+  @visibleForTesting
+  static double debugMorphOpacityOf(BuildContext context) {
+    final slot = context
+        .findAncestorWidgetOfExactType<_TactileSurfaceSlotWidget>();
+    if (slot != null) return slot.morphOpacity;
+    final fade = context.findAncestorWidgetOfExactType<FadeTransition>();
+    return fade?.opacity.value ?? 1.0;
+  }
+
   @override
   State<TactileSurfaceButton> createState() => _TactileSurfaceButtonState();
 }
@@ -450,18 +460,10 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
             : p;
         final scale = 1.0 + pressAmplitude * effectiveP;
 
-        final Animation<double> fadeOpacity = morphOpacity >= 1.0
-            ? kAlwaysCompleteAnimation
-            : AlwaysStoppedAnimation<double>(morphOpacity);
-
         if (coordinator != null && style == TactileSurfaceStyle.elevated) {
-          // 处于 TactileSurfaceScope 内时，将阴影与纯白填充交给外层四层合绘，
-          // 确保邻近按钮阴影互不遮挡、重叠时同色纯白融合，且整体高于静态标题。
-          // FadeTransition（RenderAnimatedOpacity）带有 isRepaintBoundary=true，
-          // 必须放在 _TactileSurfaceSlotWidget 内部包裹前景 child，避免阻断外层插槽收集。
-          final Widget slotChild = hasMenuTrigger
-              ? FadeTransition(opacity: fadeOpacity, child: child!)
-              : child!;
+          // 处于 TactileSurfaceScope 内时，将阴影、纯白填充与前景统一交给外层四层合绘；
+          // 内部不包裹 FadeTransition（RenderAnimatedOpacity 的动态 isRepaintBoundary
+          // 在透明度归零跳过绘制后会导致父级 needsCompositing 失步，使前景图层落回原点）。
           return Transform.translate(
             offset: drag,
             child: Transform.scale(
@@ -473,7 +475,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
                 surfaceColor: scheme.surfaceContainerLowest,
                 boxShadows: _elevatedShadows(_interactive),
                 morphOpacity: morphOpacity,
-                child: slotChild,
+                child: child!,
               ),
             ),
           );
@@ -514,6 +516,9 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
           child: Transform.scale(scale: scale, child: body),
         );
         if (hasMenuTrigger) {
+          final Animation<double> fadeOpacity = morphOpacity >= 1.0
+              ? kAlwaysCompleteAnimation
+              : AlwaysStoppedAnimation<double>(morphOpacity);
           body = FadeTransition(opacity: fadeOpacity, child: body);
         }
         return body;
@@ -1090,12 +1095,28 @@ class _RenderTactileSurfaceScope extends RenderProxyBox {
 
       // 第 4 层：固定顺序的按钮前景（图标与文字）。
       for (final (slot, matrix) in entries) {
-        context.pushTransform(
-          slot.needsCompositing,
-          offset,
-          matrix,
-          slot.paintForeground,
-        );
+        context.pushTransform(slot.needsCompositing, offset, matrix, (
+          PaintingContext innerContext,
+          Offset innerOffset,
+        ) {
+          final opacity = slot.morphOpacity;
+          if (opacity < 0.999) {
+            innerContext.canvas.saveLayer(
+              innerOffset & slot.size,
+              Paint()
+                ..color = Color.fromARGB(
+                  (opacity * 255).round().clamp(0, 255),
+                  255,
+                  255,
+                  255,
+                ),
+            );
+            slot.paintForeground(innerContext, innerOffset);
+            innerContext.canvas.restore();
+          } else {
+            slot.paintForeground(innerContext, innerOffset);
+          }
+        });
       }
     } finally {
       slots.clear();
