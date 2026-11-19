@@ -9,6 +9,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
 import '../src/app_model.dart';
@@ -794,7 +795,7 @@ class _PreviewStageHeaderDelegate extends SliverPersistentHeaderDelegate {
                               fit: BoxFit.scaleDown,
                               child: _CompactChoicePill(
                                 icon: Icons.swap_horiz_rounded,
-                                label: todayNarrow ? '2×2 窄卡' : '4×2 宽卡',
+                                label: todayNarrow ? '2×2' : '4×2',
                                 onTap: () => onToggleTodayNarrow(!todayNarrow),
                               ),
                             ),
@@ -809,7 +810,7 @@ class _PreviewStageHeaderDelegate extends SliverPersistentHeaderDelegate {
                               fit: BoxFit.scaleDown,
                               child: _CompactChoicePill(
                                 icon: Icons.swap_horiz_rounded,
-                                label: nextWide ? '4×1 宽条' : '2×2 卡片',
+                                label: nextWide ? '4×1' : '2×2',
                                 onTap: () => onToggleNextWide(!nextWide),
                               ),
                             ),
@@ -960,53 +961,74 @@ class _KindSegmentedHeader extends StatelessWidget {
   final DesktopWidgetKind selected;
   final ValueChanged<DesktopWidgetKind> onSelect;
 
+  static const List<BoxShadow> _kPillShadows = <BoxShadow>[
+    BoxShadow(
+      color: Color.fromRGBO(0, 0, 0, 0.045),
+      blurRadius: 8,
+      offset: Offset(0, 2),
+    ),
+  ];
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(AppRadius.medium),
-      ),
-      child: Row(
-        children: <Widget>[
-          for (final kind in DesktopWidgetKind.values)
-            Expanded(
-              child: TactileSurfaceButton(
-                minSize: const Size(0, 36),
-                borderRadius: BorderRadius.circular(10),
-                filled: false,
-                onTap: () => onSelect(kind),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 160),
-                  curve: Curves.easeOutCubic,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  decoration: BoxDecoration(
-                    color: selected == kind
-                        ? scheme.primaryContainer
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Center(
-                    child: Text(
-                      kind.label,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: selected == kind
-                            ? FontWeight.w600
-                            : FontWeight.w500,
-                        color: selected == kind
-                            ? scheme.onPrimaryContainer
-                            : scheme.onSurface,
+    final kinds = DesktopWidgetKind.values;
+    return _ZOrderedRow(
+      children: <Widget>[
+        for (var index = 0; index < kinds.length; index++) ...<Widget>[
+          if (index > 0) const SizedBox(width: 8),
+          Expanded(
+            child: _ZOrderedItem(
+              child: () {
+                final kind = kinds[index];
+                final active = selected == kind;
+                return TactileSurfaceButton(
+                  minSize: const Size(0, 38),
+                  borderRadius: BorderRadius.circular(AppRadius.pill),
+                  filled: false,
+                  onTap: () => onSelect(kind),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOutCubic,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: active
+                          ? scheme.primaryContainer
+                          : scheme.surfaceContainerLowest,
+                      borderRadius: BorderRadius.circular(AppRadius.pill),
+                      border: Border.all(
+                        color: active
+                            ? scheme.primary.withValues(alpha: 0.16)
+                            : scheme.outlineVariant.withValues(alpha: 0.28),
+                      ),
+                      boxShadow: _kPillShadows,
+                    ),
+                    child: Center(
+                      child: Text(
+                        kind.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: active
+                              ? FontWeight.w600
+                              : FontWeight.w500,
+                          color: active
+                              ? scheme.onPrimaryContainer
+                              : scheme.onSurface,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ),
+                );
+              }(),
             ),
+          ),
         ],
-      ),
+      ],
     );
   }
 }
@@ -1068,75 +1090,203 @@ class _PresetStrip extends StatelessWidget {
   final WidgetStylePreset currentPreset;
   final ValueChanged<WidgetStylePreset> onSelect;
 
+  static const List<BoxShadow> _kPresetShadows = <BoxShadow>[
+    BoxShadow(
+      color: Color.fromRGBO(0, 0, 0, 0.045),
+      blurRadius: 8,
+      offset: Offset(0, 2),
+    ),
+  ];
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return SingleChildScrollView(
+      clipBehavior: Clip.none,
       scrollDirection: Axis.horizontal,
       child: IntrinsicHeight(
-        child: Row(
+        child: _ZOrderedRow(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
             for (var index = 0; index < widgetStylePresets.length; index++) ...[
               if (index > 0) const SizedBox(width: 8),
-              () {
-                final spec = widgetStylePresets[index];
-                final active = currentPreset == spec.preset;
-                return TactileSurfaceButton(
-                  minSize: const Size(0, 56),
-                  borderRadius: BorderRadius.circular(AppRadius.medium),
-                  filled: false,
-                  onTap: () => onSelect(spec.preset),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 160),
-                    curve: Curves.easeOutCubic,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: active
-                          ? scheme.primaryContainer
-                          : scheme.surfaceContainerLowest,
-                      borderRadius: BorderRadius.circular(AppRadius.medium),
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Text(
-                          spec.preset.label,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: active
-                                ? FontWeight.w600
-                                : FontWeight.w500,
-                            color: active
-                                ? scheme.onPrimaryContainer
-                                : scheme.onSurface,
-                          ),
+              _ZOrderedItem(
+                child: () {
+                  final spec = widgetStylePresets[index];
+                  final active = currentPreset == spec.preset;
+                  return TactileSurfaceButton(
+                    minSize: const Size(0, 56),
+                    borderRadius: BorderRadius.circular(AppRadius.medium),
+                    filled: false,
+                    onTap: () => onSelect(spec.preset),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 160),
+                      curve: Curves.easeOutCubic,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: active
+                            ? scheme.primaryContainer
+                            : scheme.surfaceContainerLowest,
+                        borderRadius: BorderRadius.circular(AppRadius.medium),
+                        border: Border.all(
+                          color: active
+                              ? scheme.primary.withValues(alpha: 0.16)
+                              : scheme.outlineVariant.withValues(alpha: 0.28),
                         ),
-                        Text(
-                          spec.subtitle,
-                          style: TextStyle(
-                            fontSize: 10.5,
-                            color: active
-                                ? scheme.onPrimaryContainer.withValues(
-                                    alpha: 0.78,
-                                  )
-                                : scheme.onSurfaceVariant,
+                        boxShadow: _kPresetShadows,
+                      ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            spec.preset.label,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: active
+                                  ? FontWeight.w600
+                                  : FontWeight.w500,
+                              color: active
+                                  ? scheme.onPrimaryContainer
+                                  : scheme.onSurface,
+                            ),
                           ),
-                        ),
-                      ],
+                          Text(
+                            spec.subtitle,
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              color: active
+                                  ? scheme.onPrimaryContainer.withValues(
+                                      alpha: 0.78,
+                                    )
+                                  : scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                );
-              }(),
+                  );
+                }(),
+              ),
             ],
           ],
         ),
       ),
     );
+  }
+}
+
+/// 支持将最近按下或悬停的子项自动置顶绘制（Z-order 提升）的横向 Flex 容器，
+/// 确保相邻触控按钮在按压放大及回弹动画期间始终完整盖在邻居之上，不被右侧兄弟遮挡。
+class _ZOrderedRow extends Flex {
+  const _ZOrderedRow({super.children, super.crossAxisAlignment})
+    : super(direction: Axis.horizontal, clipBehavior: Clip.none);
+
+  @override
+  RenderFlex createRenderObject(BuildContext context) {
+    return _RenderZOrderedFlex(
+      direction: direction,
+      mainAxisAlignment: mainAxisAlignment,
+      mainAxisSize: mainAxisSize,
+      crossAxisAlignment: crossAxisAlignment,
+      textDirection: getEffectiveTextDirection(context),
+      verticalDirection: verticalDirection,
+      textBaseline: textBaseline,
+      clipBehavior: clipBehavior,
+    );
+  }
+}
+
+class _RenderZOrderedFlex extends RenderFlex {
+  _RenderZOrderedFlex({
+    super.direction,
+    super.mainAxisAlignment,
+    super.mainAxisSize,
+    super.crossAxisAlignment,
+    super.textDirection,
+    super.verticalDirection,
+    super.textBaseline,
+    super.clipBehavior,
+  });
+
+  RenderBox? _elevatedChild;
+
+  RenderBox? get elevatedChild => _elevatedChild;
+
+  set elevatedChild(RenderBox? value) {
+    if (identical(_elevatedChild, value)) return;
+    _elevatedChild = value;
+    markNeedsPaint();
+  }
+
+  @override
+  void remove(RenderBox child) {
+    if (identical(_elevatedChild, child)) {
+      _elevatedChild = null;
+    }
+    super.remove(child);
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    RenderBox? topChild;
+    Offset? topOffset;
+    RenderBox? child = firstChild;
+    while (child != null) {
+      final childParentData = child.parentData! as FlexParentData;
+      if (identical(child, _elevatedChild)) {
+        topChild = child;
+        topOffset = childParentData.offset + offset;
+      } else {
+        context.paintChild(child, childParentData.offset + offset);
+      }
+      child = childParentData.nextSibling;
+    }
+    if (topChild != null && topOffset != null) {
+      context.paintChild(topChild, topOffset);
+    }
+  }
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) {
+    final top = _elevatedChild;
+    if (top != null && identical(top.parent, this)) {
+      final topParentData = top.parentData! as FlexParentData;
+      final isHit = result.addWithPaintOffset(
+        offset: topParentData.offset,
+        position: position,
+        hitTest: (BoxHitTestResult result, Offset transformed) {
+          return top.hitTest(result, position: transformed);
+        },
+      );
+      if (isHit) return true;
+    }
+    return defaultHitTestChildren(result, position: position);
+  }
+}
+
+class _ZOrderedItem extends SingleChildRenderObjectWidget {
+  const _ZOrderedItem({required super.child});
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderZOrderedItem();
+}
+
+class _RenderZOrderedItem extends RenderProxyBox {
+  @override
+  void handleEvent(PointerEvent event, BoxHitTestEntry entry) {
+    if (event is PointerDownEvent ||
+        (event is PointerEnterEvent && event.buttons == 0) ||
+        (event is PointerHoverEvent && event.buttons == 0)) {
+      final parent = this.parent;
+      if (parent is _RenderZOrderedFlex) {
+        parent.elevatedChild = this;
+      }
+    }
   }
 }
 

@@ -734,6 +734,26 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('实时课表'), findsOneWidget);
 
+      // 尺寸切换按钮仅显示尺寸（4×2 / 2×2），不含「宽卡 / 窄卡」等冗余字样。
+      expect(find.text('4×2'), findsOneWidget);
+      expect(find.textContaining('宽卡'), findsNothing);
+      expect(find.textContaining('窄卡'), findsNothing);
+      await tester.tap(find.text('4×2'));
+      await tester.pumpAndSettle();
+      expect(find.text('2×2'), findsOneWidget);
+      await tester.tap(find.text('2×2'));
+      await tester.pumpAndSettle();
+      expect(find.text('4×2'), findsOneWidget);
+
+      // 精选预设横向滚动条关闭裁剪（Clip.none），确保按住放大时四周不被截断。
+      final presetScrollView = tester.widget<SingleChildScrollView>(
+        find.ancestor(
+          of: find.text('极简纯白'),
+          matching: find.byType(SingleChildScrollView),
+        ),
+      );
+      expect(presetScrollView.clipBehavior, Clip.none);
+
       // 今日课表：可见「课后自动切明日预告」「已结束课程」「显示上课时间」「卡片圆角」。
       await tester.scrollUntilVisible(
         find.text('课后自动切明日预告'),
@@ -818,6 +838,11 @@ void main() {
       );
       await tester.tap(find.text('下一节课'));
       await tester.pumpAndSettle();
+      expect(find.text('2×2'), findsOneWidget);
+      expect(find.textContaining('宽条'), findsNothing);
+      await tester.tap(find.text('2×2'));
+      await tester.pumpAndSettle();
+      expect(find.text('4×1'), findsOneWidget);
 
       await tester.scrollUntilVisible(
         find.text('融合考试安排'),
