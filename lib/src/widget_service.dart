@@ -151,6 +151,12 @@ class DesktopWidgetService {
     _timer = null;
     _lastFingerprint = null;
     _lastSnapshot = null;
+    final active = _syncInFlight;
+    if (active != null) {
+      try {
+        await active;
+      } catch (_) {}
+    }
     await _gateway.clearSnapshot();
   }
 

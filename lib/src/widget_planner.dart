@@ -365,8 +365,11 @@ WidgetSnapshot buildWidgetSnapshot({
         if (!occursInWeek(entry, week)) continue;
         final startMinutes = _minutesOf(sections, entry.startPeriod);
         if (startMinutes == null) continue;
+        final rawEndMinutes = _endMinutesOf(sections, entry.endPeriod);
         final endMinutes =
-            _endMinutesOf(sections, entry.endPeriod) ?? startMinutes;
+            rawEndMinutes == null || rawEndMinutes < startMinutes
+            ? startMinutes
+            : rawEndMinutes;
         final startAt = _at(date, startMinutes);
         final endAt = _at(date, endMinutes);
         final isMoved = !_hasOriginalMatch(rawEntries, entry);
@@ -381,7 +384,9 @@ WidgetSnapshot buildWidgetSnapshot({
             seatNumber: '',
             examForm: '',
             startPeriod: entry.startPeriod,
-            endPeriod: entry.endPeriod,
+            endPeriod: entry.endPeriod < entry.startPeriod
+                ? entry.startPeriod
+                : entry.endPeriod,
             startLabel: _formatMinutes(startMinutes),
             endLabel: _formatMinutes(endMinutes),
             startMs: startAt.millisecondsSinceEpoch,
@@ -399,11 +404,12 @@ WidgetSnapshot buildWidgetSnapshot({
       if (start == null) continue;
       if (!_isSameDay(start, date)) continue;
       final end = _resolveExamEnd(start, exam.endTime);
+      final courseName = exam.courseName.trim();
       items.add(
         WidgetTimelineItem(
           kind: 'exam',
           id: _stableExamId(exam),
-          title: exam.courseName,
+          title: courseName,
           location: _examLocationOf(exam),
           teacher: '',
           seatNumber: exam.seatNumber.trim(),
@@ -414,7 +420,7 @@ WidgetSnapshot buildWidgetSnapshot({
           endLabel: _formatHm(end),
           startMs: start.millisecondsSinceEpoch,
           endMs: end.millisecondsSinceEpoch,
-          colorIndex: CoursePalette.indexOf(exam.courseName),
+          colorIndex: CoursePalette.indexOf(courseName),
         ),
       );
     }
@@ -455,10 +461,11 @@ WidgetSnapshot buildWidgetSnapshot({
 
     final inTerm = !examDay.isBefore(mondayStart);
     final week = inTerm ? weekOf(termStart, examDay) : 0;
+    final courseName = exam.courseName.trim();
     upcomingExams.add(
       WidgetUpcomingExam(
         id: _stableExamId(exam),
-        courseName: exam.courseName,
+        courseName: courseName,
         startMs: start.millisecondsSinceEpoch,
         endMs: end.millisecondsSinceEpoch,
         dateIso: formatIsoDate(examDay),
@@ -468,7 +475,7 @@ WidgetSnapshot buildWidgetSnapshot({
         location: _examLocationOf(exam),
         seatNumber: exam.seatNumber.trim(),
         examForm: exam.examForm.trim(),
-        colorIndex: CoursePalette.indexOf(exam.courseName),
+        colorIndex: CoursePalette.indexOf(courseName),
       ),
     );
   }

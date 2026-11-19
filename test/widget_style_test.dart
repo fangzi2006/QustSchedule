@@ -103,6 +103,14 @@ void main() {
       expect(legacy.autoSwitchTomorrow, isTrue);
       expect(legacy.fontScale, 0.75);
       expect(legacy.backgroundOpacity, 0.78);
+
+      // 畸形 JSON 中 preset 为非字符串时平稳回退默认值，不抛出 TypeError。
+      final malformed = DesktopWidgetStyle.fromJson(<String, Object?>{
+        'preset': 123,
+        'themeMode': 456,
+        'showHeader': 'yes',
+      }, kind: DesktopWidgetKind.week);
+      expect(malformed, DesktopWidgetStyle.defaultsFor(DesktopWidgetKind.week));
     });
 
     test('DesktopWidgetConfigSet 按类型独立保存、重置与 JSON 往返', () {

@@ -359,7 +359,9 @@ class DesktopWidgetStyle {
     final base = DesktopWidgetStyle.defaultsFor(kind);
     if (raw is! Map) return base;
     return DesktopWidgetStyle(
-      preset: WidgetStylePreset.parse(raw['preset'] as String?),
+      preset: raw['preset'] is String
+          ? WidgetStylePreset.parse(raw['preset'] as String?)
+          : base.preset,
       themeMode: raw['themeMode'] is String
           ? WidgetThemeMode.parse(raw['themeMode'] as String?)
           : base.themeMode,

@@ -276,17 +276,16 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
   Future<void> _pinSelectedWidget() async {
     if (_pinning) return;
     _pinning = true;
+    final kind = _selectedKind;
     try {
       await widget.widgetService.syncNow(force: true);
-      final accepted = await widget.widgetService.requestPinWidget(
-        _selectedKind,
-      );
+      final accepted = await widget.widgetService.requestPinWidget(kind);
       await _refreshPinnedCounts();
       if (!mounted) return;
       showAppSnackBar(
         context,
         message: accepted
-            ? '已向系统桌面发起添加「${_selectedKind.label}」'
+            ? '已向系统桌面发起添加「${kind.label}」'
             : '当前桌面暂不支持直接添加，请长按桌面空白处添加小组件',
         type: accepted ? AppSnackBarType.success : AppSnackBarType.info,
         duration: Duration(seconds: accepted ? 2 : 4),

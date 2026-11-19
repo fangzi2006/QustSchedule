@@ -1,6 +1,7 @@
 /// 桌面小组件编排服务测试：偏好未读守卫、防抖合并、指纹去重、跨学期考试隔离与销毁安全。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -24,11 +25,18 @@ class FakeDesktopWidgetGateway implements DesktopWidgetGateway {
   DesktopWidgetKind? lastPinnedKind;
   bool pinResult = true;
   Map<DesktopWidgetKind, int> pinnedCounts = const <DesktopWidgetKind, int>{};
+  Completer<void>? syncGate;
+  final List<String> ops = <String>[];
 
   @override
   Future<bool> syncSnapshot(String payloadJson) async {
+    ops.add('sync:start');
+    if (syncGate != null) {
+      await syncGate!.future;
+    }
     syncCount++;
     lastPayloadJson = payloadJson;
+    ops.add('sync:end');
     return true;
   }
 
@@ -36,6 +44,7 @@ class FakeDesktopWidgetGateway implements DesktopWidgetGateway {
   Future<void> clearSnapshot() async {
     clearCount++;
     lastPayloadJson = null;
+    ops.add('clear');
   }
 
   @override
@@ -158,5 +167,39 @@ void main() {
     expect(payload2['signedIn'], isFalse);
     expect(payload2['days'], isEmpty);
     expect(payload2['weeks'], isEmpty);
+  });
+
+  test('clearAll 等待在途 syncSnapshot 完成后再清空，避免竞态回写', () async {
+    final model = _buildModel(preferences: Preferences.inMemory());
+    model.hydrateForTest(
+      schedule: sampleSchedule('2026-2027-1'),
+      termStart: DateTime(2026, 9, 7),
+      week: 1,
+    );
+    final gateway = FakeDesktopWidgetGateway()..syncGate = Completer<void>();
+    final service = DesktopWidgetService(
+      model: model,
+      gateway: gateway,
+      debounce: const Duration(milliseconds: 1),
+      now: () => _now,
+    );
+    addTearDown(() {
+      service.dispose();
+      model.dispose();
+    });
+
+    final syncFuture = service.syncNow();
+    await Future<void>.delayed(Duration.zero);
+    expect(gateway.ops, <String>['sync:start']);
+
+    final clearFuture = service.clearAll();
+    await Future<void>.delayed(Duration.zero);
+    expect(gateway.ops, <String>['sync:start']);
+
+    gateway.syncGate!.complete();
+    await Future.wait(<Future<void>>[syncFuture, clearFuture]);
+
+    expect(gateway.ops, <String>['sync:start', 'sync:end', 'clear']);
+    expect(service.lastSnapshot, isNull);
   });
 }

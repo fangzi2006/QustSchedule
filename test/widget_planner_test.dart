@@ -201,4 +201,45 @@ void main() {
     expect(signedOut.days, isEmpty);
     expect(signedOut.weeks, isEmpty);
   });
+
+  test('异常节次倒挂与考试名称空白防御', () {
+    final snapshot = buildWidgetSnapshot(
+      termId: '2026-2027-1',
+      entries: const <ScheduleEntry>[
+        ScheduleEntry(
+          id: 'bad1',
+          name: ' 异常节次课 ',
+          day: 1,
+          startPeriod: 3,
+          endPeriod: 1,
+          weeks: <int>[1],
+        ),
+      ],
+      reschedules: const <RescheduleRule>[],
+      termStart: termStart,
+      timetables: <Timetable>[defaultTimetable()],
+      sectionCounts: defaultSectionCounts,
+      maxWeek: 18,
+      styles: DesktopWidgetConfigSet.defaults(),
+      now: now,
+      exams: <ExamItem>[
+        ExamItem(
+          courseName: ' 线性代数 ',
+          startTime: DateTime(2026, 9, 7, 14, 0),
+          endTime: DateTime(2026, 9, 7, 16, 0),
+          classroom: '2教 101',
+        ),
+      ],
+    );
+
+    final day0 = snapshot.days.first;
+    final course = day0.items.firstWhere((e) => !e.isExam);
+    expect(course.title, '异常节次课');
+    expect(course.endPeriod, greaterThanOrEqualTo(course.startPeriod));
+    expect(course.endMs, greaterThanOrEqualTo(course.startMs));
+
+    final exam = day0.items.firstWhere((e) => e.isExam);
+    expect(exam.title, '线性代数');
+    expect(snapshot.upcomingExams.single.courseName, '线性代数');
+  });
 }
