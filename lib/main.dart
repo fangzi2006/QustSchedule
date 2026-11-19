@@ -72,16 +72,10 @@ class _AppShellState extends State<_AppShell> {
   ///
   /// 建它的时候会向 model 注册监听：课表刷新、改调课、改作息、改设置
   /// 都会防抖后重排一次提醒。
-  late final ReminderService? _reminders =
-      defaultTargetPlatform == TargetPlatform.android
-      ? ReminderService(model: _model)
-      : null;
+  late final ReminderService? _reminders;
 
   /// 桌面小组件编排层：仅 Android 有原生桌面小组件，桌面端不建。
-  late final DesktopWidgetService? _desktopWidgets =
-      defaultTargetPlatform == TargetPlatform.android
-      ? DesktopWidgetService(model: _model)
-      : null;
+  late final DesktopWidgetService? _desktopWidgets;
 
   /// 前后台切换监听。只订阅 onShow（`hidden → inactive` 时触发）：
   /// 手机切回前台、桌面端最小化后还原都会走到这里。
@@ -92,6 +86,13 @@ class _AppShellState extends State<_AppShell> {
   @override
   void initState() {
     super.initState();
+    // 在 boot() 之前初始化并挂载监听，避免冷启动或首登完成时错过首次 ready 通知。
+    _reminders = defaultTargetPlatform == TargetPlatform.android
+        ? ReminderService(model: _model)
+        : null;
+    _desktopWidgets = defaultTargetPlatform == TargetPlatform.android
+        ? DesktopWidgetService(model: _model)
+        : null;
     _model.hints.addListener(_onModelChanged);
     _model.routeNotifier.addListener(_onModelChanged);
     _model.boot();
@@ -136,8 +137,10 @@ class _AppShellState extends State<_AppShell> {
   /// 清空闹钟，而指纹没变——不 force 就会漏排。
   Future<void> _onShown() async {
     await _model.onAppShown();
-    await _reminders?.syncNow(force: true);
-    await _desktopWidgets?.syncNow(force: true);
+    await Future.wait<void>(<Future<void>>[
+      if (_reminders != null) _reminders.syncNow(force: true),
+      if (_desktopWidgets != null) _desktopWidgets.syncNow(force: true),
+    ]);
   }
 
   @override

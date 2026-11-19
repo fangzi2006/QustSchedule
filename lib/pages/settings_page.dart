@@ -9,6 +9,8 @@
 /// 密码只是为了 Cookie 失效时能自动重登。
 library;
 
+import 'dart:async' show unawaited;
+
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
@@ -332,7 +334,11 @@ class SettingsPage extends StatelessWidget {
         ],
       ),
     );
-    if (confirmed == true) await model.signOut();
+    if (confirmed == true) {
+      await model.signOut();
+      unawaited(reminders?.cancelAll());
+      unawaited(desktopWidgets?.syncNow());
+    }
   }
 
   Future<void> _changePassword(BuildContext context) async {
