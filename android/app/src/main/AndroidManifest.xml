@@ -109,10 +109,12 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="com.fangzi.qustschedule.widget.ACTION_REFRESH_WIDGETS" />
+                <action android:name="com.fangzi.qustschedule.widget.ACTION_WIDGET_PINNED" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
                 <action android:name="android.intent.action.TIME_SET" />
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.DATE_CHANGED" />
             </intent-filter>
         </receiver>
         <!-- 流体云常驻卡片：前台服务，specialUse 子类型（Android 14+ 必须显式声明）。 -->

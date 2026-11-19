@@ -8,27 +8,43 @@ import com.fangzi.qustschedule.reminder.ReminderPermissions
 
 /**
  * 桌面小组件单节点精准闹钟调度器：
- * 仅在下一节课/考试的开始或结束时刻、及次日 00:01 挂载唯一轻量闹钟（RequestCode 3001），
+ * 仅在活跃小组件关心的下一课程/考试节点或次日 00:01 挂载唯一轻量闹钟（RequestCode 3001），
  * 桌面上无活跃小组件时主动取消，保持近零后台功耗。
  */
 internal object WidgetRefreshScheduler {
 
     const val ACTION_REFRESH_WIDGETS = "com.fangzi.qustschedule.widget.ACTION_REFRESH_WIDGETS"
+    const val ACTION_WIDGET_PINNED = "com.fangzi.qustschedule.widget.ACTION_WIDGET_PINNED"
+    const val EXTRA_INCLUDE_WEEK = "include_week"
     private const val RC_WIDGET_REFRESH = 3001
 
-    fun scheduleNext(context: Context, snapshot: WidgetSnapshotModel?) {
+    fun scheduleNext(
+        context: Context,
+        snapshot: WidgetSnapshotModel?,
+        activeFlags: ActiveWidgetFlags,
+    ) {
+        if (!activeFlags.hasAny) {
+            cancel(context)
+            return
+        }
         val appContext = context.applicationContext
         val alarmManager = appContext.getSystemService(AlarmManager::class.java) ?: return
         val nowMs = System.currentTimeMillis()
-        val nextAtMs = WidgetContentResolver.computeNextRefreshAtMs(snapshot, nowMs)
-        val pending = buildPendingIntent(appContext)
+        val plan = WidgetContentResolver.computeNextRefreshPlan(
+            snapshot = snapshot,
+            nowMs = nowMs,
+            hasToday = activeFlags.hasToday,
+            hasNext = activeFlags.hasNext,
+            hasWeek = activeFlags.hasWeek,
+        )
+        val pending = buildPendingIntent(appContext, includeWeek = plan.includeWeek)
 
         alarmManager.cancel(pending)
         if (ReminderPermissions.canScheduleExactAlarms(appContext)) {
             try {
                 alarmManager.setExactAndAllowWhileIdle(
                     AlarmManager.RTC_WAKEUP,
-                    nextAtMs,
+                    plan.triggerAtMs,
                     pending,
                 )
                 return
@@ -36,18 +52,29 @@ internal object WidgetRefreshScheduler {
                 // 极端时序下权限被撤，平稳降级到非精确唤醒。
             }
         }
-        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, nextAtMs, pending)
+        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, plan.triggerAtMs, pending)
     }
 
     fun cancel(context: Context) {
         val appContext = context.applicationContext
         val alarmManager = appContext.getSystemService(AlarmManager::class.java) ?: return
-        alarmManager.cancel(buildPendingIntent(appContext))
+        val intent = Intent(appContext, WidgetRefreshReceiver::class.java).apply {
+            action = ACTION_REFRESH_WIDGETS
+        }
+        val existing = PendingIntent.getBroadcast(
+            appContext,
+            RC_WIDGET_REFRESH,
+            intent,
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
+        ) ?: return
+        alarmManager.cancel(existing)
+        existing.cancel()
     }
 
-    private fun buildPendingIntent(context: Context): PendingIntent {
+    private fun buildPendingIntent(context: Context, includeWeek: Boolean): PendingIntent {
         val intent = Intent(context, WidgetRefreshReceiver::class.java).apply {
             action = ACTION_REFRESH_WIDGETS
+            putExtra(EXTRA_INCLUDE_WEEK, includeWeek)
         }
         return PendingIntent.getBroadcast(
             context,

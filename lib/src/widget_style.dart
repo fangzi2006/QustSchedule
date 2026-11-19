@@ -8,7 +8,7 @@ library;
 
 /// 桌面小组件形态。
 enum DesktopWidgetKind {
-  today('today', '今日课表', '4×2 · 可拉伸'),
+  today('today', '今日课表', '4×2 / 2×2 · 时间轴'),
   week('week', '本周课表', '4×4 · 整周网格'),
   next('next', '下一节课', '2×2 / 4×1 · 精简卡');
 
@@ -64,7 +64,7 @@ enum WidgetDensity {
   }
 }
 
-/// 今日/下一节小组件中「已结束课程」的展示策略。
+/// 今日课表小组件中「已结束课程」的展示策略。
 enum FinishedCourseMode {
   dim('dim', '置灰'),
   hide('hide', '自动隐藏'),
@@ -87,7 +87,7 @@ enum FinishedCourseMode {
 enum WeekendColumnMode {
   auto('auto', '有课显示'),
   show('show', '始终显示'),
-  hide('hide', '仅工作日');
+  hide('hide', '始终隐藏');
 
   const WeekendColumnMode(this.wireName, this.label);
 
@@ -102,13 +102,13 @@ enum WeekendColumnMode {
   }
 }
 
-/// 精选风格预设（选择预设写入视觉参数，用户自行微调任意视觉滑块后切换为 [custom]）。
+/// 精选风格预设（选择预设写入色彩/透明度/圆角参数，保留用户的密度、字号与内容开关）。
 enum WidgetStylePreset {
   minimalWhite('minimal_white', '极简纯白'),
   frostedGlass('frosted_glass', '通透磨砂'),
   darkNight('dark_night', '暗夜模式'),
   pureTransparent('pure_transparent', '纯净透明'),
-  materialYou('material_you', '壁纸取色'),
+  materialYou('material_you', '莫奈取色'),
   custom('custom', '自定义');
 
   const WidgetStylePreset(this.wireName, this.label);
@@ -124,7 +124,7 @@ enum WidgetStylePreset {
   }
 }
 
-/// 单条精选预设的视觉定义。
+/// 单条精选预设的视觉定义（不绑定信息密度与字号）。
 class WidgetStylePresetSpec {
   const WidgetStylePresetSpec({
     required this.preset,
@@ -132,7 +132,6 @@ class WidgetStylePresetSpec {
     required this.themeMode,
     required this.backgroundOpacity,
     required this.cornerRadius,
-    required this.density,
   });
 
   final WidgetStylePreset preset;
@@ -140,10 +139,9 @@ class WidgetStylePresetSpec {
   final WidgetThemeMode themeMode;
   final double backgroundOpacity;
   final double cornerRadius;
-  final WidgetDensity density;
 }
 
-/// 内置 5 套精选预设注册表（UI 胶囊列表与预设工厂共用）。
+/// 内置 5 套精选预设注册表（不透明度严格对齐 5% 滑块步进）。
 const List<WidgetStylePresetSpec> widgetStylePresets = <WidgetStylePresetSpec>[
   WidgetStylePresetSpec(
     preset: WidgetStylePreset.minimalWhite,
@@ -151,39 +149,34 @@ const List<WidgetStylePresetSpec> widgetStylePresets = <WidgetStylePresetSpec>[
     themeMode: WidgetThemeMode.light,
     backgroundOpacity: 1.0,
     cornerRadius: 20.0,
-    density: WidgetDensity.comfortable,
   ),
   WidgetStylePresetSpec(
     preset: WidgetStylePreset.frostedGlass,
     subtitle: '半透明玻璃质感',
     themeMode: WidgetThemeMode.system,
-    backgroundOpacity: 0.78,
+    backgroundOpacity: 0.75,
     cornerRadius: 22.0,
-    density: WidgetDensity.comfortable,
   ),
   WidgetStylePresetSpec(
     preset: WidgetStylePreset.darkNight,
     subtitle: '深邃柔和暗色',
     themeMode: WidgetThemeMode.dark,
-    backgroundOpacity: 0.92,
+    backgroundOpacity: 0.90,
     cornerRadius: 20.0,
-    density: WidgetDensity.comfortable,
   ),
   WidgetStylePresetSpec(
     preset: WidgetStylePreset.pureTransparent,
     subtitle: '无底融入壁纸',
     themeMode: WidgetThemeMode.dark,
     backgroundOpacity: 0.0,
-    cornerRadius: 16.0,
-    density: WidgetDensity.compact,
+    cornerRadius: 20.0,
   ),
   WidgetStylePresetSpec(
     preset: WidgetStylePreset.materialYou,
-    subtitle: 'Android 12+ 动态取色',
+    subtitle: '随壁纸动态配色 · Android 12+',
     themeMode: WidgetThemeMode.dynamic,
-    backgroundOpacity: 0.9,
+    backgroundOpacity: 0.90,
     cornerRadius: 24.0,
-    density: WidgetDensity.comfortable,
   ),
 ];
 
@@ -191,12 +184,12 @@ const double widgetMinOpacity = 0.0;
 const double widgetMaxOpacity = 1.0;
 const double widgetMinCornerRadius = 8.0;
 const double widgetMaxCornerRadius = 28.0;
-const double widgetMinFontScale = 0.85;
-const double widgetMaxFontScale = 1.25;
+const double widgetMinFontScale = 0.75;
+const double widgetMaxFontScale = 1.20;
 
 double clampWidgetOpacity(double value) {
   if (value.isNaN) return 1.0;
-  // 按 1% 量化，兼顾预设精确值（0.78 / 0.92）与指纹稳定。
+  // 按 1% 量化，兼容历史配置值并保持指纹稳定。
   final clamped = value.clamp(widgetMinOpacity, widgetMaxOpacity).toDouble();
   return (clamped * 100).round() / 100.0;
 }
@@ -230,6 +223,7 @@ class DesktopWidgetStyle {
     this.showTeacher = true,
     this.showTime = true,
     this.showExams = true,
+    this.autoSwitchTomorrow = true,
     this.finishedCourseMode = FinishedCourseMode.dim,
     this.weekendMode = WeekendColumnMode.auto,
   });
@@ -256,10 +250,11 @@ class DesktopWidgetStyle {
   final bool showTeacher;
   final bool showTime;
   final bool showExams;
+  final bool autoSwitchTomorrow;
   final FinishedCourseMode finishedCourseMode;
   final WeekendColumnMode weekendMode;
 
-  /// 套用精选预设（更新外观参数，保留用户已选的内容字段开关）。
+  /// 套用精选预设（更新外观色彩、不透明度与圆角，保留用户的密度、字号与内容开关）。
   DesktopWidgetStyle applyPreset(WidgetStylePreset target) {
     for (final spec in widgetStylePresets) {
       if (spec.preset == target) {
@@ -269,12 +264,13 @@ class DesktopWidgetStyle {
           backgroundOpacity: spec.backgroundOpacity,
           cornerRadius: spec.cornerRadius,
           fontScale: fontScale,
-          density: spec.density,
+          density: density,
           showHeader: showHeader,
           showLocation: showLocation,
           showTeacher: showTeacher,
           showTime: showTime,
           showExams: showExams,
+          autoSwitchTomorrow: autoSwitchTomorrow,
           finishedCourseMode: finishedCourseMode,
           weekendMode: weekendMode,
         );
@@ -283,7 +279,8 @@ class DesktopWidgetStyle {
     return copyWith(preset: WidgetStylePreset.custom);
   }
 
-  /// 创建修改后的不可变副本；修改任一视觉核心属性且未显式传入 `preset` 时自动切换为 `custom`。
+  /// 创建修改后的不可变副本；仅修改色彩/不透明度/圆角且未显式传入 `preset` 时切为 `custom`。
+  /// 调整信息密度、字号或内容开关不会打断当前精选预设。
   DesktopWidgetStyle copyWith({
     WidgetStylePreset? preset,
     WidgetThemeMode? themeMode,
@@ -296,6 +293,7 @@ class DesktopWidgetStyle {
     bool? showTeacher,
     bool? showTime,
     bool? showExams,
+    bool? autoSwitchTomorrow,
     FinishedCourseMode? finishedCourseMode,
     WeekendColumnMode? weekendMode,
   }) {
@@ -314,8 +312,7 @@ class DesktopWidgetStyle {
     final visualChanged =
         nextThemeMode != this.themeMode ||
         nextOpacity != this.backgroundOpacity ||
-        nextRadius != this.cornerRadius ||
-        nextDensity != this.density;
+        nextRadius != this.cornerRadius;
 
     final nextPreset =
         preset ?? (visualChanged ? WidgetStylePreset.custom : this.preset);
@@ -332,6 +329,7 @@ class DesktopWidgetStyle {
       showTeacher: showTeacher ?? this.showTeacher,
       showTime: showTime ?? this.showTime,
       showExams: showExams ?? this.showExams,
+      autoSwitchTomorrow: autoSwitchTomorrow ?? this.autoSwitchTomorrow,
       finishedCourseMode: finishedCourseMode ?? this.finishedCourseMode,
       weekendMode: weekendMode ?? this.weekendMode,
     );
@@ -349,6 +347,7 @@ class DesktopWidgetStyle {
     'showTeacher': showTeacher,
     'showTime': showTime,
     'showExams': showExams,
+    'autoSwitchTomorrow': autoSwitchTomorrow,
     'finishedCourseMode': finishedCourseMode.wireName,
     'weekendMode': weekendMode.wireName,
   };
@@ -391,6 +390,9 @@ class DesktopWidgetStyle {
       showExams: raw['showExams'] is bool
           ? raw['showExams'] as bool
           : base.showExams,
+      autoSwitchTomorrow: raw['autoSwitchTomorrow'] is bool
+          ? raw['autoSwitchTomorrow'] as bool
+          : base.autoSwitchTomorrow,
       finishedCourseMode: raw['finishedCourseMode'] is String
           ? FinishedCourseMode.parse(raw['finishedCourseMode'] as String?)
           : base.finishedCourseMode,
@@ -415,6 +417,7 @@ class DesktopWidgetStyle {
           other.showTeacher == showTeacher &&
           other.showTime == showTime &&
           other.showExams == showExams &&
+          other.autoSwitchTomorrow == autoSwitchTomorrow &&
           other.finishedCourseMode == finishedCourseMode &&
           other.weekendMode == weekendMode;
 
@@ -431,6 +434,7 @@ class DesktopWidgetStyle {
     showTeacher,
     showTime,
     showExams,
+    autoSwitchTomorrow,
     finishedCourseMode,
     weekendMode,
   );

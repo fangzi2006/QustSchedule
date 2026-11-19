@@ -160,6 +160,14 @@ class DesktopWidgetService {
   Future<Map<DesktopWidgetKind, int>> getPinnedCounts() =>
       _gateway.getPinnedCounts();
 
+  /// 若底层为原生 MethodChannel，确保已挂载桌面实例变更推送处理器。
+  void ensureLivePinnedUpdates() {
+    final gateway = _gateway;
+    if (gateway is MethodChannelDesktopWidgetGateway) {
+      gateway.ensurePushHandlerInstalled();
+    }
+  }
+
   void dispose() {
     _disposed = true;
     _timer?.cancel();

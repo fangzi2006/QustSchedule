@@ -25,10 +25,14 @@ class WidgetBridge(
     fun attach() {
         disposed = false
         channel.setMethodCallHandler(this)
+        activeBridge = this
     }
 
     fun dispose() {
         disposed = true
+        if (activeBridge === this) {
+            activeBridge = null
+        }
         channel.setMethodCallHandler(null)
     }
 
@@ -38,15 +42,26 @@ class WidgetBridge(
         }
     }
 
+    private fun sendPinnedCountsChanged(counts: Map<String, Int>) {
+        postReply {
+            try {
+                channel.invokeMethod("onPinnedCountsChanged", counts)
+            } catch (_: Throwable) {
+                // 通道已关闭时静默忽略。
+            }
+        }
+    }
+
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "syncSnapshot" -> {
                 val payload = call.argument<String>("payload") ?: ""
                 val appContext = activity.applicationContext
                 WidgetWorker.execute {
+                    val previous = WidgetStore.loadSnapshot(appContext)
                     val saved = WidgetStore.saveSnapshot(appContext, payload)
                     if (saved != null) {
-                        WidgetCoordinator.refreshAllWidgets(appContext)
+                        WidgetCoordinator.refreshChangedWidgets(appContext, previous, saved)
                     }
                     postReply { result.success(saved != null) }
                 }
@@ -83,8 +98,9 @@ class WidgetBridge(
         val manager = AppWidgetManager.getInstance(activity) ?: return false
         if (!manager.isRequestPinAppWidgetSupported) return false
         val component = WidgetCoordinator.componentForKind(activity, kind) ?: return false
+        val callback = WidgetCoordinator.createPinSuccessPendingIntent(activity)
         return try {
-            manager.requestPinAppWidget(component, null, null)
+            manager.requestPinAppWidget(component, null, callback)
         } catch (_: Throwable) {
             false
         }
@@ -92,5 +108,12 @@ class WidgetBridge(
 
     companion object {
         private const val CHANNEL = "qustschedule/widget"
+
+        @Volatile
+        private var activeBridge: WidgetBridge? = null
+
+        internal fun dispatchPinnedCountsChanged(counts: Map<String, Int>) {
+            activeBridge?.sendPinnedCountsChanged(counts)
+        }
     }
 }

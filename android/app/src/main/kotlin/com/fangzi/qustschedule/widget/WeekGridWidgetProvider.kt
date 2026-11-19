@@ -18,6 +18,7 @@ class WeekGridWidgetProvider : AppWidgetProvider() {
         WidgetWorker.runBroadcastAsync(this, TAG) {
             updateWidgets(context, appWidgetManager, appWidgetIds)
             WidgetCoordinator.syncAlarmState(context)
+            WidgetCoordinator.notifyPinnedCountsChanged(context)
         }
     }
 
@@ -33,9 +34,17 @@ class WeekGridWidgetProvider : AppWidgetProvider() {
         }
     }
 
+    override fun onDeleted(context: Context, appWidgetIds: IntArray) {
+        WidgetWorker.runBroadcastAsync(this, TAG) {
+            WidgetCoordinator.syncAlarmState(context)
+            WidgetCoordinator.notifyPinnedCountsChanged(context)
+        }
+    }
+
     override fun onDisabled(context: Context) {
         WidgetWorker.runBroadcastAsync(this, TAG) {
             WidgetCoordinator.syncAlarmState(context)
+            WidgetCoordinator.notifyPinnedCountsChanged(context)
         }
     }
 
@@ -73,7 +82,7 @@ class WeekGridWidgetProvider : AppWidgetProvider() {
             val theme = WidgetThemeResolver.resolve(context, style)
             val nowMs = System.currentTimeMillis()
             val vm = WidgetContentResolver.resolveWeek(snapshot, style, nowMs)
-            val (wDp, hDp) = WidgetBackgroundRenderer.resolveSizeDp(options, 300, 280)
+            val (wDp, hDp) = WidgetBackgroundRenderer.resolveSizeDp(context, options, 300, 280)
             val bitmap = WeekGridCanvasRenderer.render(context, style, theme, vm, wDp, hDp)
 
             val views = RemoteViews(context.packageName, R.layout.widget_week)
@@ -83,6 +92,7 @@ class WeekGridWidgetProvider : AppWidgetProvider() {
                 WidgetCoordinator.createLaunchPendingIntent(context),
             )
             manager.updateAppWidget(appWidgetId, views)
+            WidgetStore.saveLastWeekRenderDateIso(context, WidgetContentResolver.formatIsoDate(nowMs))
         }
     }
 }

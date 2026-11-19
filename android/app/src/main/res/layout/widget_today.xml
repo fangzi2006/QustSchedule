@@ -17,7 +17,10 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical"
-        android:padding="14dp">
+        android:paddingStart="11.5dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="11.5dp"
+        android:paddingBottom="1dp">
 
         <LinearLayout
             android:id="@+id/widget_today_header"
@@ -25,7 +28,23 @@
             android:layout_height="wrap_content"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingBottom="6dp">
+            android:paddingBottom="5dp">
+
+            <TextView
+                android:id="@+id/widget_today_header_badge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="5dp"
+                android:background="@drawable/widget_pill_bg"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:paddingStart="5dp"
+                android:paddingTop="1.5dp"
+                android:paddingEnd="5dp"
+                android:paddingBottom="1.5dp"
+                android:textSize="9dp"
+                android:textStyle="bold"
+                android:visibility="gone" />
 
             <TextView
                 android:id="@+id/widget_today_title"
@@ -33,21 +52,47 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:ellipsize="end"
+                android:includeFontPadding="false"
                 android:maxLines="1"
-                android:text="今日课表"
+                android:text="第1周 周一"
                 android:textColor="#FF3F5AA6"
-                android:textSize="13sp"
+                android:textSize="11.5dp"
                 android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/widget_today_subtitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
                 android:ellipsize="end"
+                android:includeFontPadding="false"
                 android:maxLines="1"
                 android:text="青科课表通"
-                android:textColor="#FF646C7A"
-                android:textSize="11sp" />
+                android:textColor="#FF5F6775"
+                android:textSize="10dp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/widget_today_compact_cue_box"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingBottom="3dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/widget_today_compact_cue"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/widget_pill_bg"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:paddingStart="5dp"
+                android:paddingTop="1dp"
+                android:paddingEnd="5dp"
+                android:paddingBottom="1dp"
+                android:textSize="8.5dp"
+                android:textStyle="bold" />
         </LinearLayout>
 
         <ListView
@@ -64,40 +109,69 @@
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:gravity="center_vertical"
+            android:gravity="center"
             android:orientation="vertical"
             android:visibility="gone">
 
             <TextView
-                android:id="@+id/widget_today_empty_badge"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:paddingBottom="4dp"
-                android:textColor="#FFE65100"
-                android:textSize="11sp"
-                android:textStyle="bold"
-                android:visibility="gone" />
-
-            <TextView
-                android:id="@+id/widget_today_empty_title"
+                android:id="@+id/widget_today_empty_text"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:ellipsize="end"
-                android:maxLines="2"
-                android:textColor="#FF1A1D24"
-                android:textSize="14sp"
-                android:textStyle="bold" />
+                android:gravity="center"
+                android:maxLines="3"
+                android:textColor="#FF5F6775"
+                android:textSize="11.5dp" />
+        </LinearLayout>
 
-            <TextView
-                android:id="@+id/widget_today_empty_meta"
+        <LinearLayout
+            android:id="@+id/widget_today_exam_box"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:gravity="center_vertical"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:id="@+id/widget_today_exam_card"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:paddingTop="3dp"
-                android:ellipsize="end"
-                android:maxLines="1"
-                android:textColor="#FF646C7A"
-                android:textSize="11sp"
-                android:visibility="gone" />
+                android:background="@drawable/widget_exam_card_bg"
+                android:orientation="vertical"
+                android:padding="10dp">
+
+                <TextView
+                    android:id="@+id/widget_today_exam_badge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="#FFE65100"
+                    android:textSize="9.5dp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/widget_today_exam_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:ellipsize="end"
+                    android:maxLines="2"
+                    android:textColor="#FF1A1D24"
+                    android:textSize="12.5dp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/widget_today_exam_meta"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:ellipsize="end"
+                    android:maxLines="2"
+                    android:textColor="#FF5F6775"
+                    android:textSize="10dp" />
+            </LinearLayout>
         </LinearLayout>
     </LinearLayout>
 </FrameLayout>

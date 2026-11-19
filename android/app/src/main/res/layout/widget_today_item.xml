@@ -1,67 +1,122 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/widget_today_item_root"
+    android:id="@+id/widget_today_item_outer"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:gravity="center_vertical"
-    android:orientation="horizontal"
-    android:paddingTop="4dp"
-    android:paddingBottom="4dp">
-
-    <ImageView
-        android:id="@+id/widget_today_item_bar"
-        android:layout_width="4dp"
-        android:layout_height="28dp"
-        android:contentDescription="@null"
-        android:scaleType="fitXY" />
+    android:orientation="vertical"
+    android:paddingTop="1dp"
+    android:paddingBottom="1dp">
 
     <LinearLayout
-        android:layout_width="0dp"
+        android:id="@+id/widget_today_item_root"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_weight="1"
-        android:orientation="vertical"
-        android:paddingStart="9dp"
-        android:paddingEnd="2dp">
+        android:baselineAligned="false"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="4dp"
+        android:paddingTop="3.5dp"
+        android:paddingEnd="5dp"
+        android:paddingBottom="3.5dp">
 
         <LinearLayout
-            android:layout_width="match_parent"
+            android:id="@+id/widget_today_item_time_col"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
+            android:gravity="end|center_vertical"
+            android:minWidth="41dp"
+            android:orientation="vertical"
+            android:paddingEnd="4dp">
 
             <TextView
-                android:id="@+id/widget_today_item_tag"
+                android:id="@+id/widget_today_item_time_start"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginEnd="6dp"
-                android:paddingStart="5dp"
-                android:paddingTop="1dp"
-                android:paddingEnd="5dp"
-                android:paddingBottom="1dp"
-                android:textSize="10sp"
-                android:textStyle="bold"
-                android:visibility="gone" />
-
-            <TextView
-                android:id="@+id/widget_today_item_title"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:ellipsize="end"
+                android:fontFamily="monospace"
+                android:fontFeatureSettings="tnum"
+                android:gravity="end"
+                android:includeFontPadding="false"
                 android:maxLines="1"
                 android:textColor="#FF1A1D24"
-                android:textSize="13.5sp"
+                android:textSize="10.5dp"
                 android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/widget_today_item_time_end"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:fontFeatureSettings="tnum"
+                android:gravity="end"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:paddingTop="1.5dp"
+                android:textColor="#FF868E9C"
+                android:textSize="9dp" />
         </LinearLayout>
 
-        <TextView
-            android:id="@+id/widget_today_item_meta"
-            android:layout_width="match_parent"
+        <ImageView
+            android:id="@+id/widget_today_item_bar"
+            android:layout_width="3dp"
+            android:layout_height="24dp"
+            android:contentDescription="@null"
+            android:scaleType="fitXY"
+            android:src="@drawable/widget_bar_pill" />
+
+        <LinearLayout
+            android:id="@+id/widget_today_item_body"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:paddingTop="1dp"
-            android:textColor="#FF646C7A"
-            android:textSize="11sp" />
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:paddingStart="4.5dp"
+            android:paddingEnd="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/widget_today_item_tag"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/widget_pill_bg"
+                    android:includeFontPadding="false"
+                    android:maxLines="1"
+                    android:paddingStart="4dp"
+                    android:paddingTop="1dp"
+                    android:paddingEnd="4dp"
+                    android:paddingBottom="1dp"
+                    android:textSize="8.5dp"
+                    android:textStyle="bold"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/widget_today_item_title"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:includeFontPadding="false"
+                    android:maxLines="1"
+                    android:textColor="#FF1A1D24"
+                    android:textSize="12dp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/widget_today_item_meta"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:paddingTop="2.5dp"
+                android:textColor="#FF5F6775"
+                android:textSize="10dp" />
+        </LinearLayout>
     </LinearLayout>
 </LinearLayout>

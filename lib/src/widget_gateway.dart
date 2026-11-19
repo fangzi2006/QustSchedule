@@ -5,6 +5,7 @@
 /// - 测试可零成本替换为假实现，离线验证快照同步与置顶交互。
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'widget_style.dart';
@@ -33,6 +34,36 @@ class MethodChannelDesktopWidgetGateway implements DesktopWidgetGateway {
   ]);
 
   final MethodChannel channel;
+
+  /// 原生广播/Pin 成功回调实时推送的最新桌面实例数量。
+  static final ValueNotifier<Map<DesktopWidgetKind, int>?> livePinnedCounts =
+      ValueNotifier<Map<DesktopWidgetKind, int>?>(null);
+
+  static final Set<String> _installedChannels = <String>{};
+
+  /// 幂等挂载通道反向回调，接收 Android 侧推送的 `onPinnedCountsChanged`。
+  void ensurePushHandlerInstalled() {
+    if (!_installedChannels.add(channel.name)) return;
+    channel.setMethodCallHandler((call) async {
+      if (call.method == 'onPinnedCountsChanged') {
+        final raw = call.arguments;
+        if (raw is Map<Object?, Object?>) {
+          livePinnedCounts.value = _parseCountsMap(raw);
+        }
+      }
+    });
+  }
+
+  static Map<DesktopWidgetKind, int> _parseCountsMap(
+    Map<Object?, Object?> raw,
+  ) {
+    final counts = <DesktopWidgetKind, int>{};
+    for (final kind in DesktopWidgetKind.values) {
+      final v = raw[kind.wireName];
+      if (v is num) counts[kind] = v.toInt();
+    }
+    return counts;
+  }
 
   @override
   Future<bool> syncSnapshot(String payloadJson) async {
@@ -82,12 +113,7 @@ class MethodChannelDesktopWidgetGateway implements DesktopWidgetGateway {
         'getPinnedCounts',
       );
       if (raw == null) return const <DesktopWidgetKind, int>{};
-      final counts = <DesktopWidgetKind, int>{};
-      for (final kind in DesktopWidgetKind.values) {
-        final v = raw[kind.wireName];
-        if (v is num) counts[kind] = v.toInt();
-      }
-      return counts;
+      return _parseCountsMap(raw);
     } on MissingPluginException {
       return const <DesktopWidgetKind, int>{};
     } on PlatformException {

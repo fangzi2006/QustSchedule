@@ -16,6 +16,7 @@ internal data class WidgetStyleData(
     val showTeacher: Boolean = true,
     val showTime: Boolean = true,
     val showExams: Boolean = true,
+    val autoSwitchTomorrow: Boolean = true,
     val finishedCourseMode: String = "dim",
     val weekendMode: String = "auto",
 ) {
@@ -35,13 +36,18 @@ internal data class WidgetStyleData(
                 cornerRadius = obj.optDouble("cornerRadius", base.cornerRadius.toDouble())
                     .toFloat().coerceIn(8f, 28f),
                 fontScale = obj.optDouble("fontScale", base.fontScale.toDouble())
-                    .toFloat().coerceIn(0.85f, 1.25f),
+                    .toFloat().coerceIn(0.75f, 1.20f),
                 density = obj.optString("density", base.density),
                 showHeader = if (obj.has("showHeader")) obj.optBoolean("showHeader", base.showHeader) else base.showHeader,
                 showLocation = if (obj.has("showLocation")) obj.optBoolean("showLocation", base.showLocation) else base.showLocation,
                 showTeacher = if (obj.has("showTeacher")) obj.optBoolean("showTeacher", base.showTeacher) else base.showTeacher,
                 showTime = if (obj.has("showTime")) obj.optBoolean("showTime", base.showTime) else base.showTime,
                 showExams = if (obj.has("showExams")) obj.optBoolean("showExams", base.showExams) else base.showExams,
+                autoSwitchTomorrow = if (obj.has("autoSwitchTomorrow")) {
+                    obj.optBoolean("autoSwitchTomorrow", base.autoSwitchTomorrow)
+                } else {
+                    base.autoSwitchTomorrow
+                },
                 finishedCourseMode = obj.optString("finishedCourseMode", base.finishedCourseMode),
                 weekendMode = obj.optString("weekendMode", base.weekendMode),
             )
@@ -235,6 +241,28 @@ internal data class WidgetSnapshotModel(
     fun styleOf(kind: String): WidgetStyleData =
         styles[kind] ?: WidgetStyleData.defaultFor(kind)
 
+    fun kindSignature(kind: String): Int = when (kind) {
+        KIND_WEEK -> java.util.Objects.hash(
+            version,
+            signedIn,
+            termId,
+            termStartIso,
+            maxWeek,
+            weeks,
+            styleOf(KIND_WEEK),
+        )
+        else -> java.util.Objects.hash(
+            version,
+            signedIn,
+            termId,
+            termStartIso,
+            maxWeek,
+            days,
+            upcomingExams,
+            styleOf(kind),
+        )
+    }
+
     companion object {
         fun parse(rawJson: String): WidgetSnapshotModel? {
             if (rawJson.isBlank()) return null
@@ -291,6 +319,10 @@ internal object WidgetStore {
 
     private const val PREF_NAME = "qust_desktop_widget_v1"
     private const val KEY_SNAPSHOT = "snapshot_json"
+    private const val KEY_TODAY_SIG_PREFIX = "today_header_sig_"
+    private const val KEY_TODAY_WIDTH_PREFIX = "today_width_dp_"
+    private const val KEY_TODAY_REV = "today_list_rev"
+    private const val KEY_LAST_WEEK_RENDER_DATE = "last_week_render_date_iso"
 
     fun saveSnapshot(context: Context, payloadJson: String): WidgetSnapshotModel? {
         val parsed = WidgetSnapshotModel.parse(payloadJson) ?: return null
@@ -309,11 +341,73 @@ internal object WidgetStore {
         return WidgetSnapshotModel.parse(raw)
     }
 
+    fun saveTodayHeaderSig(context: Context, appWidgetId: Int, sig: String) {
+        context.applicationContext
+            .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString("$KEY_TODAY_SIG_PREFIX$appWidgetId", sig)
+            .commit()
+    }
+
+    fun loadTodayHeaderSig(context: Context, appWidgetId: Int): String? =
+        context.applicationContext
+            .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .getString("$KEY_TODAY_SIG_PREFIX$appWidgetId", null)
+
+    fun saveTodayWidthDp(context: Context, appWidgetId: Int, widthDp: Int) {
+        context.applicationContext
+            .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putInt("$KEY_TODAY_WIDTH_PREFIX$appWidgetId", widthDp)
+            .commit()
+    }
+
+    fun loadTodayWidthDp(context: Context, appWidgetId: Int, fallback: Int = 260): Int =
+        context.applicationContext
+            .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .getInt("$KEY_TODAY_WIDTH_PREFIX$appWidgetId", fallback)
+
+    fun bumpTodayRevision(context: Context): Int {
+        val prefs = context.applicationContext
+            .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        val next = prefs.getInt(KEY_TODAY_REV, 0) + 1
+        prefs.edit().putInt(KEY_TODAY_REV, next).commit()
+        return next
+    }
+
+    fun loadTodayRevision(context: Context): Int =
+        context.applicationContext
+            .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .getInt(KEY_TODAY_REV, 0)
+
+    fun removeTodayWidgetMeta(context: Context, appWidgetId: Int) {
+        context.applicationContext
+            .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove("$KEY_TODAY_SIG_PREFIX$appWidgetId")
+            .remove("$KEY_TODAY_WIDTH_PREFIX$appWidgetId")
+            .commit()
+    }
+
+    fun saveLastWeekRenderDateIso(context: Context, dateIso: String) {
+        context.applicationContext
+            .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_LAST_WEEK_RENDER_DATE, dateIso)
+            .commit()
+    }
+
+    fun loadLastWeekRenderDateIso(context: Context): String? =
+        context.applicationContext
+            .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_LAST_WEEK_RENDER_DATE, null)
+
     fun clear(context: Context) {
         context.applicationContext
             .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .edit()
             .remove(KEY_SNAPSHOT)
+            .remove(KEY_LAST_WEEK_RENDER_DATE)
             .commit()
     }
 }

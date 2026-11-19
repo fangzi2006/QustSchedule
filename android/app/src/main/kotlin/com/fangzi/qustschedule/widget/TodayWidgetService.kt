@@ -1,26 +1,36 @@
 package com.fangzi.qustschedule.widget
 
+import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.Intent
-import android.util.TypedValue
-import android.view.View
 import android.widget.RemoteViews
 import android.widget.RemoteViewsService
 import com.fangzi.qustschedule.R
 
+/**
+ * Android 11 及以下系统的 ListView 适配器；Android 12+ 由 `TodayWidgetProvider` 使用
+ * `RemoteCollectionItems` 原子内嵌列表直接驱动。
+ */
 class TodayWidgetService : RemoteViewsService() {
-    override fun onGetViewFactory(intent: Intent): RemoteViewsFactory =
-        TodayRemoteViewsFactory(applicationContext)
+    override fun onGetViewFactory(intent: Intent): RemoteViewsFactory {
+        val appWidgetId = intent.getIntExtra(
+            AppWidgetManager.EXTRA_APPWIDGET_ID,
+            AppWidgetManager.INVALID_APPWIDGET_ID,
+        )
+        return TodayRemoteViewsFactory(applicationContext, appWidgetId)
+    }
 }
 
 private class TodayRemoteViewsFactory(
     private val context: Context,
+    private val appWidgetId: Int,
 ) : RemoteViewsService.RemoteViewsFactory {
 
     private var items: List<TimelineItemData> = emptyList()
     private var style: WidgetStyleData = WidgetStyleData.defaultFor(KIND_TODAY)
     private var theme: ResolvedWidgetTheme = WidgetThemeResolver.resolve(context, style)
     private var nowMs: Long = 0L
+    private var isNarrow: Boolean = false
 
     override fun onCreate() {}
 
@@ -29,7 +39,25 @@ private class TodayRemoteViewsFactory(
         style = snapshot?.styleOf(KIND_TODAY) ?: WidgetStyleData.defaultFor(KIND_TODAY)
         theme = WidgetThemeResolver.resolve(context, style)
         nowMs = System.currentTimeMillis()
-        items = WidgetContentResolver.resolveToday(snapshot, style, nowMs).items
+        val widthDp = WidgetStore.loadTodayWidthDp(context, appWidgetId)
+        isNarrow = TodayItemViewBinder.isNarrowWidth(widthDp)
+        val vm = WidgetContentResolver.resolveToday(snapshot, style, nowMs)
+        items = vm.items
+
+        if (appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+            val expectedSig = TodayWidgetProvider.headerSignature(vm, style)
+            val renderedSig = WidgetStore.loadTodayHeaderSig(context, appWidgetId)
+            if (expectedSig != renderedSig) {
+                WidgetWorker.execute {
+                    TodayWidgetProvider.updateWidgetById(
+                        context,
+                        appWidgetId,
+                        notifyList = false,
+                    )
+                    WidgetCoordinator.syncAlarmState(context)
+                }
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -39,86 +67,24 @@ private class TodayRemoteViewsFactory(
     override fun getCount(): Int = items.size
 
     override fun getViewAt(position: Int): RemoteViews {
-        val views = RemoteViews(context.packageName, R.layout.widget_today_item)
-        if (position !in items.indices) return views
-
-        val item = items[position]
-        val finished = item.endMs <= nowMs
-        val ongoing = item.startMs <= nowMs && item.endMs > nowMs
-        val dimmed = finished && style.finishedCourseMode == "dim"
-        val chip = theme.courseColor(item.colorIndex)
-
-        val compact = style.density == "compact"
-        val verticalPadPx = ((if (compact) 3f else 5f) * context.resources.displayMetrics.density).toInt()
-        views.setViewPadding(R.id.widget_today_item_root, 0, verticalPadPx, 0, verticalPadPx)
-
-        val rawBarColor = if (item.isExam) theme.examFgColor else chip.foreground
-        val barColor = if (dimmed) WidgetThemeResolver.withAlpha(rawBarColor, 115) else rawBarColor
-        views.setInt(R.id.widget_today_item_bar, "setBackgroundColor", barColor)
-
-        val titleColor = if (dimmed) {
-            WidgetThemeResolver.withAlpha(theme.primaryTextColor, 120)
-        } else {
-            theme.primaryTextColor
+        if (position !in items.indices) {
+            return RemoteViews(context.packageName, R.layout.widget_today_item)
         }
-        val metaColor = if (dimmed) {
-            WidgetThemeResolver.withAlpha(theme.secondaryTextColor, 115)
-        } else {
-            theme.secondaryTextColor
-        }
-
-        if (item.isExam) {
-            views.setViewVisibility(R.id.widget_today_item_tag, View.VISIBLE)
-            views.setTextViewText(R.id.widget_today_item_tag, "考试")
-            views.setTextColor(R.id.widget_today_item_tag, theme.examFgColor)
-            views.setInt(R.id.widget_today_item_tag, "setBackgroundColor", theme.examBgColor)
-            views.setTextViewTextSize(R.id.widget_today_item_tag, TypedValue.COMPLEX_UNIT_SP, 9.5f * style.fontScale)
-        } else if (ongoing) {
-            views.setViewVisibility(R.id.widget_today_item_tag, View.VISIBLE)
-            views.setTextViewText(R.id.widget_today_item_tag, "进行中")
-            views.setTextColor(R.id.widget_today_item_tag, chip.foreground)
-            views.setInt(R.id.widget_today_item_tag, "setBackgroundColor", chip.background)
-            views.setTextViewTextSize(R.id.widget_today_item_tag, TypedValue.COMPLEX_UNIT_SP, 9.5f * style.fontScale)
-        } else if (item.rescheduled) {
-            views.setViewVisibility(R.id.widget_today_item_tag, View.VISIBLE)
-            views.setTextViewText(R.id.widget_today_item_tag, "调课")
-            views.setTextColor(R.id.widget_today_item_tag, theme.examFgColor)
-            views.setInt(R.id.widget_today_item_tag, "setBackgroundColor", theme.examBgColor)
-            views.setTextViewTextSize(R.id.widget_today_item_tag, TypedValue.COMPLEX_UNIT_SP, 9.5f * style.fontScale)
-        } else {
-            views.setViewVisibility(R.id.widget_today_item_tag, View.GONE)
-        }
-
-        views.setTextViewText(R.id.widget_today_item_title, item.title)
-        views.setTextColor(R.id.widget_today_item_title, titleColor)
-        views.setTextViewTextSize(R.id.widget_today_item_title, TypedValue.COMPLEX_UNIT_SP, 13f * style.fontScale)
-
-        val metaParts = listOfNotNull(
-            if (style.showTime && item.startLabel.isNotEmpty()) "${item.startLabel}-${item.endLabel}" else null,
-            item.location.takeIf { style.showLocation && it.isNotEmpty() },
-            item.seatNumber.takeIf { item.isExam && it.isNotEmpty() }?.let { "${it}座" },
-            item.teacher.takeIf { !item.isExam && style.showTeacher && it.isNotEmpty() },
+        return TodayItemViewBinder.buildItemView(
+            context = context,
+            item = items[position],
+            style = style,
+            theme = theme,
+            nowMs = nowMs,
+            isNarrow = isNarrow,
         )
-        val metaText = metaParts.joinToString(" · ")
-        if (metaText.isNotEmpty()) {
-            views.setViewVisibility(R.id.widget_today_item_meta, View.VISIBLE)
-            views.setTextViewText(R.id.widget_today_item_meta, metaText)
-            views.setTextColor(R.id.widget_today_item_meta, metaColor)
-            views.setTextViewTextSize(R.id.widget_today_item_meta, TypedValue.COMPLEX_UNIT_SP, 10.5f * style.fontScale)
-        } else {
-            views.setViewVisibility(R.id.widget_today_item_meta, View.GONE)
-        }
-
-        views.setOnClickFillInIntent(R.id.widget_today_item_root, Intent())
-        return views
     }
 
     override fun getLoadingView(): RemoteViews? = null
 
     override fun getViewTypeCount(): Int = 1
 
-    override fun getItemId(position: Int): Long =
-        items.getOrNull(position)?.id?.hashCode()?.toLong() ?: position.toLong()
+    override fun getItemId(position: Int): Long = position.toLong()
 
-    override fun hasStableIds(): Boolean = true
+    override fun hasStableIds(): Boolean = false
 }

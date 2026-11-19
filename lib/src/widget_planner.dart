@@ -370,13 +370,14 @@ WidgetSnapshot buildWidgetSnapshot({
         final startAt = _at(date, startMinutes);
         final endAt = _at(date, endMinutes);
         final isMoved = !_hasOriginalMatch(rawEntries, entry);
+        final normalizedName = entry.name.trim();
         items.add(
           WidgetTimelineItem(
             kind: 'course',
             id: _stableCourseId(entry.id, date, entry.startPeriod),
-            title: entry.name,
+            title: normalizedName,
             location: roomOnly(entry.location ?? ''),
-            teacher: entry.teacher ?? '',
+            teacher: (entry.teacher ?? '').trim(),
             seatNumber: '',
             examForm: '',
             startPeriod: entry.startPeriod,
@@ -385,7 +386,7 @@ WidgetSnapshot buildWidgetSnapshot({
             endLabel: _formatMinutes(endMinutes),
             startMs: startAt.millisecondsSinceEpoch,
             endMs: endAt.millisecondsSinceEpoch,
-            colorIndex: CoursePalette.indexOf(entry.name),
+            colorIndex: CoursePalette.indexOf(normalizedName),
             rescheduled: isMoved,
           ),
         );
@@ -476,13 +477,25 @@ WidgetSnapshot buildWidgetSnapshot({
     return byStart != 0 ? byStart : a.courseName.compareTo(b.courseName);
   });
 
-  // 预计算当前周与下一周完整网格（供本周网格小组件跨过周末 00:01 自动无缝切周）。
+  // 预计算未来 horizonDays 覆盖到的全部学期内周次（周一生成含今下 2 周；周二~周日跨入第 3 周时
+  // 一并预计算，确保周课表与今日/下一节共享完整 14 天离线窗口，不在第 8 天提前过期）。
   final currentWeek = today.isBefore(mondayStart)
       ? 1
       : weekOf(termStart, today).clamp(1, safeMaxWeek);
+  final horizonEnd = DateTime(
+    today.year,
+    today.month,
+    today.day + daysCount - 1,
+  );
+  final horizonEndWeek = horizonEnd.isBefore(mondayStart)
+      ? 1
+      : weekOf(termStart, horizonEnd).clamp(1, safeMaxWeek);
+  final targetEndWeek = math.min(
+    safeMaxWeek,
+    math.max(currentWeek + 1, horizonEndWeek),
+  );
   final weekTargets = <int>[
-    currentWeek,
-    if (currentWeek + 1 <= safeMaxWeek) currentWeek + 1,
+    for (var w = currentWeek; w <= targetEndWeek; w++) w,
   ];
   final weeks = <WidgetWeekPlan>[];
   for (final w in weekTargets) {

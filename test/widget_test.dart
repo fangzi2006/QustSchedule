@@ -4702,7 +4702,7 @@ void main() {
       final service = DesktopWidgetService(
         model: model,
         gateway: gateway,
-        debounce: const Duration(milliseconds: 1),
+        debounce: const Duration(seconds: 5),
         now: () => DateTime(2026, 9, 7, 9, 0),
       );
       addTearDown(() {
@@ -4719,8 +4719,16 @@ void main() {
       await tester.tap(find.text('桌面小组件'));
       await tester.pumpAndSettle();
       expect(find.byType(WidgetSettingsPage), findsOneWidget);
+      expect(find.byType(ChoiceChip), findsNothing);
 
-      // 套用「通透磨砂」只更新今日课表，不影响本周课表
+      // 今日课表支持在预览舞台切换 4×2 宽卡 与 2×2 窄卡
+      expect(find.text('4×2 宽卡'), findsOneWidget);
+      await tester.tap(find.text('4×2 宽卡'));
+      await tester.pumpAndSettle();
+      expect(find.text('2×2 窄卡'), findsOneWidget);
+
+      // 套用「通透磨砂」只更新今日课表并立即触发原生同步，不影响本周课表
+      final beforeSync = gateway.syncCount;
       await tester.tap(find.text('通透磨砂'));
       await tester.pumpAndSettle();
       expect(
@@ -4731,6 +4739,7 @@ void main() {
         model.widgetStyleOf(DesktopWidgetKind.week).preset,
         WidgetStylePreset.minimalWhite,
       );
+      expect(gateway.syncCount, greaterThan(beforeSync));
 
       // 切换到「本周课表」并验证专属「周末列显示」切换
       await tester.tap(find.text('本周课表').first);
@@ -4777,9 +4786,13 @@ void main() {
 
 class _FakeWidgetGateway implements DesktopWidgetGateway {
   DesktopWidgetKind? lastPinnedKind;
+  int syncCount = 0;
 
   @override
-  Future<bool> syncSnapshot(String payloadJson) async => true;
+  Future<bool> syncSnapshot(String payloadJson) async {
+    syncCount++;
+    return true;
+  }
 
   @override
   Future<void> clearSnapshot() async {}
