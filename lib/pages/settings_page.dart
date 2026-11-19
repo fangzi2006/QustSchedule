@@ -1,8 +1,9 @@
-/// 设置页：课表 / 账号 / 关于三组。
+/// 设置页：课表 / 提醒与小组件（仅 Android） / 账号 / 关于与更新。
 ///
 /// - 课表：作息时间表入口、周次校准、显示教师、显示地点、显示课表备注、静默更新；
+/// - 提醒与小组件：课程提醒、桌面小组件，以及忽略电池优化、精确闹钟、自启动权限检查；
 /// - 账号：身份、教务地址、修改密码、退出登录；
-/// - 关于：调试信息、版本号。
+/// - 关于与更新：自动检查更新、关于（调试信息、版本号）。
 ///
 /// 账号区只有四行：身份、教务地址、修改密码、退出登录。
 /// 退出只有一个入口，且**同时清掉保存的密码**——这个 app 不提供"记住密码"开关，
@@ -19,13 +20,16 @@ import 'package:zf_academic/zf_academic.dart' show AcademicError;
 import '../src/app_model.dart';
 import '../src/app_version.dart';
 import '../src/preferences_repository.dart';
+import '../src/reminder_gateway.dart';
 import '../src/reminder_service.dart';
+import '../src/route_settled.dart';
 import '../src/term_calendar.dart' show formatIsoDate;
 import '../src/timetable.dart' show formatMonthDayDate;
 import '../src/widget_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_snack_bar.dart';
 import '../widgets/floating_dock.dart';
+import '../widgets/reminder_permission_tile.dart';
 import '../widgets/section_title.dart';
 import '../widgets/tactile_button.dart';
 import 'about_page.dart';
@@ -107,49 +111,6 @@ class SettingsPage extends StatelessWidget {
                       trailing: const Icon(Icons.chevron_right_rounded),
                       onTap: () => showCalibrateSheet(context, model),
                     ),
-                    if (reminders != null &&
-                        defaultTargetPlatform ==
-                            TargetPlatform.android) ...<Widget>[
-                      const Divider(height: 0, indent: 56),
-                      ListTile(
-                        leading: const Icon(
-                          Icons.notifications_active_outlined,
-                          size: 20,
-                        ),
-                        title: const Text('课程提醒'),
-                        subtitle: Text(
-                          model.reminderEnabled
-                              ? '已开启 · 提前 ${model.reminderLeadMinutes} 分钟'
-                              : '未开启',
-                        ),
-                        trailing: const Icon(Icons.chevron_right_rounded),
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) =>
-                                ReminderPage(model: model, service: reminders!),
-                          ),
-                        ),
-                      ),
-                    ],
-                    if (desktopWidgets != null &&
-                        defaultTargetPlatform ==
-                            TargetPlatform.android) ...<Widget>[
-                      const Divider(height: 0, indent: 56),
-                      ListTile(
-                        leading: const Icon(Icons.widgets_outlined, size: 20),
-                        title: const Text('桌面小组件'),
-                        subtitle: const Text('今日课表、本周网格与下一节 · 样式可自定义'),
-                        trailing: const Icon(Icons.chevron_right_rounded),
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => WidgetSettingsPage(
-                              model: model,
-                              widgetService: desktopWidgets!,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
                     const Divider(height: 0, indent: 56),
                     SwitchListTile(
                       secondary: const Icon(
@@ -205,6 +166,16 @@ class SettingsPage extends StatelessWidget {
                   ],
                 ),
               ),
+              if (defaultTargetPlatform == TargetPlatform.android &&
+                  (reminders != null || desktopWidgets != null)) ...<Widget>[
+                const SizedBox(height: 18),
+                const SectionTitle('提醒与小组件'),
+                _ReminderAndWidgetCard(
+                  model: model,
+                  reminders: reminders,
+                  desktopWidgets: desktopWidgets,
+                ),
+              ],
               const SizedBox(height: 18),
               const SectionTitle('账号'),
               Card(
@@ -501,6 +472,231 @@ class _IntervalStepper extends StatelessWidget {
               : null,
         ),
       ],
+    );
+  }
+}
+
+/// 提醒与小组件卡片：课程提醒、桌面小组件，以及后台保活/闹钟/自启动权限检查。
+class _ReminderAndWidgetCard extends StatefulWidget {
+  const _ReminderAndWidgetCard({
+    required this.model,
+    required this.reminders,
+    required this.desktopWidgets,
+  });
+
+  final AppModel model;
+  final ReminderService? reminders;
+  final DesktopWidgetService? desktopWidgets;
+
+  @override
+  State<_ReminderAndWidgetCard> createState() => _ReminderAndWidgetCardState();
+}
+
+class _ReminderAndWidgetCardState extends State<_ReminderAndWidgetCard>
+    with WidgetsBindingObserver {
+  late final ValueNotifier<ReminderRuntimeStatus?> _statusNotifier =
+      ValueNotifier<ReminderRuntimeStatus?>(widget.reminders?.lastStatus);
+
+  bool _running = false;
+  bool _initialRefreshScheduled = false;
+  RouteSettledHandle? _initialRefreshHandle;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_initialRefreshScheduled || widget.reminders == null) return;
+    _initialRefreshScheduled = true;
+    _initialRefreshHandle = scheduleAfterRouteSettled(
+      context: context,
+      isMounted: () => mounted,
+      task: _refreshStatus,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _ReminderAndWidgetCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.reminders != oldWidget.reminders) {
+      _statusNotifier.value = widget.reminders?.lastStatus;
+      if (widget.reminders != null) {
+        _initialRefreshScheduled = true;
+        unawaited(_refreshStatus());
+      } else {
+        _initialRefreshScheduled = false;
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _initialRefreshHandle?.cancel();
+    _initialRefreshHandle = null;
+    WidgetsBinding.instance.removeObserver(this);
+    _statusNotifier.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && widget.reminders != null) {
+      unawaited(_refreshStatus());
+    }
+  }
+
+  Future<void> _refreshStatus() async {
+    final service = widget.reminders;
+    if (service == null) return;
+    final status = await service.refreshStatus();
+    if (!mounted) return;
+    _statusNotifier.value = status;
+  }
+
+  Future<void> _run(Future<void> Function(ReminderService service) action) async {
+    final service = widget.reminders;
+    if (service == null || _running) return;
+    _running = true;
+    try {
+      await action(service);
+    } finally {
+      _running = false;
+    }
+  }
+
+  Future<void> _openBattery() => _run((service) async {
+    showReminderGuideToast(
+      context,
+      service,
+      '请在「耗电管理」或「省电策略」中允许后台运行',
+      aboveDock: true,
+    );
+    await service.openBatterySettings();
+    await _refreshStatus();
+  });
+
+  Future<void> _openExactAlarm() => _run((service) async {
+    showReminderGuideToast(
+      context,
+      service,
+      '请开启「允许设置闹钟和提醒」以确保准时响铃',
+      aboveDock: true,
+    );
+    await service.openExactAlarmSettings();
+    await _refreshStatus();
+  });
+
+  Future<void> _openAutostart() => _run((service) async {
+    final vendor = await service.openAutostartSettings();
+    if (mounted) {
+      showReminderGuideToast(
+        context,
+        service,
+        vendor ? '请在列表中找到本应用并允许自启动' : '请在设置顶部搜索「自启动」，开启本应用开关',
+        aboveDock: true,
+      );
+    }
+    await _refreshStatus();
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final reminders = widget.reminders;
+    final desktopWidgets = widget.desktopWidgets;
+    final model = widget.model;
+    return Card(
+      child: Column(
+        children: <Widget>[
+          if (reminders != null)
+            ListTile(
+              leading: const Icon(
+                Icons.notifications_active_outlined,
+                size: 20,
+              ),
+              title: const Text('课程提醒'),
+              subtitle: Text(
+                model.reminderEnabled
+                    ? '已开启 · 提前 ${model.reminderLeadMinutes} 分钟'
+                    : '未开启',
+              ),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => Navigator.of(context)
+                  .push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          ReminderPage(model: model, service: reminders),
+                    ),
+                  )
+                  .then((_) {
+                    if (mounted) unawaited(_refreshStatus());
+                  }),
+            ),
+          if (desktopWidgets != null) ...<Widget>[
+            if (reminders != null) const Divider(height: 0, indent: 56),
+            ListTile(
+              leading: const Icon(Icons.widgets_outlined, size: 20),
+              title: const Text('桌面小组件'),
+              subtitle: const Text('添加并自定义小组件样式'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => WidgetSettingsPage(
+                    model: model,
+                    widgetService: desktopWidgets,
+                  ),
+                ),
+              ),
+            ),
+          ],
+          if (reminders != null)
+            ValueListenableBuilder<ReminderRuntimeStatus?>(
+              valueListenable: _statusNotifier,
+              builder: (context, status, _) {
+                return Column(
+                  children: <Widget>[
+                    const Divider(height: 0, indent: 56),
+                    ReminderPermissionTile(
+                      icon: Icons.battery_saver_outlined,
+                      title: '忽略电池优化',
+                      value: status == null
+                          ? '查询中…'
+                          : (status.batteryOptOut ? '已忽略' : '受省电策略限制 · 后台可能被清理'),
+                      ok: status?.batteryOptOut ?? false,
+                      actionLabel: '去设置',
+                      onAction: _openBattery,
+                    ),
+                    const Divider(height: 0, indent: 56),
+                    ReminderPermissionTile(
+                      icon: Icons.alarm_rounded,
+                      title: '精确闹钟',
+                      value: status == null
+                          ? '查询中…'
+                          : (status.exactAlarmAllowed
+                                ? '已允许'
+                                : '未允许 · 息屏时可能推迟数分钟'),
+                      ok: status?.exactAlarmAllowed ?? false,
+                      actionLabel: '去设置',
+                      onAction: _openExactAlarm,
+                    ),
+                    const Divider(height: 0, indent: 56),
+                    ReminderPermissionTile(
+                      icon: Icons.power_settings_new_rounded,
+                      title: '自启动',
+                      value: '该权限不可检测，需自行确认',
+                      ok: null,
+                      actionLabel: '去设置',
+                      onAction: _openAutostart,
+                    ),
+                  ],
+                );
+              },
+            ),
+        ],
+      ),
     );
   }
 }

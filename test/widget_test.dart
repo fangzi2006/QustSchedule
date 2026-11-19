@@ -2969,6 +2969,11 @@ void main() {
         wrap(SettingsPage(model: rig.model, reminders: rig.service)),
       );
 
+      await tester.scrollUntilVisible(
+        find.text('课程提醒'),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
       expect(find.text('课程提醒'), findsOneWidget);
       expect(find.text('未开启'), findsOneWidget);
 
@@ -3128,7 +3133,7 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     });
 
-    testWidgets('自启动项手动确认跳转与从系统设置返回后自动刷新权限状态', (tester) async {
+    testWidgets('提醒页仅保留通知权限检查并在返回后自动刷新权限状态', (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
       final rig = await buildReminderRig(
         enabled: true,
@@ -3138,7 +3143,10 @@ void main() {
         wrap(ReminderPage(model: rig.model, service: rig.service)),
       );
       await tester.pumpAndSettle();
+      expect(find.text('通知权限'), findsOneWidget);
       expect(find.text('已禁止 · 无法收到任何提醒'), findsOneWidget);
+      expect(find.text('忽略电池优化'), findsNothing);
+      expect(find.text('自启动'), findsNothing);
 
       // 从系统设置返回后刷新权限状态
       rig.gateway.statusValue = const ReminderRuntimeStatus(
@@ -3151,31 +3159,114 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('已允许 · 横幅与锁屏需手动开启'), findsOneWidget);
 
-      await tester.tap(find.widgetWithText(TextButton, '去设置').first);
+      expect(find.widgetWithText(TextButton, '去设置'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, '去设置'));
       await tester.pumpAndSettle();
       expect(rig.gateway.notificationSettingsCount, 1);
 
-      // 自启动项手动确认
-      await tester.scrollUntilVisible(
-        find.text('自启动'),
-        120,
-        scrollable: find.byType(Scrollable).first,
-      );
-      expect(find.text('该权限不可检测，需自行确认'), findsOneWidget);
-      final tile = find.ancestor(
-        of: find.text('自启动'),
-        matching: find.byType(ListTile),
-      );
-      await tester.ensureVisible(tile);
-      await tester.pumpAndSettle();
-      await tester.tap(find.descendant(of: tile, matching: find.text('去设置')));
-      await tester.pumpAndSettle();
-      await tester.pump(const Duration(seconds: 3));
+      rig.service.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    });
 
+    testWidgets('设置页「提醒与小组件」板块顺序、权限跳转及返回自动刷新状态', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view.physicalSize = const Size(800, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+      final rig = await buildReminderRig(
+        enabled: true,
+        status: const ReminderRuntimeStatus(
+          notificationPermission: true,
+          notificationsEnabled: true,
+          exactAlarmAllowed: false,
+          batteryOptimizationIgnored: false,
+          autoStartVendorPage: false,
+        ),
+      );
+      final widgetService = DesktopWidgetService(
+        model: rig.model,
+        gateway: _FakeWidgetGateway(),
+        debounce: const Duration(seconds: 5),
+        now: () => DateTime(2026, 9, 7, 9, 0),
+      );
+      addTearDown(() {
+        widgetService.dispose();
+        rig.service.dispose();
+        debugDefaultTargetPlatformOverride = null;
+      });
+
+      await tester.pumpWidget(
+        wrap(
+          SettingsPage(
+            model: rig.model,
+            reminders: rig.service,
+            desktopWidgets: widgetService,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // 板块位置：课表 < 提醒与小组件 < 账号
+      final scheduleY = tester.getTopLeft(find.text('课表')).dy;
+      final sectionY = tester.getTopLeft(find.text('提醒与小组件')).dy;
+      final accountY = tester.getTopLeft(find.text('账号')).dy;
+      expect(sectionY, greaterThan(scheduleY));
+      expect(sectionY, lessThan(accountY));
+
+      // 卡片内顺序：课程提醒 -> 桌面小组件 -> 忽略电池优化 -> 精确闹钟 -> 自启动
+      final reminderY = tester.getTopLeft(find.text('课程提醒')).dy;
+      final widgetY = tester.getTopLeft(find.text('桌面小组件')).dy;
+      final batteryY = tester.getTopLeft(find.text('忽略电池优化')).dy;
+      final exactAlarmY = tester.getTopLeft(find.text('精确闹钟')).dy;
+      final autostartY = tester.getTopLeft(find.text('自启动')).dy;
+      expect(reminderY, lessThan(widgetY));
+      expect(widgetY, lessThan(batteryY));
+      expect(batteryY, lessThan(exactAlarmY));
+      expect(exactAlarmY, lessThan(autostartY));
+
+      expect(find.text('受省电策略限制 · 后台可能被清理'), findsOneWidget);
+      expect(find.text('未允许 · 息屏时可能推迟数分钟'), findsOneWidget);
+      expect(find.text('该权限不可检测，需自行确认'), findsOneWidget);
+
+      Future<void> tapPermissionAction(String title) async {
+        final tile = find.ancestor(
+          of: find.text(title),
+          matching: find.byType(ListTile),
+        );
+        await tester.ensureVisible(tile);
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.descendant(of: tile, matching: find.text('去设置')),
+        );
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(seconds: 3));
+      }
+
+      await tapPermissionAction('忽略电池优化');
+      expect(rig.gateway.batterySettingsCount, 1);
+
+      await tapPermissionAction('精确闹钟');
+      expect(rig.gateway.exactAlarmSettingsCount, 1);
+
+      await tapPermissionAction('自启动');
       expect(rig.gateway.autostartSettingsCount, 1);
       expect(rig.gateway.toasts, contains('请在设置顶部搜索「自启动」，开启本应用开关'));
 
-      rig.service.dispose();
+      // 模拟开启忽略电池优化并自动开启精确闹钟后切回 App
+      rig.gateway.statusValue = const ReminderRuntimeStatus(
+        notificationPermission: true,
+        notificationsEnabled: true,
+        exactAlarmAllowed: true,
+        batteryOptimizationIgnored: true,
+        autoStartVendorPage: false,
+      );
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(find.text('已忽略'), findsOneWidget);
+      expect(find.text('已允许'), findsOneWidget);
       debugDefaultTargetPlatformOverride = null;
     });
   });
@@ -4713,6 +4804,11 @@ void main() {
 
       await tester.pumpWidget(
         wrap(SettingsPage(model: model, desktopWidgets: service)),
+      );
+      await tester.scrollUntilVisible(
+        find.text('桌面小组件'),
+        120,
+        scrollable: find.byType(Scrollable).first,
       );
       expect(find.text('桌面小组件'), findsOneWidget);
 

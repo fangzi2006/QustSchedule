@@ -15,8 +15,8 @@ import '../src/reminder_gateway.dart';
 import '../src/reminder_planner.dart';
 import '../src/reminder_service.dart';
 import '../src/route_settled.dart';
-import '../theme/app_theme.dart';
 import '../widgets/app_snack_bar.dart';
+import '../widgets/reminder_permission_tile.dart';
 import '../widgets/section_title.dart';
 import '../widgets/tactile_button.dart';
 
@@ -142,24 +142,6 @@ class _ReminderPageState extends State<ReminderPage>
     await _refreshStatus();
   });
 
-  Future<void> _openExactAlarm() => _run(() async {
-    _guideToast('请开启「允许设置闹钟和提醒」以确保准时响铃');
-    await widget.service.openExactAlarmSettings();
-    await _refreshStatus();
-  });
-
-  Future<void> _openBattery() => _run(() async {
-    _guideToast('请在「耗电管理」或「省电策略」中允许后台运行');
-    await widget.service.openBatterySettings();
-    await _refreshStatus();
-  });
-
-  Future<void> _openAutostart() => _run(() async {
-    final vendor = await widget.service.openAutostartSettings();
-    _guideToast(vendor ? '请在列表中找到本应用并允许自启动' : '请在设置顶部搜索「自启动」，开启本应用开关');
-    await _refreshStatus();
-  });
-
   Future<void> _resync() => _run(() async {
     await widget.service.syncNow(force: true);
     await _refreshStatus();
@@ -189,20 +171,6 @@ class _ReminderPageState extends State<ReminderPage>
   Future<void> _testIn5s() => _testReminder(5);
 
   Future<void> _testInOneMinute() => _testReminder(60);
-
-  /// 跨应用跳转到系统设置页时的悬浮指路，避免切出本应用后页内胶囊被挡住。
-  void _guideToast(String message) {
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      unawaited(widget.service.showToast(message, longDuration: true));
-    } else {
-      if (!mounted) return;
-      showAppSnackBar(
-        context,
-        message: message,
-        duration: const Duration(seconds: 3),
-      );
-    }
-  }
 
   /// 页内操作结果与异常统一使用悬浮胶囊。
   void _feedbackSnackBar(String message, {bool isError = false}) {
@@ -241,9 +209,6 @@ class _ReminderPageState extends State<ReminderPage>
             statusNotifier: _statusNotifier,
             onRequestNotification: _requestNotification,
             onOpenNotificationSettings: _openNotificationSettings,
-            onOpenExactAlarm: _openExactAlarm,
-            onOpenBattery: _openBattery,
-            onOpenAutostart: _openAutostart,
           ),
           const SizedBox(height: 18),
           const SectionTitle('诊断'),
@@ -437,17 +402,11 @@ class _PermissionsCard extends StatelessWidget {
     required this.statusNotifier,
     required this.onRequestNotification,
     required this.onOpenNotificationSettings,
-    required this.onOpenExactAlarm,
-    required this.onOpenBattery,
-    required this.onOpenAutostart,
   });
 
   final ValueListenable<ReminderRuntimeStatus?> statusNotifier;
   final VoidCallback onRequestNotification;
   final VoidCallback onOpenNotificationSettings;
-  final VoidCallback onOpenExactAlarm;
-  final VoidCallback onOpenBattery;
-  final VoidCallback onOpenAutostart;
 
   @override
   Widget build(BuildContext context) {
@@ -456,52 +415,17 @@ class _PermissionsCard extends StatelessWidget {
       builder: (context, status, _) {
         final canNotify = status?.canNotify ?? false;
         return Card(
-          child: Column(
-            children: <Widget>[
-              _PermissionTile(
-                icon: Icons.notifications_outlined,
-                title: '通知权限',
-                value: status == null
-                    ? '查询中…'
-                    : (canNotify ? '已允许 · 横幅与锁屏需手动开启' : '已禁止 · 无法收到任何提醒'),
-                ok: canNotify,
-                actionLabel: canNotify ? '去设置' : '去授权',
-                onAction: canNotify
-                    ? onOpenNotificationSettings
-                    : onRequestNotification,
-              ),
-              const Divider(height: 0, indent: 56),
-              _PermissionTile(
-                icon: Icons.alarm_rounded,
-                title: '精确闹钟',
-                value: status == null
-                    ? '查询中…'
-                    : (status.exactAlarmAllowed ? '已允许' : '未允许 · 息屏时可能推迟数分钟'),
-                ok: status?.exactAlarmAllowed ?? false,
-                actionLabel: '去设置',
-                onAction: onOpenExactAlarm,
-              ),
-              const Divider(height: 0, indent: 56),
-              _PermissionTile(
-                icon: Icons.battery_saver_outlined,
-                title: '忽略电池优化',
-                value: status == null
-                    ? '查询中…'
-                    : (status.batteryOptOut ? '已忽略' : '受省电策略限制 · 后台可能被清理'),
-                ok: status?.batteryOptOut ?? false,
-                actionLabel: '去设置',
-                onAction: onOpenBattery,
-              ),
-              const Divider(height: 0, indent: 56),
-              _PermissionTile(
-                icon: Icons.power_settings_new_rounded,
-                title: '自启动',
-                value: '该权限不可检测，需自行确认',
-                ok: null,
-                actionLabel: '去设置',
-                onAction: onOpenAutostart,
-              ),
-            ],
+          child: ReminderPermissionTile(
+            icon: Icons.notifications_outlined,
+            title: '通知权限',
+            value: status == null
+                ? '查询中…'
+                : (canNotify ? '已允许 · 横幅与锁屏需手动开启' : '已禁止 · 无法收到任何提醒'),
+            ok: canNotify,
+            actionLabel: canNotify ? '去设置' : '去授权',
+            onAction: canNotify
+                ? onOpenNotificationSettings
+                : onRequestNotification,
           ),
         );
       },
@@ -635,45 +559,6 @@ String _timeText(int? ms) {
   final hour = value.hour.toString().padLeft(2, '0');
   final minute = value.minute.toString().padLeft(2, '0');
   return '${value.month}/${value.day} $hour:$minute';
-}
-
-class _PermissionTile extends StatelessWidget {
-  const _PermissionTile({
-    required this.icon,
-    required this.title,
-    required this.value,
-    required this.ok,
-    required this.actionLabel,
-    required this.onAction,
-  });
-
-  final IconData icon;
-  final String title;
-  final String value;
-  final bool? ok;
-  final String actionLabel;
-  final VoidCallback? onAction;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = AppColors.of(context);
-    final color = switch (ok) {
-      true => colors.success,
-      false => theme.colorScheme.error,
-      null => colors.warning,
-    };
-    return ListTile(
-      leading: Icon(icon, size: 20),
-      title: Text(title),
-      subtitle: Text(value, style: TextStyle(color: color)),
-      trailing: TactileActionButton(
-        variant: TactileActionVariant.text,
-        onPressed: onAction,
-        label: Text(actionLabel),
-      ),
-    );
-  }
 }
 
 class _LeadOptionPill extends StatelessWidget {
