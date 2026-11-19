@@ -89,6 +89,26 @@ class WidgetBridge(
                 }
             }
 
+            "renderWidgetPreview" -> {
+                val kind = call.argument<String>("kind") ?: KIND_TODAY
+                val payload = call.argument<String>("payload") ?: ""
+                val widthDp = (call.argument<Number>("widthDp"))?.toInt() ?: 336
+                val heightDp = (call.argument<Number>("heightDp"))?.toInt() ?: 176
+                val nowMs = (call.argument<Number>("nowMs"))?.toLong() ?: System.currentTimeMillis()
+                val isDarkWallpaper = call.argument<Boolean>("isDarkWallpaper") ?: false
+                WidgetPreviewRenderer.renderPngAsync(
+                    context = activity.applicationContext,
+                    kind = kind,
+                    payloadJson = payload,
+                    widthDp = widthDp,
+                    heightDp = heightDp,
+                    nowMs = nowMs,
+                    isDarkWallpaper = isDarkWallpaper,
+                ) { bytes ->
+                    postReply { result.success(bytes) }
+                }
+            }
+
             else -> result.notImplemented()
         }
     }

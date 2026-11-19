@@ -9,6 +9,8 @@
 ///   系统超大字体免疫（TextScaler 2.0 无溢出）以及 14 天过期快照提示。
 library;
 
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/pages/widget_settings_page.dart';
@@ -29,8 +31,87 @@ import 'support/fake_backend.dart';
 
 const String _baseUrl = 'https://jw.example.edu.cn/jwglxt';
 
+/// 合法的 1×1 透明 PNG，用于验证真实原生预览位图接入路径。
+final Uint8List _kTinyPng = Uint8List.fromList(const <int>[
+  0x89,
+  0x50,
+  0x4E,
+  0x47,
+  0x0D,
+  0x0A,
+  0x1A,
+  0x0A,
+  0x00,
+  0x00,
+  0x00,
+  0x0D,
+  0x49,
+  0x48,
+  0x44,
+  0x52,
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x08,
+  0x06,
+  0x00,
+  0x00,
+  0x00,
+  0x1F,
+  0x15,
+  0xC4,
+  0x89,
+  0x00,
+  0x00,
+  0x00,
+  0x0A,
+  0x49,
+  0x44,
+  0x41,
+  0x54,
+  0x78,
+  0x9C,
+  0x63,
+  0x00,
+  0x01,
+  0x00,
+  0x00,
+  0x05,
+  0x00,
+  0x01,
+  0x0D,
+  0x0A,
+  0x2D,
+  0xB4,
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+  0x49,
+  0x45,
+  0x4E,
+  0x44,
+  0xAE,
+  0x42,
+  0x60,
+  0x82,
+]);
+
 class _FakeGateway implements DesktopWidgetGateway {
+  _FakeGateway({this.previewBytes});
+
   int syncCount = 0;
+  int renderPreviewCount = 0;
+  DesktopWidgetKind? lastPreviewKind;
+  int? lastPreviewWidthDp;
+  int? lastPreviewHeightDp;
+  bool? lastPreviewDarkWallpaper;
+  Uint8List? previewBytes;
 
   @override
   Future<bool> syncSnapshot(String payloadJson) async {
@@ -47,6 +128,23 @@ class _FakeGateway implements DesktopWidgetGateway {
   @override
   Future<Map<DesktopWidgetKind, int>> getPinnedCounts() async =>
       const <DesktopWidgetKind, int>{};
+
+  @override
+  Future<Uint8List?> renderPreview({
+    required DesktopWidgetKind kind,
+    required String payloadJson,
+    required int widthDp,
+    required int heightDp,
+    required int nowMs,
+    required bool isDarkWallpaper,
+  }) async {
+    renderPreviewCount++;
+    lastPreviewKind = kind;
+    lastPreviewWidthDp = widthDp;
+    lastPreviewHeightDp = heightDp;
+    lastPreviewDarkWallpaper = isDarkWallpaper;
+    return previewBytes;
+  }
 }
 
 class _CountingWidgetService extends DesktopWidgetService {
@@ -1181,6 +1279,44 @@ void main() {
       final rangeRect = tester.getRect(find.text('9/7–9/13'));
       expect(rangeRect.left - weekRect.right, lessThanOrEqualTo(12.0));
       expect(rangeRect.left, greaterThan(weekRect.right));
+    });
+
+    testWidgets('原生真实预览返回 PNG 时展示真实 Image.memory 并透传标准尺寸与壁纸明暗', (tester) async {
+      final model = _createModel();
+      final gateway = _FakeGateway(previewBytes: _kTinyPng);
+      final service = _CountingWidgetService(
+        model: model,
+        gateway: gateway,
+        now: () => DateTime(2026, 9, 9, 10, 40),
+      );
+      addTearDown(() {
+        service.dispose();
+        model.dispose();
+      });
+
+      await tester.pumpWidget(
+        _wrapApp(WidgetSettingsPage(model: model, widgetService: service)),
+      );
+      await tester.pumpAndSettle();
+
+      // 初始为今日课表 4×2 宽卡（336×176）+ 柔光浅色壁纸（isDark=false）
+      expect(find.byType(Image), findsOneWidget);
+      expect(gateway.renderPreviewCount, greaterThanOrEqualTo(1));
+      expect(gateway.lastPreviewKind, DesktopWidgetKind.today);
+      expect(gateway.lastPreviewWidthDp, 336);
+      expect(gateway.lastPreviewHeightDp, 176);
+      expect(gateway.lastPreviewDarkWallpaper, isFalse);
+
+      // 切到 2×2 窄卡：请求 176×176 正方形真实预览
+      await tester.tap(find.text('4×2 宽卡'));
+      await tester.pumpAndSettle();
+      expect(gateway.lastPreviewWidthDp, 176);
+      expect(gateway.lastPreviewHeightDp, 176);
+
+      // 点深色桌面壁纸：isDarkWallpaper 切换为 true
+      await tester.tap(find.byTooltip('深色桌面'));
+      await tester.pumpAndSettle();
+      expect(gateway.lastPreviewDarkWallpaper, isTrue);
     });
   });
 }

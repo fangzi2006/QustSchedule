@@ -59,6 +59,15 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
   double? _radiusDraft;
   double? _fontScaleDraft;
 
+  // Android 原生真实离屏渲染预览状态（65ms 单飞节流 + 序号防乱序覆盖）。
+  Uint8List? _nativePreviewBytes;
+  DesktopWidgetKind? _nativePreviewKind;
+  Size? _nativePreviewSize;
+  bool _previewInFlight = false;
+  bool _previewQueued = false;
+  Timer? _previewThrottleTimer;
+  int _previewSeq = 0;
+
   bool _pinning = false;
   bool _initialPinnedQueried = false;
   RouteSettledHandle? _pinnedQueryHandle;
@@ -91,6 +100,9 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
     MethodChannelDesktopWidgetGateway.livePinnedCounts.addListener(
       _onLivePinnedCounts,
     );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _scheduleNativePreview(immediate: true);
+    });
   }
 
   @override
@@ -110,12 +122,15 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
     if (state == AppLifecycleState.resumed) {
       _refreshRealSnapshotCache(force: true);
       if (mounted) setState(() {});
+      _scheduleNativePreview(immediate: true);
       unawaited(_refreshPinnedCounts());
     }
   }
 
   @override
   void dispose() {
+    _previewThrottleTimer?.cancel();
+    _previewThrottleTimer = null;
     _pinnedQueryHandle?.cancel();
     _pinnedQueryHandle = null;
     widget.model.removeListener(_onSourceDataChanged);
@@ -157,6 +172,90 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
     _refreshRealSnapshotCache();
     if (mounted && prevKey != _lastDataKey) {
       setState(() {});
+      _scheduleNativePreview(immediate: true);
+    }
+  }
+
+  bool _nativePreviewMatches() {
+    final bytes = _nativePreviewBytes;
+    if (bytes == null || _nativePreviewKind != _selectedKind) return false;
+    final (wDp, hDp) = _previewTargetDp();
+    return _nativePreviewSize == Size(wDp.toDouble(), hDp.toDouble());
+  }
+
+  (int, int) _previewTargetDp() => switch (_selectedKind) {
+    DesktopWidgetKind.today => (_todayNarrow ? 176 : 336, 176),
+    DesktopWidgetKind.week => (316, 316),
+    DesktopWidgetKind.next => _nextWide ? (336, 76) : (176, 176),
+  };
+
+  void _scheduleNativePreview({required bool immediate}) {
+    if (!mounted) return;
+    if (immediate) {
+      _previewThrottleTimer?.cancel();
+      _previewThrottleTimer = null;
+      unawaited(_requestNativePreviewNow());
+      return;
+    }
+    if (_previewThrottleTimer != null) return;
+    _previewThrottleTimer = Timer(const Duration(milliseconds: 65), () {
+      _previewThrottleTimer = null;
+      if (mounted) {
+        unawaited(_requestNativePreviewNow());
+      }
+    });
+  }
+
+  Future<void> _requestNativePreviewNow() async {
+    if (!mounted) return;
+    if (_previewInFlight) {
+      _previewQueued = true;
+      return;
+    }
+    _previewInFlight = true;
+    _previewQueued = false;
+    final seq = ++_previewSeq;
+
+    final kind = _selectedKind;
+    final (wDp, hDp) = _previewTargetDp();
+    final style = _effectiveStyle();
+    final isDarkWallpaper = _wallpaper.brightness == Brightness.dark;
+    final now = _useSampleData ? _sampleClock : DateTime.now();
+    final baseSnapshot = _useSampleData
+        ? _cachedSampleSnapshot
+        : _cachedRealSnapshot;
+    final payloadJson = baseSnapshot != null
+        ? baseSnapshot.toPreviewPayloadJson(kind, style)
+        : buildSignedOutWidgetSnapshot(
+            widget.model.widgetConfig.withStyle(kind, style),
+            now: now,
+          ).toPayloadJson();
+
+    Uint8List? bytes;
+    try {
+      bytes = await widget.widgetService.renderPreview(
+        kind: kind,
+        payloadJson: payloadJson,
+        widthDp: wDp,
+        heightDp: hDp,
+        nowMs: now.millisecondsSinceEpoch,
+        isDarkWallpaper: isDarkWallpaper,
+      );
+    } finally {
+      _previewInFlight = false;
+    }
+
+    if (!mounted) return;
+    if (seq == _previewSeq && bytes != null && bytes.isNotEmpty) {
+      setState(() {
+        _nativePreviewBytes = bytes;
+        _nativePreviewKind = kind;
+        _nativePreviewSize = Size(wDp.toDouble(), hDp.toDouble());
+      });
+    }
+    if (_previewQueued) {
+      _previewQueued = false;
+      unawaited(_requestNativePreviewNow());
     }
   }
 
@@ -181,6 +280,7 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
       _radiusDraft = null;
       _fontScaleDraft = null;
     });
+    _scheduleNativePreview(immediate: true);
   }
 
   DesktopWidgetStyle _effectiveStyle() {
@@ -216,6 +316,7 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
       _fontScaleDraft = null;
     });
     await widget.model.setWidgetStyle(_selectedKind, next);
+    _scheduleNativePreview(immediate: true);
     // 落盘后立刻跳过 300ms 防抖推送给原生桌面，避免用户滑回桌面时外观尚未生效。
     unawaited(widget.widgetService.syncNow());
   }
@@ -241,6 +342,7 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
       _radiusDraft = null;
       _fontScaleDraft = null;
     });
+    _scheduleNativePreview(immediate: true);
     unawaited(widget.widgetService.syncNow());
     showAppSnackBar(
       context,
@@ -269,6 +371,7 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
       });
     }
     await widget.model.setWidgetStyle(kind, style);
+    _scheduleNativePreview(immediate: true);
     unawaited(widget.widgetService.syncNow());
   }
 
@@ -375,13 +478,28 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
                   wallpaper: _wallpaper,
                   todayNarrow: _todayNarrow,
                   nextWide: _nextWide,
+                  nativePreviewBytes: _nativePreviewMatches()
+                      ? _nativePreviewBytes
+                      : null,
+                  targetWidth: _previewTargetDp().$1.toDouble(),
+                  targetHeight: _previewTargetDp().$2.toDouble(),
                   pinnedCounts: _pinnedCounts,
-                  onToggleSampleData: (sample) =>
-                      setState(() => _useSampleData = sample),
-                  onSelectWallpaper: (wp) => setState(() => _wallpaper = wp),
-                  onToggleTodayNarrow: (narrow) =>
-                      setState(() => _todayNarrow = narrow),
-                  onToggleNextWide: (wide) => setState(() => _nextWide = wide),
+                  onToggleSampleData: (sample) {
+                    setState(() => _useSampleData = sample);
+                    _scheduleNativePreview(immediate: true);
+                  },
+                  onSelectWallpaper: (wp) {
+                    setState(() => _wallpaper = wp);
+                    _scheduleNativePreview(immediate: true);
+                  },
+                  onToggleTodayNarrow: (narrow) {
+                    setState(() => _todayNarrow = narrow);
+                    _scheduleNativePreview(immediate: true);
+                  },
+                  onToggleNextWide: (wide) {
+                    setState(() => _nextWide = wide);
+                    _scheduleNativePreview(immediate: true);
+                  },
                   onRequestPin: _pinSelectedWidget,
                 ),
               ),
@@ -431,6 +549,7 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
                               final atDef = (v - 1.0).abs() < 0.01;
                               _maybeHaptic(atDef, prevAtDef);
                               setState(() => _opacityDraft = v);
+                              _scheduleNativePreview(immediate: false);
                             },
                             onChangeEnd: (v) => unawaited(
                               _commitStyle(
@@ -457,6 +576,7 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
                                 final atDef = (v - 20.0).abs() < 0.5;
                                 _maybeHaptic(atDef, prevAtDef);
                                 setState(() => _radiusDraft = v);
+                                _scheduleNativePreview(immediate: false);
                               },
                               onChangeEnd: (v) => unawaited(
                                 _commitStyle(
@@ -490,6 +610,7 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
                               final atDef = (v - 1.0).abs() < 0.02;
                               _maybeHaptic(atDef, prevAtDef);
                               setState(() => _fontScaleDraft = v);
+                              _scheduleNativePreview(immediate: false);
                             },
                             onChangeEnd: (v) => unawaited(
                               _commitStyle(
@@ -675,6 +796,9 @@ class _PreviewStageHeaderDelegate extends SliverPersistentHeaderDelegate {
     required this.wallpaper,
     required this.todayNarrow,
     required this.nextWide,
+    required this.nativePreviewBytes,
+    required this.targetWidth,
+    required this.targetHeight,
     required this.pinnedCounts,
     required this.onToggleSampleData,
     required this.onSelectWallpaper,
@@ -697,6 +821,9 @@ class _PreviewStageHeaderDelegate extends SliverPersistentHeaderDelegate {
   final PreviewWallpaper wallpaper;
   final bool todayNarrow;
   final bool nextWide;
+  final Uint8List? nativePreviewBytes;
+  final double targetWidth;
+  final double targetHeight;
   final ValueNotifier<Map<DesktopWidgetKind, int>> pinnedCounts;
   final ValueChanged<bool> onToggleSampleData;
   final ValueChanged<PreviewWallpaper> onSelectWallpaper;
@@ -843,16 +970,29 @@ class _PreviewStageHeaderDelegate extends SliverPersistentHeaderDelegate {
                         child: Center(
                           child: FittedBox(
                             fit: BoxFit.scaleDown,
-                            child: DesktopWidgetPreview(
-                              kind: kind,
-                              style: style,
-                              snapshot: snapshot,
-                              useSampleData: useSampleData,
-                              todayNarrow: todayNarrow,
-                              nextWide: nextWide,
-                              now: previewNow,
-                              systemBrightness: wallpaper.brightness,
-                            ),
+                            child: nativePreviewBytes != null
+                                ? SizedBox(
+                                    width: targetWidth,
+                                    height: targetHeight,
+                                    child: Image.memory(
+                                      nativePreviewBytes!,
+                                      width: targetWidth,
+                                      height: targetHeight,
+                                      fit: BoxFit.fill,
+                                      filterQuality: FilterQuality.medium,
+                                      gaplessPlayback: true,
+                                    ),
+                                  )
+                                : DesktopWidgetPreview(
+                                    kind: kind,
+                                    style: style,
+                                    snapshot: snapshot,
+                                    useSampleData: useSampleData,
+                                    todayNarrow: todayNarrow,
+                                    nextWide: nextWide,
+                                    now: previewNow,
+                                    systemBrightness: wallpaper.brightness,
+                                  ),
                           ),
                         ),
                       ),
@@ -920,7 +1060,10 @@ class _PreviewStageHeaderDelegate extends SliverPersistentHeaderDelegate {
       oldDelegate.useSampleData != useSampleData ||
       oldDelegate.wallpaper != wallpaper ||
       oldDelegate.todayNarrow != todayNarrow ||
-      oldDelegate.nextWide != nextWide;
+      oldDelegate.nextWide != nextWide ||
+      oldDelegate.nativePreviewBytes != nativePreviewBytes ||
+      oldDelegate.targetWidth != targetWidth ||
+      oldDelegate.targetHeight != targetHeight;
 }
 
 class _KindSegmentedHeader extends StatelessWidget {

@@ -268,6 +268,24 @@ class WidgetSnapshot {
   };
 
   String toPayloadJson() => jsonEncode(toJson());
+
+  /// 生成仅替换指定形态样式的预览快照 JSON（用于原生真实预览，免重算整份 14 天课表）。
+  String toPreviewPayloadJson(
+    DesktopWidgetKind kind,
+    DesktopWidgetStyle overrideStyle,
+  ) => jsonEncode(<String, Object?>{
+    'v': widgetSnapshotVersion,
+    'signedIn': signedIn,
+    'termId': termId,
+    'termStartIso': termStartIso,
+    'maxWeek': maxWeek,
+    'days': <Object?>[for (final day in days) day.toJson()],
+    'upcomingExams': <Object?>[for (final exam in upcomingExams) exam.toJson()],
+    'weeks': <Object?>[for (final week in weeks) week.toJson()],
+    'styles': styles.withStyle(kind, overrideStyle).toJson(),
+    'generatedAtMs': generatedAtMs,
+    'fingerprint': fingerprint,
+  });
 }
 
 /// 构建未登录或无课表时的空态快照（保留用户自定义的样式配置）。

@@ -124,6 +124,47 @@ class TodayWidgetProvider : AppWidgetProvider() {
             WidgetStore.saveTodayWidthDp(context, appWidgetId, wDp)
             val isNarrow = TodayItemViewBinder.isNarrowWidth(wDp)
 
+            val views = buildRemoteViews(
+                context = context,
+                style = style,
+                theme = theme,
+                vm = vm,
+                wDp = wDp,
+                hDp = hDp,
+                nowMs = nowMs,
+                isNarrow = isNarrow,
+                bindList = { targetViews, items ->
+                    bindListItems(
+                        context,
+                        manager,
+                        targetViews,
+                        appWidgetId,
+                        items,
+                        style,
+                        theme,
+                        nowMs,
+                        isNarrow,
+                        notifyList,
+                    )
+                },
+            )
+            val launchIntent = WidgetCoordinator.createLaunchPendingIntent(context)
+            views.setOnClickPendingIntent(R.id.widget_today_root, launchIntent)
+            views.setOnClickPendingIntent(R.id.widget_today_list_container, launchIntent)
+            manager.updateAppWidget(appWidgetId, views)
+        }
+
+        internal fun buildRemoteViews(
+            context: Context,
+            style: WidgetStyleData,
+            theme: ResolvedWidgetTheme,
+            vm: TodayWidgetViewModel,
+            wDp: Int,
+            hDp: Int,
+            nowMs: Long,
+            isNarrow: Boolean,
+            bindList: ((RemoteViews, List<TimelineItemData>) -> Unit)? = null,
+        ): RemoteViews {
             val views = RemoteViews(context.packageName, R.layout.widget_today)
             if (style.backgroundOpacity <= 0.01f) {
                 views.setViewVisibility(R.id.widget_today_bg, View.GONE)
@@ -139,11 +180,12 @@ class TodayWidgetProvider : AppWidgetProvider() {
 
             val hasVisibleCard = style.backgroundOpacity > 0.01f
             val clearance = WidgetBackgroundRenderer.cornerClearanceDp(style)
+            val sideClearance = if (hasVisibleCard) style.cornerRadius * 0.16f else 0f
             val baseH = when {
-                isNarrow && compact -> 6.5f
-                isNarrow -> 8.5f
-                compact -> 8.5f
-                else -> 11.5f
+                isNarrow && compact -> 4.0f
+                isNarrow -> 4.8f
+                compact -> 5.0f
+                else -> 6.0f
             }
             val baseV = when {
                 isNarrow && compact -> 5.5f
@@ -151,20 +193,26 @@ class TodayWidgetProvider : AppWidgetProvider() {
                 compact -> 7.0f
                 else -> 10.0f
             }
-            val padH = dpPx(maxOf(baseH, clearance + 1.5f))
+            val padH = dpPx(maxOf(baseH, sideClearance))
             val padTop = dpPx(maxOf(baseV, clearance))
             // 去除下方空白白边：内容直抵 1dp 外描边内缘（0% 透明直接到 0）。
             val padBottom = dpPx(if (hasVisibleCard) 1f else 0f)
             views.setViewPadding(R.id.widget_today_content, padH, padTop, padH, padBottom)
+
+            val headerCornerInset = if (hasVisibleCard && style.cornerRadius > 20f) {
+                dpPx((style.cornerRadius - 20f) * 0.30f)
+            } else {
+                0
+            }
 
             if (style.showHeader) {
                 views.setViewVisibility(R.id.widget_today_header, View.VISIBLE)
                 views.setViewVisibility(R.id.widget_today_compact_cue_box, View.GONE)
                 views.setViewPadding(
                     R.id.widget_today_header,
+                    headerCornerInset,
                     0,
-                    0,
-                    0,
+                    headerCornerInset,
                     dpPx(if (compact) 3.5f else 5.5f),
                 )
 
@@ -216,6 +264,13 @@ class TodayWidgetProvider : AppWidgetProvider() {
                 // 即使关闭顶部标题栏，展示明日预告时仍保留精简明日提示，防止误把明日当今日。
                 if (vm.isTomorrow && vm.compactCue.isNotEmpty()) {
                     views.setViewVisibility(R.id.widget_today_compact_cue_box, View.VISIBLE)
+                    views.setViewPadding(
+                        R.id.widget_today_compact_cue_box,
+                        headerCornerInset,
+                        0,
+                        headerCornerInset,
+                        dpPx(3f),
+                    )
                     views.setTextViewText(R.id.widget_today_compact_cue, vm.compactCue)
                     WidgetThemeResolver.applyPill(views, R.id.widget_today_compact_cue, theme, WidgetPillTone.TOMORROW)
                     views.setViewPadding(
@@ -236,17 +291,17 @@ class TodayWidgetProvider : AppWidgetProvider() {
             }
 
             if (vm.items.isNotEmpty()) {
-                views.setViewVisibility(R.id.widget_today_list, View.VISIBLE)
+                views.setViewVisibility(R.id.widget_today_list_container, View.VISIBLE)
                 views.setViewVisibility(R.id.widget_today_empty_box, View.GONE)
                 views.setViewVisibility(R.id.widget_today_exam_box, View.GONE)
-                bindListItems(context, manager, views, appWidgetId, vm.items, style, theme, nowMs, isNarrow, notifyList)
+                bindList?.invoke(views, vm.items)
             } else if (vm.examBanner != null) {
-                views.setViewVisibility(R.id.widget_today_list, View.GONE)
+                views.setViewVisibility(R.id.widget_today_list_container, View.GONE)
                 views.setViewVisibility(R.id.widget_today_empty_box, View.GONE)
                 views.setViewVisibility(R.id.widget_today_exam_box, View.VISIBLE)
                 bindExamBanner(context, views, vm.examBanner, style, theme, nowMs, isNarrow)
             } else {
-                views.setViewVisibility(R.id.widget_today_list, View.GONE)
+                views.setViewVisibility(R.id.widget_today_list_container, View.GONE)
                 views.setViewVisibility(R.id.widget_today_exam_box, View.GONE)
                 views.setViewVisibility(R.id.widget_today_empty_box, View.VISIBLE)
                 views.setTextViewText(R.id.widget_today_empty_text, vm.emptyMessage)
@@ -258,11 +313,7 @@ class TodayWidgetProvider : AppWidgetProvider() {
                 )
             }
 
-            views.setOnClickPendingIntent(
-                R.id.widget_today_root,
-                WidgetCoordinator.createLaunchPendingIntent(context),
-            )
-            manager.updateAppWidget(appWidgetId, views)
+            return views
         }
 
         private fun bindListItems(

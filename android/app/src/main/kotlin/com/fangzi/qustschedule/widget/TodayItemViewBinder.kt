@@ -58,7 +58,7 @@ internal object TodayItemViewBinder {
             WidgetThemeResolver.clearBackground(views, R.id.widget_today_item_root)
         }
 
-        val rowHPadPx = dpPx(if (isNarrow) 2.5f else 4.0f)
+        val rowHPadPx = dpPx(if (isNarrow) 1.5f else 2.0f)
         val rowVPadPx = dpPx(
             when {
                 isNarrow && compact -> 1.5f

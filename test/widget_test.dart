@@ -4,7 +4,7 @@
 library;
 
 import 'dart:async';
-import 'dart:typed_data' show Float64List;
+import 'dart:typed_data' show Float64List, Uint8List;
 import 'dart:ui' as ui;
 
 import 'package:qustschedule/main.dart' show pageForStatus;
@@ -4806,6 +4806,16 @@ class _FakeWidgetGateway implements DesktopWidgetGateway {
   @override
   Future<Map<DesktopWidgetKind, int>> getPinnedCounts() async =>
       const <DesktopWidgetKind, int>{DesktopWidgetKind.week: 1};
+
+  @override
+  Future<Uint8List?> renderPreview({
+    required DesktopWidgetKind kind,
+    required String payloadJson,
+    required int widthDp,
+    required int heightDp,
+    required int nowMs,
+    required bool isDarkWallpaper,
+  }) async => null;
 }
 
 class _DisposeNotifyHelper extends StatefulWidget {

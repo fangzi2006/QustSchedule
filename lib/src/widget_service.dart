@@ -7,6 +7,7 @@
 library;
 
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:zf_academic/zf_academic.dart';
 
@@ -159,6 +160,23 @@ class DesktopWidgetService {
 
   Future<Map<DesktopWidgetKind, int>> getPinnedCounts() =>
       _gateway.getPinnedCounts();
+
+  /// 调用 Android 原生同源渲染器离屏绘制真实小组件 PNG 位图。
+  Future<Uint8List?> renderPreview({
+    required DesktopWidgetKind kind,
+    required String payloadJson,
+    required int widthDp,
+    required int heightDp,
+    required int nowMs,
+    required bool isDarkWallpaper,
+  }) => _gateway.renderPreview(
+    kind: kind,
+    payloadJson: payloadJson,
+    widthDp: widthDp,
+    heightDp: heightDp,
+    nowMs: nowMs,
+    isDarkWallpaper: isDarkWallpaper,
+  );
 
   /// 若底层为原生 MethodChannel，确保已挂载桌面实例变更推送处理器。
   void ensureLivePinnedUpdates() {

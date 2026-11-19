@@ -87,6 +87,22 @@ class NextClassWidgetProvider : AppWidgetProvider() {
             val vm = WidgetContentResolver.resolveNext(snapshot, style, nowMs)
 
             val (wDp, hDp) = WidgetBackgroundRenderer.resolveSizeDp(context, options, 150, 140)
+            val views = buildRemoteViews(context, style, theme, vm, wDp, hDp)
+            views.setOnClickPendingIntent(
+                R.id.widget_next_root,
+                WidgetCoordinator.createLaunchPendingIntent(context),
+            )
+            manager.updateAppWidget(appWidgetId, views)
+        }
+
+        internal fun buildRemoteViews(
+            context: Context,
+            style: WidgetStyleData,
+            theme: ResolvedWidgetTheme,
+            vm: NextWidgetViewModel,
+            wDp: Int,
+            hDp: Int,
+        ): RemoteViews {
             // 覆盖 2×1 / 3×1 / 4×1 / 2×2 / 4×2 全部桌面栅格尺寸：
             // hDp < 100 统一走双栏 2 行条形布局，杜绝 4×1 / 2×1 纵向截断。
             val isStrip = hDp < 100
@@ -242,11 +258,7 @@ class NextClassWidgetProvider : AppWidgetProvider() {
                 views.setViewVisibility(R.id.widget_next_subtitle, View.GONE)
             }
 
-            views.setOnClickPendingIntent(
-                R.id.widget_next_root,
-                WidgetCoordinator.createLaunchPendingIntent(context),
-            )
-            manager.updateAppWidget(appWidgetId, views)
+            return views
         }
     }
 }

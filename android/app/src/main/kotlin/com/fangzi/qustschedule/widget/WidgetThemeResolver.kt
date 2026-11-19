@@ -123,9 +123,14 @@ internal data class ResolvedWidgetTheme(
 
 internal object WidgetThemeResolver {
 
-    fun resolve(context: Context, style: WidgetStyleData): ResolvedWidgetTheme {
-        val systemNight = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
-            Configuration.UI_MODE_NIGHT_YES
+    fun resolve(
+        context: Context,
+        style: WidgetStyleData,
+        nightModeOverride: Boolean? = null,
+    ): ResolvedWidgetTheme {
+        val systemNight = nightModeOverride
+            ?: ((context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+                Configuration.UI_MODE_NIGHT_YES)
         val isDark = when (style.themeMode) {
             "light" -> false
             "dark" -> true

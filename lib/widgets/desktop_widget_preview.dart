@@ -690,11 +690,16 @@ class _TodayPreviewCard extends StatelessWidget {
     final compact = style.density == WidgetDensity.compact;
     final scale = style.fontScale;
     final resolved = _resolveTodayForPreview(snapshot, style, now);
+    final hasVisibleCard = style.backgroundOpacity > 0.01;
     final clearance = _cornerClearance(style);
-    final baseH = narrow ? (compact ? 6.5 : 8.5) : (compact ? 8.5 : 11.5);
+    final sideClearance = hasVisibleCard ? style.cornerRadius * 0.16 : 0.0;
+    final baseH = narrow ? (compact ? 4.0 : 4.8) : (compact ? 5.0 : 6.0);
     final baseV = narrow ? (compact ? 5.5 : 7.5) : (compact ? 7.0 : 10.0);
-    final padH = math.max(baseH, clearance + 1.5);
+    final padH = math.max(baseH, sideClearance);
     final padTop = math.max(baseV, clearance);
+    final headerCornerInset = hasVisibleCard && style.cornerRadius > 20.0
+        ? (style.cornerRadius - 20.0) * 0.30
+        : 0.0;
 
     // 2×2 窄卡保持 1:1 正方形（176×176），4×2 宽卡同高横拉（336×176），贴近主流桌面栅格比例；
     // 底部内边距归零，内容直抵 1dp 外描边内缘，彻底去除下方白边。
@@ -708,54 +713,60 @@ class _TodayPreviewCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           if (style.showHeader) ...<Widget>[
-            Row(
-              children: <Widget>[
-                if (resolved.badgeText.isNotEmpty) ...<Widget>[
-                  _PreviewPill(
-                    label: resolved.badgeText,
-                    tone: resolved.badgeTone,
-                    colors: colors,
-                    fontSize: (narrow ? 8.5 : 9.2) * scale,
-                  ),
-                  const SizedBox(width: 5),
-                ],
-                Expanded(
-                  child: Text(
-                    resolved.headerTitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: (narrow ? 10.5 : 11.5) * scale,
-                      fontWeight: FontWeight.w700,
-                      color: resolved.isTomorrow
-                          ? colors.primaryText
-                          : colors.accent,
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: headerCornerInset),
+              child: Row(
+                children: <Widget>[
+                  if (resolved.badgeText.isNotEmpty) ...<Widget>[
+                    _PreviewPill(
+                      label: resolved.badgeText,
+                      tone: resolved.badgeTone,
+                      colors: colors,
+                      fontSize: (narrow ? 8.5 : 9.2) * scale,
+                    ),
+                    const SizedBox(width: 5),
+                  ],
+                  Expanded(
+                    child: Text(
+                      resolved.headerTitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: (narrow ? 10.5 : 11.5) * scale,
+                        fontWeight: FontWeight.w700,
+                        color: resolved.isTomorrow
+                            ? colors.primaryText
+                            : colors.accent,
+                      ),
                     ),
                   ),
-                ),
-                if (resolved.headerRight.isNotEmpty) ...<Widget>[
-                  const SizedBox(width: 6),
-                  Text(
-                    resolved.headerRight,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: (narrow ? 9.2 : 10.0) * scale,
-                      color: colors.secondaryText,
+                  if (resolved.headerRight.isNotEmpty) ...<Widget>[
+                    const SizedBox(width: 6),
+                    Text(
+                      resolved.headerRight,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: (narrow ? 9.2 : 10.0) * scale,
+                        color: colors.secondaryText,
+                      ),
                     ),
-                  ),
+                  ],
                 ],
-              ],
+              ),
             ),
             SizedBox(height: compact ? 3.5 : 5.5),
           ] else if (resolved.isTomorrow &&
               resolved.compactCue.isNotEmpty) ...<Widget>[
-            _PreviewPill(
-              label: resolved.compactCue,
-              tone: _PreviewPillTone.tomorrow,
-              colors: colors,
-              fontSize: (narrow ? 8.2 : 8.8) * scale,
-              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: headerCornerInset),
+              child: _PreviewPill(
+                label: resolved.compactCue,
+                tone: _PreviewPillTone.tomorrow,
+                colors: colors,
+                fontSize: (narrow ? 8.2 : 8.8) * scale,
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              ),
             ),
             const SizedBox(height: 3),
           ],
@@ -829,7 +840,7 @@ class _TodayPreviewItemTile extends StatelessWidget {
         finished && style.finishedCourseMode == FinishedCourseMode.dim;
     final chip = colors.chipColor(item.colorIndex);
 
-    final rowHPad = narrow ? 2.5 : 4.0;
+    final rowHPad = narrow ? 1.5 : 2.0;
     final rowVPad = narrow ? (compact ? 1.5 : 2.5) : (compact ? 2.0 : 3.0);
     final barLeftGap = narrow ? 3.5 : 4.0;
     final barRightGap = narrow ? 4.0 : 4.5;
