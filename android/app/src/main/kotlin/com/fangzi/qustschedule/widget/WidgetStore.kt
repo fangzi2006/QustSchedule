@@ -29,15 +29,12 @@ internal data class WidgetStyleData(
             val base = defaultFor(kind)
             if (obj == null) return base
             return WidgetStyleData(
-                preset = obj.optString("preset", base.preset),
-                themeMode = obj.optString("themeMode", base.themeMode),
-                backgroundOpacity = obj.optDouble("backgroundOpacity", base.backgroundOpacity.toDouble())
-                    .toFloat().coerceIn(0f, 1f),
-                cornerRadius = obj.optDouble("cornerRadius", base.cornerRadius.toDouble())
-                    .toFloat().coerceIn(8f, 28f),
-                fontScale = obj.optDouble("fontScale", base.fontScale.toDouble())
-                    .toFloat().coerceIn(0.75f, 1.20f),
-                density = obj.optString("density", base.density),
+                preset = obj.optNonNullString("preset", base.preset),
+                themeMode = obj.optNonNullString("themeMode", base.themeMode),
+                backgroundOpacity = obj.optFiniteFloat("backgroundOpacity", base.backgroundOpacity, 0f, 1f),
+                cornerRadius = obj.optFiniteFloat("cornerRadius", base.cornerRadius, 8f, 28f),
+                fontScale = obj.optFiniteFloat("fontScale", base.fontScale, 0.75f, 1.20f),
+                density = obj.optNonNullString("density", base.density),
                 showHeader = if (obj.has("showHeader")) obj.optBoolean("showHeader", base.showHeader) else base.showHeader,
                 showLocation = if (obj.has("showLocation")) obj.optBoolean("showLocation", base.showLocation) else base.showLocation,
                 showTeacher = if (obj.has("showTeacher")) obj.optBoolean("showTeacher", base.showTeacher) else base.showTeacher,
@@ -48,8 +45,8 @@ internal data class WidgetStyleData(
                 } else {
                     base.autoSwitchTomorrow
                 },
-                finishedCourseMode = obj.optString("finishedCourseMode", base.finishedCourseMode),
-                weekendMode = obj.optString("weekendMode", base.weekendMode),
+                finishedCourseMode = obj.optNonNullString("finishedCourseMode", base.finishedCourseMode),
+                weekendMode = obj.optNonNullString("weekendMode", base.weekendMode),
             )
         }
     }
@@ -314,6 +311,21 @@ internal data class WidgetSnapshotModel(
 internal const val KIND_TODAY = "today"
 internal const val KIND_WEEK = "week"
 internal const val KIND_NEXT = "next"
+
+private fun JSONObject.optNonNullString(key: String, fallback: String): String =
+    if (isNull(key)) fallback else optString(key, fallback)
+
+private fun JSONObject.optFiniteFloat(
+    key: String,
+    fallback: Float,
+    minValue: Float,
+    maxValue: Float,
+): Float {
+    if (isNull(key)) return fallback
+    val raw = optDouble(key, fallback.toDouble())
+    if (raw.isNaN() || raw.isInfinite()) return fallback
+    return raw.toFloat().coerceIn(minValue, maxValue)
+}
 
 internal object WidgetStore {
 

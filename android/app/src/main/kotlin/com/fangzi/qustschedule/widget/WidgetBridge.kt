@@ -55,37 +55,49 @@ class WidgetBridge(
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "syncSnapshot" -> {
-                val payload = call.argument<String>("payload") ?: ""
+                val payload = call.argument<Any>("payload") as? String ?: ""
                 val appContext = activity.applicationContext
                 WidgetWorker.execute {
-                    val previous = WidgetStore.loadSnapshot(appContext)
-                    val saved = WidgetStore.saveSnapshot(appContext, payload)
-                    if (saved != null) {
-                        WidgetCoordinator.refreshChangedWidgets(appContext, previous, saved)
+                    try {
+                        val previous = WidgetStore.loadSnapshot(appContext)
+                        val saved = WidgetStore.saveSnapshot(appContext, payload)
+                        if (saved != null) {
+                            WidgetCoordinator.refreshChangedWidgets(appContext, previous, saved)
+                        }
+                        postReply { result.success(saved != null) }
+                    } catch (t: Throwable) {
+                        postReply { result.error("WIDGET_ERROR", t.message, null) }
                     }
-                    postReply { result.success(saved != null) }
                 }
             }
 
             "clearSnapshot" -> {
                 val appContext = activity.applicationContext
                 WidgetWorker.execute {
-                    WidgetStore.clear(appContext)
-                    WidgetCoordinator.refreshAllWidgets(appContext)
-                    postReply { result.success(null) }
+                    try {
+                        WidgetStore.clear(appContext)
+                        WidgetCoordinator.refreshAllWidgets(appContext)
+                        postReply { result.success(null) }
+                    } catch (t: Throwable) {
+                        postReply { result.error("WIDGET_ERROR", t.message, null) }
+                    }
                 }
             }
 
             "requestPinWidget" -> {
-                val kind = call.argument<String>("kind") ?: ""
+                val kind = call.argument<Any>("kind") as? String ?: ""
                 result.success(requestPin(kind))
             }
 
             "getPinnedCounts" -> {
                 val appContext = activity.applicationContext
                 WidgetWorker.execute {
-                    val counts = WidgetCoordinator.getPinnedCounts(appContext)
-                    postReply { result.success(counts) }
+                    try {
+                        val counts = WidgetCoordinator.getPinnedCounts(appContext)
+                        postReply { result.success(counts) }
+                    } catch (t: Throwable) {
+                        postReply { result.error("WIDGET_ERROR", t.message, null) }
+                    }
                 }
             }
 

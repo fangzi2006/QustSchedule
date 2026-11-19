@@ -1,5 +1,6 @@
 package com.fangzi.qustschedule.widget
 
+import android.app.AlarmManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -21,6 +22,9 @@ class WidgetRefreshReceiver : BroadcastReceiver() {
                 }
                 WidgetRefreshScheduler.ACTION_WIDGET_PINNED -> {
                     WidgetCoordinator.notifyPinnedCountsChanged(appContext)
+                    WidgetCoordinator.syncAlarmState(appContext)
+                }
+                AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED -> {
                     WidgetCoordinator.syncAlarmState(appContext)
                 }
                 else -> {
