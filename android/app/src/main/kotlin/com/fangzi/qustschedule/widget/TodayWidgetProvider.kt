@@ -124,47 +124,6 @@ class TodayWidgetProvider : AppWidgetProvider() {
             WidgetStore.saveTodayWidthDp(context, appWidgetId, wDp)
             val isNarrow = TodayItemViewBinder.isNarrowWidth(wDp)
 
-            val views = buildRemoteViews(
-                context = context,
-                style = style,
-                theme = theme,
-                vm = vm,
-                wDp = wDp,
-                hDp = hDp,
-                nowMs = nowMs,
-                isNarrow = isNarrow,
-                bindList = { targetViews, items ->
-                    bindListItems(
-                        context,
-                        manager,
-                        targetViews,
-                        appWidgetId,
-                        items,
-                        style,
-                        theme,
-                        nowMs,
-                        isNarrow,
-                        notifyList,
-                    )
-                },
-            )
-            val launchIntent = WidgetCoordinator.createLaunchPendingIntent(context)
-            views.setOnClickPendingIntent(R.id.widget_today_root, launchIntent)
-            views.setOnClickPendingIntent(R.id.widget_today_list_container, launchIntent)
-            manager.updateAppWidget(appWidgetId, views)
-        }
-
-        internal fun buildRemoteViews(
-            context: Context,
-            style: WidgetStyleData,
-            theme: ResolvedWidgetTheme,
-            vm: TodayWidgetViewModel,
-            wDp: Int,
-            hDp: Int,
-            nowMs: Long,
-            isNarrow: Boolean,
-            bindList: ((RemoteViews, List<TimelineItemData>) -> Unit)? = null,
-        ): RemoteViews {
             val views = RemoteViews(context.packageName, R.layout.widget_today)
             if (style.backgroundOpacity <= 0.01f) {
                 views.setViewVisibility(R.id.widget_today_bg, View.GONE)
@@ -193,17 +152,17 @@ class TodayWidgetProvider : AppWidgetProvider() {
                 compact -> 7.0f
                 else -> 10.0f
             }
-            val padH = dpPx(maxOf(baseH, sideClearance))
+            val padHDp = maxOf(baseH, sideClearance)
+            val padH = dpPx(padHDp)
             val padTop = dpPx(maxOf(baseV, clearance))
             // 去除下方空白白边：内容直抵 1dp 外描边内缘（0% 透明直接到 0）。
             val padBottom = dpPx(if (hasVisibleCard) 1f else 0f)
             views.setViewPadding(R.id.widget_today_content, padH, padTop, padH, padBottom)
 
-            val headerCornerInset = if (hasVisibleCard && style.cornerRadius > 20f) {
-                dpPx((style.cornerRadius - 20f) * 0.30f)
-            } else {
-                0
-            }
+            // 顶栏周次与角标参考本周课表设计右移避开左上/右上圆角，列表下方保持窄边距给课程留出更多空间。
+            val weekAlignedHeaderStartDp = maxOf(if (compact) 6.0f else 9.0f, clearance) +
+                if (hasVisibleCard) 2.5f else 0f
+            val headerCornerInset = dpPx((weekAlignedHeaderStartDp - padHDp).coerceAtLeast(0f))
 
             if (style.showHeader) {
                 views.setViewVisibility(R.id.widget_today_header, View.VISIBLE)
@@ -261,7 +220,7 @@ class TodayWidgetProvider : AppWidgetProvider() {
                 }
             } else {
                 views.setViewVisibility(R.id.widget_today_header, View.GONE)
-                // 即使关闭顶部标题栏，展示明日预告时仍保留精简明日提示，防止误把明日当今日。
+                // 即使关闭顶部标题栏，展示明日时仍保留精简明日提示，防止误把明日当今日。
                 if (vm.isTomorrow && vm.compactCue.isNotEmpty()) {
                     views.setViewVisibility(R.id.widget_today_compact_cue_box, View.VISIBLE)
                     views.setViewPadding(
@@ -294,7 +253,7 @@ class TodayWidgetProvider : AppWidgetProvider() {
                 views.setViewVisibility(R.id.widget_today_list_container, View.VISIBLE)
                 views.setViewVisibility(R.id.widget_today_empty_box, View.GONE)
                 views.setViewVisibility(R.id.widget_today_exam_box, View.GONE)
-                bindList?.invoke(views, vm.items)
+                bindListItems(context, manager, views, appWidgetId, vm.items, style, theme, nowMs, isNarrow, notifyList)
             } else if (vm.examBanner != null) {
                 views.setViewVisibility(R.id.widget_today_list_container, View.GONE)
                 views.setViewVisibility(R.id.widget_today_empty_box, View.GONE)
@@ -313,7 +272,10 @@ class TodayWidgetProvider : AppWidgetProvider() {
                 )
             }
 
-            return views
+            val launchIntent = WidgetCoordinator.createLaunchPendingIntent(context)
+            views.setOnClickPendingIntent(R.id.widget_today_root, launchIntent)
+            views.setOnClickPendingIntent(R.id.widget_today_list_container, launchIntent)
+            manager.updateAppWidget(appWidgetId, views)
         }
 
         private fun bindListItems(

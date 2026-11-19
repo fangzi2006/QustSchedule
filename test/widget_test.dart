@@ -4,7 +4,7 @@
 library;
 
 import 'dart:async';
-import 'dart:typed_data' show Float64List, Uint8List;
+import 'dart:typed_data' show Float64List;
 import 'dart:ui' as ui;
 
 import 'package:qustschedule/main.dart' show pageForStatus;
@@ -4720,12 +4720,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(WidgetSettingsPage), findsOneWidget);
       expect(find.byType(ChoiceChip), findsNothing);
-
-      // 今日课表支持在预览舞台切换 4×2 宽卡 与 2×2 窄卡
-      expect(find.text('4×2 宽卡'), findsOneWidget);
-      await tester.tap(find.text('4×2 宽卡'));
-      await tester.pumpAndSettle();
-      expect(find.text('2×2 窄卡'), findsOneWidget);
+      expect(find.textContaining('小窗或分屏'), findsOneWidget);
 
       // 套用「通透磨砂」只更新今日课表并立即触发原生同步，不影响本周课表
       final beforeSync = gateway.syncCount;
@@ -4806,16 +4801,6 @@ class _FakeWidgetGateway implements DesktopWidgetGateway {
   @override
   Future<Map<DesktopWidgetKind, int>> getPinnedCounts() async =>
       const <DesktopWidgetKind, int>{DesktopWidgetKind.week: 1};
-
-  @override
-  Future<Uint8List?> renderPreview({
-    required DesktopWidgetKind kind,
-    required String payloadJson,
-    required int widthDp,
-    required int heightDp,
-    required int nowMs,
-    required bool isDarkWallpaper,
-  }) async => null;
 }
 
 class _DisposeNotifyHelper extends StatefulWidget {

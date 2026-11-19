@@ -26,18 +26,6 @@ abstract class DesktopWidgetGateway {
 
   /// 查询各形态小组件当前已添加到桌面的实例数量。
   Future<Map<DesktopWidgetKind, int>> getPinnedCounts();
-
-  /// 调用 Android 原生同源渲染器离屏绘制真实小组件 PNG 位图，用于设置页 1:1 真实预览。
-  ///
-  /// 非 Android 平台、测试假实现或渲染异常时返回 `null`，页面平稳回落至轻量占位预览。
-  Future<Uint8List?> renderPreview({
-    required DesktopWidgetKind kind,
-    required String payloadJson,
-    required int widthDp,
-    required int heightDp,
-    required int nowMs,
-    required bool isDarkWallpaper,
-  });
 }
 
 class MethodChannelDesktopWidgetGateway implements DesktopWidgetGateway {
@@ -130,34 +118,6 @@ class MethodChannelDesktopWidgetGateway implements DesktopWidgetGateway {
       return const <DesktopWidgetKind, int>{};
     } on PlatformException {
       return const <DesktopWidgetKind, int>{};
-    }
-  }
-
-  @override
-  Future<Uint8List?> renderPreview({
-    required DesktopWidgetKind kind,
-    required String payloadJson,
-    required int widthDp,
-    required int heightDp,
-    required int nowMs,
-    required bool isDarkWallpaper,
-  }) async {
-    try {
-      return await channel.invokeMethod<Uint8List>(
-        'renderWidgetPreview',
-        <String, Object?>{
-          'kind': kind.wireName,
-          'payload': payloadJson,
-          'widthDp': widthDp,
-          'heightDp': heightDp,
-          'nowMs': nowMs,
-          'isDarkWallpaper': isDarkWallpaper,
-        },
-      );
-    } on MissingPluginException {
-      return null;
-    } on PlatformException {
-      return null;
     }
   }
 }

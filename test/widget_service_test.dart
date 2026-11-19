@@ -2,7 +2,6 @@
 library;
 
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/src/app_model.dart';
@@ -47,16 +46,6 @@ class FakeDesktopWidgetGateway implements DesktopWidgetGateway {
 
   @override
   Future<Map<DesktopWidgetKind, int>> getPinnedCounts() async => pinnedCounts;
-
-  @override
-  Future<Uint8List?> renderPreview({
-    required DesktopWidgetKind kind,
-    required String payloadJson,
-    required int widthDp,
-    required int heightDp,
-    required int nowMs,
-    required bool isDarkWallpaper,
-  }) async => null;
 }
 
 AppModel _buildModel({Preferences? preferences}) => AppModel(
