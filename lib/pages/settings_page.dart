@@ -20,6 +20,7 @@ import '../src/preferences_repository.dart';
 import '../src/reminder_service.dart';
 import '../src/term_calendar.dart' show formatIsoDate;
 import '../src/timetable.dart' show formatMonthDayDate;
+import '../src/widget_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_snack_bar.dart';
 import '../widgets/floating_dock.dart';
@@ -30,14 +31,23 @@ import 'reminder_page.dart';
 import 'schedule_page.dart' show showCalibrateSheet;
 import 'school_address_page.dart';
 import 'timetable_list_page.dart';
+import 'widget_settings_page.dart';
 
 class SettingsPage extends StatelessWidget {
-  const SettingsPage({super.key, required this.model, this.reminders});
+  const SettingsPage({
+    super.key,
+    required this.model,
+    this.reminders,
+    this.desktopWidgets,
+  });
 
   final AppModel model;
 
   /// 课程提醒编排层。null = 当前宿主（桌面 / 测试）没有挂它，入口不显示。
   final ReminderService? reminders;
+
+  /// 桌面小组件编排层。仅 Android 挂上，桌面端 / 测试为 null 时不显示入口。
+  final DesktopWidgetService? desktopWidgets;
 
   @override
   Widget build(BuildContext context) {
@@ -115,6 +125,25 @@ class SettingsPage extends StatelessWidget {
                           MaterialPageRoute<void>(
                             builder: (_) =>
                                 ReminderPage(model: model, service: reminders!),
+                          ),
+                        ),
+                      ),
+                    ],
+                    if (desktopWidgets != null &&
+                        defaultTargetPlatform ==
+                            TargetPlatform.android) ...<Widget>[
+                      const Divider(height: 0, indent: 56),
+                      ListTile(
+                        leading: const Icon(Icons.widgets_outlined, size: 20),
+                        title: const Text('桌面小组件'),
+                        subtitle: const Text('今日课表、本周网格与下一节 · 样式可自定义'),
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => WidgetSettingsPage(
+                              model: model,
+                              widgetService: desktopWidgets!,
+                            ),
                           ),
                         ),
                       ),

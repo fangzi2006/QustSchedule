@@ -39,15 +39,38 @@ class CoursePalette {
     CourseColor(Color(0xFFF1EFE8), Color(0xFF444441)), // 灰
   ];
 
-  /// 按课程名稳定取色。
+  /// 深色模式配套色板（与 [colors] 一一对应，低饱和深底 + 浅色高对比文字）。
+  static const List<CourseColor> darkColors = <CourseColor>[
+    CourseColor(Color(0xFF15293E), Color(0xFF9ECAFF)), // 蓝
+    CourseColor(Color(0xFF122C26), Color(0xFF8BE2CC)), // 青
+    CourseColor(Color(0xFF1B2E17), Color(0xFFA9DF9A)), // 绿
+    CourseColor(Color(0xFF332613), Color(0xFFF3C87D)), // 琥珀
+    CourseColor(Color(0xFF352019), Color(0xFFF5B7A3)), // 珊瑚
+    CourseColor(Color(0xFF361D29), Color(0xFFF6B2CE)), // 粉
+    CourseColor(Color(0xFF25203E), Color(0xFFC5BFFF)), // 紫
+    CourseColor(Color(0xFF381C1E), Color(0xFFF6B0B0)), // 红
+    CourseColor(Color(0xFF272624), Color(0xFFD0CEC6)), // 灰
+  ];
+
+  /// 按课程名计算稳定色板索引（与客户端 / 原生桌面小组件共享）。
   ///
   /// 用乘加哈希而不是求和：求和会让"数学""学数"这类同字异序的课撞到一起。
-  static CourseColor of(String courseName) {
-    if (courseName.isEmpty) return colors.first;
+  static int indexOf(String courseName) {
+    if (courseName.isEmpty) return 0;
     var hash = 2166136261;
     for (final unit in courseName.codeUnits) {
       hash = (hash ^ unit) * 16777619 & 0x7fffffff;
     }
-    return colors[hash % colors.length];
+    return hash % colors.length;
   }
+
+  /// 按课程名稳定取色（浅色主题）。
+  static CourseColor of(String courseName) => colors[indexOf(courseName)];
+
+  static CourseColor lightOfIndex(int index) =>
+      colors[((index % colors.length) + colors.length) % colors.length];
+
+  static CourseColor darkOfIndex(int index) =>
+      darkColors[((index % darkColors.length) + darkColors.length) %
+          darkColors.length];
 }

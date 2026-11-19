@@ -2,6 +2,7 @@ package com.fangzi.qustschedule
 
 import com.fangzi.qustschedule.reminder.ReminderBridge
 import com.fangzi.qustschedule.updater.AppUpdaterBridge
+import com.fangzi.qustschedule.widget.WidgetBridge
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 
@@ -9,6 +10,7 @@ class MainActivity : FlutterActivity() {
 
     private var reminderBridge: ReminderBridge? = null
     private var updaterBridge: AppUpdaterBridge? = null
+    private var widgetBridge: WidgetBridge? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -20,6 +22,11 @@ class MainActivity : FlutterActivity() {
         ).also { it.attach() }
 
         updaterBridge = AppUpdaterBridge(
+            this,
+            flutterEngine.dartExecutor.binaryMessenger,
+        ).also { it.attach() }
+
+        widgetBridge = WidgetBridge(
             this,
             flutterEngine.dartExecutor.binaryMessenger,
         ).also { it.attach() }
@@ -37,6 +44,8 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        widgetBridge?.dispose()
+        widgetBridge = null
         updaterBridge?.dispose()
         updaterBridge = null
         reminderBridge?.dispose()

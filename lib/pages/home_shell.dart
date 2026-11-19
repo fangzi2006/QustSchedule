@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 
 import '../src/app_model.dart';
 import '../src/reminder_service.dart';
+import '../src/widget_service.dart';
 import '../widgets/app_snack_bar.dart';
 import '../widgets/floating_dock.dart';
 import '../widgets/status_popup.dart';
@@ -28,12 +29,20 @@ import 'settings_page.dart';
 import 'update_dialog.dart';
 
 class HomeShell extends StatefulWidget {
-  const HomeShell({super.key, required this.model, this.reminders});
+  const HomeShell({
+    super.key,
+    required this.model,
+    this.reminders,
+    this.desktopWidgets,
+  });
 
   final AppModel model;
 
   /// 课程提醒编排层（仅 Android 由 main 挂上来；测试里可以为 null）。
   final ReminderService? reminders;
+
+  /// 桌面小组件编排层（仅 Android 由 main 挂上来；测试里可以为 null）。
+  final DesktopWidgetService? desktopWidgets;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -158,6 +167,7 @@ class _HomeShellState extends State<HomeShell> {
       () => _settingsPage = SettingsPage(
         model: widget.model,
         reminders: widget.reminders,
+        desktopWidgets: widget.desktopWidgets,
       ),
     );
   }

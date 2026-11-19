@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_today_label">今日课表</string>
+    <string name="widget_today_desc">展示今天剩余课程与考试，课后自动切换明日预告</string>
+    <string name="widget_week_label">本周课表</string>
+    <string name="widget_week_desc">整周彩色课程网格，支持自定义透明度、圆角与周末列</string>
+    <string name="widget_next_label">下一节课</string>
+    <string name="widget_next_desc">突出下一节课程或近期考试倒计时，支持 2×2 与 4×1 自适应</string>
+</resources>

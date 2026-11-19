@@ -11,6 +11,7 @@ import '../reminder_planner.dart';
 import '../reschedule.dart';
 import '../school.dart';
 import '../timetable.dart';
+import '../widget_style.dart';
 import '../updater/update_flow_controller.dart';
 import '../updater/update_models.dart';
 import '../updater/update_service.dart';
@@ -216,6 +217,26 @@ class PreferencesController {
     if (_preferences.reminderFluidUntilEnd == value) return;
     await _commitPref(() => _preferences.setReminderFluidUntilEnd(value));
   }
+
+  // ---------------------------------------------------------------------------
+  // 桌面小组件样式（按类型独立存储）
+  // ---------------------------------------------------------------------------
+
+  DesktopWidgetConfigSet get widgetConfig => _preferences.widgetConfig;
+
+  DesktopWidgetStyle widgetStyleOf(DesktopWidgetKind kind) =>
+      _preferences.widgetStyleOf(kind);
+
+  Future<void> setWidgetStyle(
+    DesktopWidgetKind kind,
+    DesktopWidgetStyle style,
+  ) async {
+    if (_preferences.widgetStyleOf(kind) == style) return;
+    await _commitPref(() => _preferences.setWidgetStyle(kind, style));
+  }
+
+  Future<void> resetWidgetStyle(DesktopWidgetKind kind) =>
+      setWidgetStyle(kind, DesktopWidgetStyle.defaultsFor(kind));
 
   // ---------------------------------------------------------------------------
   // 调课规则

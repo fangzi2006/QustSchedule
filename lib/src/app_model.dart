@@ -28,6 +28,7 @@ import 'state/hint_notice_controller.dart';
 import 'state/preferences_controller.dart';
 import 'state/schedule_controller.dart';
 import 'timetable.dart';
+import 'widget_style.dart';
 import 'updater/update_flow_controller.dart';
 import 'updater/update_models.dart';
 import 'updater/update_service.dart';
@@ -283,6 +284,17 @@ class AppModel extends ChangeNotifier {
   bool get reminderFluidUntilEnd => prefs.reminderFluidUntilEnd;
   Future<void> setReminderFluidUntilEnd(bool value) =>
       prefs.setReminderFluidUntilEnd(value);
+
+  // 桌面小组件样式
+  DesktopWidgetConfigSet get widgetConfig => prefs.widgetConfig;
+  DesktopWidgetStyle widgetStyleOf(DesktopWidgetKind kind) =>
+      prefs.widgetStyleOf(kind);
+  Future<void> setWidgetStyle(
+    DesktopWidgetKind kind,
+    DesktopWidgetStyle style,
+  ) => prefs.setWidgetStyle(kind, style);
+  Future<void> resetWidgetStyle(DesktopWidgetKind kind) =>
+      prefs.resetWidgetStyle(kind);
 
   // 软件更新设置
   String get selectedUpdateProxy => prefs.selectedUpdateProxy;

@@ -22,6 +22,7 @@ import 'package:qustschedule/pages/settings_page.dart';
 import 'package:qustschedule/pages/timetable_edit_page.dart';
 import 'package:qustschedule/pages/timetable_list_page.dart';
 import 'package:qustschedule/pages/update_proxy_page.dart';
+import 'package:qustschedule/pages/widget_settings_page.dart';
 import 'package:qustschedule/theme/app_theme.dart';
 import 'package:qustschedule/widgets/app_bottom_sheet.dart';
 import 'package:qustschedule/widgets/app_menu.dart';
@@ -40,6 +41,9 @@ import 'package:qustschedule/src/reminder_service.dart';
 import 'package:qustschedule/src/schedule_service.dart';
 import 'package:qustschedule/src/term_calendar.dart';
 import 'package:qustschedule/src/timetable.dart';
+import 'package:qustschedule/src/widget_gateway.dart';
+import 'package:qustschedule/src/widget_service.dart';
+import 'package:qustschedule/src/widget_style.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPicker;
 import 'package:flutter/foundation.dart'
     show TargetPlatform, debugDefaultTargetPlatformOverride;
@@ -4684,6 +4688,111 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   });
+
+  group('桌面小组件', () {
+    testWidgets('Android 下设置页显示入口，配置页支持切换类型、套用预设、改字段并安全退出', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final model = buildModel();
+      model.hydrateForTest(
+        schedule: sampleSchedule(),
+        termStart: DateTime(2026, 9, 7),
+        week: 1,
+      );
+      final gateway = _FakeWidgetGateway();
+      final service = DesktopWidgetService(
+        model: model,
+        gateway: gateway,
+        debounce: const Duration(milliseconds: 1),
+        now: () => DateTime(2026, 9, 7, 9, 0),
+      );
+      addTearDown(() {
+        service.dispose();
+        model.dispose();
+        debugDefaultTargetPlatformOverride = null;
+      });
+
+      await tester.pumpWidget(
+        wrap(SettingsPage(model: model, desktopWidgets: service)),
+      );
+      expect(find.text('桌面小组件'), findsOneWidget);
+
+      await tester.tap(find.text('桌面小组件'));
+      await tester.pumpAndSettle();
+      expect(find.byType(WidgetSettingsPage), findsOneWidget);
+
+      // 套用「通透磨砂」只更新今日课表，不影响本周课表
+      await tester.tap(find.text('通透磨砂'));
+      await tester.pumpAndSettle();
+      expect(
+        model.widgetStyleOf(DesktopWidgetKind.today).preset,
+        WidgetStylePreset.frostedGlass,
+      );
+      expect(
+        model.widgetStyleOf(DesktopWidgetKind.week).preset,
+        WidgetStylePreset.minimalWhite,
+      );
+
+      // 切换到「本周课表」并验证专属「周末列显示」切换
+      await tester.tap(find.text('本周课表').first);
+      await tester.pumpAndSettle();
+      final listScrollable = find.byType(Scrollable).first;
+      final weekendOption = find.text('始终显示');
+      await tester.scrollUntilVisible(
+        weekendOption,
+        300,
+        scrollable: listScrollable,
+      );
+      await tester.ensureVisible(weekendOption);
+      await tester.pumpAndSettle();
+      await tester.tap(weekendOption);
+      await tester.pumpAndSettle();
+      expect(
+        model.widgetStyleOf(DesktopWidgetKind.week).weekendMode,
+        WeekendColumnMode.show,
+      );
+
+      // 点击添加到桌面（滚回顶部预览卡片）
+      final pinBtn = find.text('添加到桌面');
+      await tester.scrollUntilVisible(pinBtn, -300, scrollable: listScrollable);
+      await tester.ensureVisible(pinBtn);
+      await tester.pumpAndSettle();
+      await tester.tap(pinBtn);
+      await tester.pumpAndSettle();
+      expect(gateway.lastPinnedKind, DesktopWidgetKind.week);
+
+      // 返回设置页，再切换为非 Android 平台验证入口隐藏
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byType(WidgetSettingsPage), findsNothing);
+
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      await tester.pumpWidget(
+        wrap(SettingsPage(model: model, desktopWidgets: service)),
+      );
+      expect(find.text('桌面小组件'), findsNothing);
+      debugDefaultTargetPlatformOverride = null;
+    });
+  });
+}
+
+class _FakeWidgetGateway implements DesktopWidgetGateway {
+  DesktopWidgetKind? lastPinnedKind;
+
+  @override
+  Future<bool> syncSnapshot(String payloadJson) async => true;
+
+  @override
+  Future<void> clearSnapshot() async {}
+
+  @override
+  Future<bool> requestPinWidget(DesktopWidgetKind kind) async {
+    lastPinnedKind = kind;
+    return true;
+  }
+
+  @override
+  Future<Map<DesktopWidgetKind, int>> getPinnedCounts() async =>
+      const <DesktopWidgetKind, int>{DesktopWidgetKind.week: 1};
 }
 
 class _DisposeNotifyHelper extends StatefulWidget {

@@ -66,6 +66,55 @@
         <receiver
             android:name=".reminder.ReminderDailyResyncReceiver"
             android:exported="false" />
+        <!-- 桌面小组件：今日课表 / 本周课表 / 下一节课 -->
+        <receiver
+            android:name=".widget.TodayWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_today_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_today_info" />
+        </receiver>
+        <receiver
+            android:name=".widget.WeekGridWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_week_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_week_info" />
+        </receiver>
+        <receiver
+            android:name=".widget.NextClassWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_next_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_next_info" />
+        </receiver>
+        <service
+            android:name=".widget.TodayWidgetService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
+        <receiver
+            android:name=".widget.WidgetRefreshReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.fangzi.qustschedule.widget.ACTION_REFRESH_WIDGETS" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
         <!-- 流体云常驻卡片：前台服务，specialUse 子类型（Android 14+ 必须显式声明）。 -->
         <service
             android:name=".reminder.ReminderFluidService"

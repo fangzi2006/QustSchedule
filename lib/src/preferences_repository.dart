@@ -29,8 +29,9 @@ import 'reschedule.dart';
 import 'safe_json_file.dart';
 import 'school.dart';
 import 'timetable.dart';
+import 'widget_style.dart';
 
-const int preferencesSchema = 13;
+const int preferencesSchema = 14;
 
 /// 检查更新与安装包下载的默认加速代理。
 const String defaultUpdateProxyUrl = 'https://gh-proxy.org';
@@ -102,6 +103,7 @@ class Preferences {
     String selectedUpdateProxy = defaultUpdateProxyUrl,
     List<String>? customUpdateProxies,
     bool autoCheckUpdate = defaultAutoCheckUpdate,
+    DesktopWidgetConfigSet? widgetConfig,
     File? file,
     bool didResetFromCorruption = false,
   }) : _termStarts = termStarts,
@@ -135,6 +137,7 @@ class Preferences {
            ? List<String>.from(customUpdateProxies)
            : <String>[],
        _autoCheckUpdate = autoCheckUpdate,
+       _widgetConfig = widgetConfig ?? DesktopWidgetConfigSet.defaults(),
        didResetFromCorruption = didResetFromCorruption,
        _file = file;
 
@@ -207,6 +210,7 @@ class Preferences {
   String _selectedUpdateProxy;
   List<String> _customUpdateProxies;
   bool _autoCheckUpdate;
+  DesktopWidgetConfigSet _widgetConfig;
 
   final File? _file;
 
@@ -235,6 +239,7 @@ class Preferences {
     String selectedUpdateProxy = defaultUpdateProxyUrl,
     List<String>? customUpdateProxies,
     bool autoCheckUpdate = defaultAutoCheckUpdate,
+    DesktopWidgetConfigSet? widgetConfig,
   }) => Preferences._(
     termStarts: termStarts ?? <String, String>{},
     timetables: timetables ?? <Timetable>[defaultTimetable()],
@@ -259,6 +264,7 @@ class Preferences {
     selectedUpdateProxy: selectedUpdateProxy,
     customUpdateProxies: customUpdateProxies,
     autoCheckUpdate: autoCheckUpdate,
+    widgetConfig: widgetConfig,
     file: null,
   );
 
@@ -354,6 +360,7 @@ class Preferences {
     var selectedUpdateProxy = defaultUpdateProxyUrl;
     var customUpdateProxies = <String>[];
     var autoCheckUpdate = defaultAutoCheckUpdate;
+    var widgetConfig = DesktopWidgetConfigSet.defaults();
 
     if (decoded.isNotEmpty) {
       final rawStarts = decoded['termStarts'];
@@ -490,6 +497,10 @@ class Preferences {
       }
       final rawAutoCheck = decoded['autoCheckUpdate'];
       if (rawAutoCheck is bool) autoCheckUpdate = rawAutoCheck;
+      // schema 14：桌面小组件样式配置。缺字段 = 旧版本，回退各类型默认样式。
+      if (decoded.containsKey('widgetConfig')) {
+        widgetConfig = DesktopWidgetConfigSet.fromJson(decoded['widgetConfig']);
+      }
     }
 
     return Preferences._(
@@ -516,6 +527,7 @@ class Preferences {
       selectedUpdateProxy: selectedUpdateProxy,
       customUpdateProxies: customUpdateProxies,
       autoCheckUpdate: autoCheckUpdate,
+      widgetConfig: widgetConfig,
       file: file,
       didResetFromCorruption: didResetFromCorruption,
     );
@@ -910,6 +922,28 @@ class Preferences {
   }
 
   // ---------------------------------------------------------------------------
+  // 桌面小组件样式（按类型独立存储，schema 14）
+  // ---------------------------------------------------------------------------
+
+  DesktopWidgetConfigSet get widgetConfig => _widgetConfig;
+
+  DesktopWidgetStyle widgetStyleOf(DesktopWidgetKind kind) =>
+      _widgetConfig.styleOf(kind);
+
+  Future<void> setWidgetStyle(
+    DesktopWidgetKind kind,
+    DesktopWidgetStyle style,
+  ) async {
+    if (_widgetConfig.styleOf(kind) == style) return;
+    _widgetConfig = _widgetConfig.withStyle(kind, style);
+    await _flush();
+  }
+
+  Future<void> resetWidgetStyle(DesktopWidgetKind kind) async {
+    await setWidgetStyle(kind, DesktopWidgetStyle.defaultsFor(kind));
+  }
+
+  // ---------------------------------------------------------------------------
   // 落盘
   // ---------------------------------------------------------------------------
 
@@ -938,6 +972,7 @@ class Preferences {
     'selectedUpdateProxy': _selectedUpdateProxy,
     'customUpdateProxies': _customUpdateProxies,
     'autoCheckUpdate': _autoCheckUpdate,
+    'widgetConfig': _widgetConfig.toJson(),
     'timetables': _timetables.map((table) => table.toJson()).toList(),
     if (_quickSetup != null) 'quickSetup': _quickSetup!.toJson(),
   };
