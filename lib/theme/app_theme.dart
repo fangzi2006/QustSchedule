@@ -9,6 +9,8 @@ library;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
+import '../widgets/app_menu.dart' show AppMenuScope;
+
 /// 品牌主色：偏靛蓝，和课程色板里的蓝/青/紫相邻但不冲突。
 const Color _seed = Color(0xFF3F5AA6);
 
@@ -522,10 +524,11 @@ class _SmoothSlidePageTransitionState
     final textDirection = Directionality.maybeOf(context) ?? TextDirection.ltr;
 
     // 无论是否为首页，都保留 secondaryAnimation 的视差与微暗遮罩，
-    // 这样从首页进入二级页以及二级页之间跳转，背层动画语义完全一致。
+    // 并在转场位移内部挂载路由级 AppMenuScope，使二级页入场途中打开菜单也随页面同步滑入落位，
+    // 并在页面退场或被上层路由覆盖时自动收起并拒绝继续展开。
     Widget content = CustomPaint(
       foregroundPainter: _RouteScrimPainter(progress: _secondaryVisual),
-      child: widget.child,
+      child: AppMenuScope(child: widget.child),
     );
 
     if (!widget.route.isFirst && !widget.route.fullscreenDialog) {

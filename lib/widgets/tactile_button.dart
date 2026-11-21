@@ -8,6 +8,7 @@ library;
 import 'dart:async' show Timer;
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/gestures.dart'
     show
         GestureDisposition,
@@ -21,7 +22,13 @@ import 'package:flutter/physics.dart' show SpringDescription, SpringSimulation;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
 
-import 'app_menu.dart' show activeAppMenuMorph, activeTactileDragStart;
+import 'app_menu.dart'
+    show
+        AppMenuScope,
+        AppMenuScopeController,
+        activeAppMenuMorph,
+        activeTactileDragStart,
+        isRouteActiveForAppMenu;
 
 /// 当菜单触发按钮被点击或按住下拉展开时的回调。
 ///
@@ -152,8 +159,21 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
   bool _inScrollable = false;
   bool _elementActive = true;
   double _touchSlop = kTouchSlop;
+  AppMenuScopeController? _menuScope;
+  ModalRoute<dynamic>? _fallbackRoute;
+  Animation<double>? _fallbackRouteAnim;
+  Animation<double>? _fallbackRouteSecondaryAnim;
+  ValueListenable<bool>? _fallbackUserGestureNotifier;
+  ValueListenable<TickerModeData>? _tickerModeNotifier;
 
   bool get _interactive => widget.enabled;
+
+  bool get _canTriggerMenu {
+    if (!_interactive) return false;
+    final scope = _menuScope;
+    if (scope != null) return scope.isActive;
+    return isRouteActiveForAppMenu(_fallbackRoute);
+  }
 
   @override
   void initState() {
@@ -171,6 +191,107 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     _inScrollable = Scrollable.maybeOf(context) != null;
     _touchSlop =
         MediaQuery.maybeGestureSettingsOf(context)?.touchSlop ?? kTouchSlop;
+
+    final nextTickerNotifier = TickerMode.getValuesNotifier(context);
+    if (!identical(nextTickerNotifier, _tickerModeNotifier)) {
+      _tickerModeNotifier?.removeListener(_onTickerModeChanged);
+      _tickerModeNotifier = nextTickerNotifier;
+      _tickerModeNotifier!.addListener(_onTickerModeChanged);
+    }
+
+    final nextScope = AppMenuScope.maybeControllerOf(context, listen: true);
+    if (!identical(nextScope, _menuScope)) {
+      _menuScope?.activeListenable.removeListener(_onMenuScopeActiveChanged);
+      _menuScope = nextScope;
+      _menuScope?.activeListenable.addListener(_onMenuScopeActiveChanged);
+    }
+
+    if (_menuScope == null && widget.onMenuOpen != null) {
+      final nextRoute = ModalRoute.of(context);
+      if (!identical(nextRoute, _fallbackRoute)) {
+        _detachFallbackRouteListeners();
+        _fallbackRoute = nextRoute;
+        _attachFallbackRouteListeners();
+      }
+      if (!isRouteActiveForAppMenu(_fallbackRoute)) {
+        _cancelPendingInteraction();
+      }
+    } else {
+      _detachFallbackRouteListeners();
+      _fallbackRoute = null;
+      if (_menuScope?.isActive == false) {
+        _cancelPendingInteraction();
+      }
+    }
+  }
+
+  void _attachFallbackRouteListeners() {
+    final route = _fallbackRoute;
+    if (route == null) return;
+    _fallbackRouteAnim = route.animation;
+    _fallbackRouteAnim?.addStatusListener(_onFallbackRouteStatusChanged);
+    _fallbackRouteSecondaryAnim = route.secondaryAnimation;
+    _fallbackRouteSecondaryAnim?.addStatusListener(
+      _onFallbackRouteStatusChanged,
+    );
+    _fallbackUserGestureNotifier =
+        route.navigator?.userGestureInProgressNotifier;
+    _fallbackUserGestureNotifier?.addListener(_onFallbackRouteActivityChanged);
+  }
+
+  void _detachFallbackRouteListeners() {
+    _fallbackRouteAnim?.removeStatusListener(_onFallbackRouteStatusChanged);
+    _fallbackRouteAnim = null;
+    _fallbackRouteSecondaryAnim?.removeStatusListener(
+      _onFallbackRouteStatusChanged,
+    );
+    _fallbackRouteSecondaryAnim = null;
+    _fallbackUserGestureNotifier?.removeListener(
+      _onFallbackRouteActivityChanged,
+    );
+    _fallbackUserGestureNotifier = null;
+  }
+
+  void _onFallbackRouteStatusChanged(AnimationStatus _) =>
+      _onFallbackRouteActivityChanged();
+
+  void _onFallbackRouteActivityChanged() {
+    if (!mounted || !_elementActive) return;
+    if (!isRouteActiveForAppMenu(_fallbackRoute)) {
+      _cancelPendingInteraction();
+    }
+  }
+
+  void _onMenuScopeActiveChanged() {
+    if (!mounted || !_elementActive) return;
+    if (_menuScope?.isActive == false) {
+      _cancelPendingInteraction();
+    }
+  }
+
+  void _onTickerModeChanged() {
+    if (!mounted) return;
+    if (_tickerModeNotifier?.value.enabled == false) {
+      final hasMotion =
+          _pointer != null ||
+          _holdTimer != null ||
+          _dragOpenedMenu ||
+          _press.isAnimating ||
+          _press.value != 0.0 ||
+          _dragAnim.isAnimating ||
+          _dragOffset.value != Offset.zero;
+      if (hasMotion) {
+        _cancelPointer(settleImmediately: true);
+      }
+    }
+  }
+
+  void _cancelPendingInteraction() {
+    if (_pointer != null || _holdTimer != null || _dragOpenedMenu) {
+      _cancelPointer(
+        settleImmediately: _tickerModeNotifier?.value.enabled == false,
+      );
+    }
   }
 
   @override
@@ -243,9 +364,15 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
       if (hasMenu) {
         activeAppMenuMorph.addListener(_onGlobalMenuMorphChanged);
         _onGlobalMenuMorphChanged();
+        if (_menuScope == null) {
+          _fallbackRoute = ModalRoute.of(context);
+          _attachFallbackRouteListeners();
+        }
       } else {
         activeAppMenuMorph.removeListener(_onGlobalMenuMorphChanged);
         _morphProgress.value = 0.0;
+        _detachFallbackRouteListeners();
+        _fallbackRoute = null;
       }
       _motionListenable = _buildMotionListenable();
     }
@@ -261,6 +388,9 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
   @override
   void dispose() {
     _holdTimer?.cancel();
+    _menuScope?.activeListenable.removeListener(_onMenuScopeActiveChanged);
+    _detachFallbackRouteListeners();
+    _tickerModeNotifier?.removeListener(_onTickerModeChanged);
     if (widget.onMenuOpen != null) {
       activeAppMenuMorph.removeListener(_onGlobalMenuMorphChanged);
     }
@@ -308,7 +438,9 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
   }
 
   void _openMenuWithDrag(int pointer) {
-    if (_dragOpenedMenu || !_interactive || widget.onMenuOpen == null) return;
+    if (_dragOpenedMenu || !_canTriggerMenu || widget.onMenuOpen == null) {
+      return;
+    }
     _dragOpenedMenu = true;
     _holdTimer?.cancel();
     _holdTimer = null;
@@ -320,7 +452,8 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
   }
 
   void _onPointerDown(PointerDownEvent event) {
-    if (!_interactive) return;
+    if (!_interactive || _pointer != null) return;
+    if (widget.onMenuOpen != null && !_canTriggerMenu) return;
     if (event.kind == PointerDeviceKind.mouse &&
         (event.buttons & kPrimaryButton == 0)) {
       return;
@@ -336,7 +469,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     if (widget.onMenuOpen != null && event.kind != PointerDeviceKind.mouse) {
       final pointer = event.pointer;
       _holdTimer = Timer(const Duration(milliseconds: 190), () {
-        if (mounted && _pointer == pointer) {
+        if (mounted && _pointer == pointer && _canTriggerMenu) {
           _openMenuWithDrag(pointer);
         }
       });
@@ -362,6 +495,7 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     );
     if (widget.onMenuOpen != null &&
         !_dragOpenedMenu &&
+        _canTriggerMenu &&
         delta.dy > 14.0 &&
         delta.dy > delta.dx.abs() * 0.9) {
       _openMenuWithDrag(event.pointer);
@@ -383,10 +517,13 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     if (renderBox is RenderBox && renderBox.hasSize) {
       final local = renderBox.globalToLocal(event.position);
       final hitBounds = renderBox.paintBounds.inflate(6.0);
-      if (hitBounds.contains(local)) {
+      final withinSlop = (event.position - _downPos).distance <= _touchSlop;
+      if (hitBounds.contains(local) || withinSlop) {
         _arenaRecognizer?.claimPointer(event.pointer);
         if (widget.onMenuOpen != null) {
-          widget.onMenuOpen!(context, null);
+          if (_canTriggerMenu) {
+            widget.onMenuOpen!(context, null);
+          }
         } else {
           widget.onTap?.call();
         }
@@ -399,13 +536,19 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
     _cancelPointer();
   }
 
-  void _cancelPointer() {
+  void _cancelPointer({bool settleImmediately = false}) {
     _pointer = null;
     _dragOpenedMenu = false;
     _holdTimer?.cancel();
     _holdTimer = null;
-    _drivePress(_hovering ? 0.22 : 0.0);
-    _springDragHome();
+    if (settleImmediately) {
+      _press.stop();
+      _press.value = 0.0;
+      _setDragDirect(Offset.zero);
+    } else {
+      _drivePress(_hovering ? 0.22 : 0.0);
+      _springDragHome();
+    }
   }
 
   @override
@@ -601,7 +744,9 @@ class _TactileSurfaceButtonState extends State<TactileSurfaceButton>
         onTap: _interactive
             ? () {
                 if (widget.onMenuOpen != null) {
-                  widget.onMenuOpen!(context, null);
+                  if (_canTriggerMenu) {
+                    widget.onMenuOpen!(context, null);
+                  }
                 } else {
                   widget.onTap?.call();
                 }

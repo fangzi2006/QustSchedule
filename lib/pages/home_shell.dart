@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 import '../src/app_model.dart';
 import '../src/reminder_service.dart';
 import '../src/widget_service.dart';
+import '../widgets/app_menu.dart';
 import '../widgets/app_snack_bar.dart';
 import '../widgets/floating_dock.dart';
 import '../widgets/status_popup.dart';
@@ -195,7 +196,6 @@ class _HomeShellState extends State<HomeShell> {
             child: _ShellPager(
               key: _pagerKey,
               index: _index,
-              onIndexChanged: _onPageChanged,
               pages: <Widget>[
                 _schedulePage,
                 // 还没建时给个空位：横向轨道上留出它的位置，
@@ -216,6 +216,10 @@ class _HomeShellState extends State<HomeShell> {
               onPillProgress: _onPillProgress,
               // 按下或滑动到哪一页只懒建对应目标页，避免首触同帧双页并发构建。
               onTargetIndexHint: _ensurePageForIndex,
+              // 确定目标页即刻解锁目标页、锁住离场页，无需苦等弹簧完全停稳。
+              onIndexSelected: _onPageChanged,
+              // 按住/拖动 Dock 预览期间暂锁页面内容区，松手即放行。
+              onPointerActiveChanged: _onDockPointerActiveChanged,
             ),
           ),
           // 全局系统状态弹窗挂在外壳顶层：登录中 / 重新登录 / 连接中 / 报错都在这里出。
@@ -246,25 +250,29 @@ class _HomeShellState extends State<HomeShell> {
   void _switchToPage(int targetIndex) {
     if (targetIndex < 0 || targetIndex >= _items.length) return;
     if (_index == targetIndex) return;
-    if (targetIndex == 1) _ensureAcademicPage();
-    if (targetIndex == 2) _ensureSettingsPage();
+    _ensurePageForIndex(targetIndex);
     final dockState = _dockKey.currentState;
     if (dockState != null && dockState.canAnimate) {
       dockState.animateToIndex(targetIndex);
     } else {
+      _pagerKey.currentState?.setActiveIndex(targetIndex);
       setState(() => _index = targetIndex);
+      _pagerKey.currentState?.jumpToPage(targetIndex);
     }
   }
 
-  /// 页面吸附到位、真的换页了（由翻页器在到位时通知）。
+  /// 目标页已由 Dock 提交（松手或编程切换），立即激活目标页与交互权。
   void _onPageChanged(int index) {
-    if (index == 1 && _academicPage == null) {
-      _ensureAcademicPage();
-    } else if (index == 2 && _settingsPage == null) {
-      _ensureSettingsPage();
-    }
+    if (index < 0 || index >= _items.length) return;
+    _ensurePageForIndex(index);
     if (index == _index) return;
+    // 同步通知轨道更新各页菜单活跃态，避免离场页在下一帧 build 前的空窗期内误展开菜单。
+    _pagerKey.currentState?.setActiveIndex(index);
     setState(() => _index = index);
+  }
+
+  void _onDockPointerActiveChanged(bool active) {
+    _pagerKey.currentState?.setInteractionBlocked(active);
   }
 
   /// dock 指示块移动 → 页面跟着平移（位置完全由指示块决定）。
@@ -309,87 +317,92 @@ class _HomeShellState extends State<HomeShell> {
 ///
 /// 所以这一层**完全不注册手势**：两页之间的切换只由底部 dock 触发。
 class _ShellPager extends StatefulWidget {
-  const _ShellPager({
-    super.key,
-    required this.index,
-    required this.onIndexChanged,
-    required this.pages,
-  });
+  const _ShellPager({super.key, required this.index, required this.pages});
 
   final int index;
-  final ValueChanged<int> onIndexChanged;
   final List<Widget> pages;
 
   @override
   State<_ShellPager> createState() => _ShellPagerState();
 }
 
-class _ShellPagerState extends State<_ShellPager>
-    with SingleTickerProviderStateMixin {
-  /// 轨道上的当前位置：0 = 课表页正中，1 = 设置页正中。
+class _ShellPagerState extends State<_ShellPager> {
+  /// 轨道上的当前位置：0 = 课表页正中，1 = 学业页正中，2 = 设置页正中。
   ///
-  /// **唯一写入方是 [followPill]**（dock 指示块的位置）。这里不再自己跑动画：
-  /// 两套动画必然差半拍 —— 指示块先到位、页面还在滑，看起来就是"阴影停了、
-  /// 页面还在动"。
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: Duration.zero,
-    lowerBound: 0.0,
-    upperBound: (widget.pages.length - 1).toDouble(),
-    value: widget.index.toDouble(),
+  /// 视觉位置由 [followPill] 逐帧驱动，与目标页 [widget.index] 解耦：
+  /// 确定目标页后 [widget.index] 立即切换（目标页即刻解锁可点可滚、离场页锁死），
+  /// 轨道位置继续跟随 Dock 弹簧平滑滑行，绝不因为跨页路过中间页而误判落点或瞬移。
+  late final ValueNotifier<double> _positionNotifier = ValueNotifier<double>(
+    widget.index.toDouble(),
   );
 
-  @override
-  void initState() {
-    super.initState();
-    _controller.addListener(_onTick);
-  }
+  late int _activeIndex = widget.index;
+  bool _interactionBlocked = false;
+  late final List<ValueNotifier<bool>> _pageActiveNotifiers =
+      <ValueNotifier<bool>>[
+        for (var i = 0; i < widget.pages.length; i++)
+          ValueNotifier<bool>(i == widget.index),
+      ];
 
   @override
-  void didUpdateWidget(_ShellPager oldWidget) {
+  void didUpdateWidget(covariant _ShellPager oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.index != widget.index &&
-        _controller.value != widget.index.toDouble()) {
-      _controller.value = widget.index.toDouble();
+    while (_pageActiveNotifiers.length < widget.pages.length) {
+      _pageActiveNotifiers.add(ValueNotifier<bool>(false));
     }
+    while (_pageActiveNotifiers.length > widget.pages.length) {
+      _pageActiveNotifiers.removeLast().dispose();
+    }
+    _activeIndex = widget.index;
+    _syncPageActiveNotifiers();
   }
 
   @override
   void dispose() {
-    _controller.removeListener(_onTick);
-    _controller.dispose();
+    for (final notifier in _pageActiveNotifiers) {
+      notifier.dispose();
+    }
+    _positionNotifier.dispose();
     super.dispose();
   }
 
-  /// 轨道当前位置（0 = 第一页正中，1 = 第二页正中，2 = 第三页正中）。
-  double get _position => _controller.value;
+  void _syncPageActiveNotifiers() {
+    for (var i = 0; i < _pageActiveNotifiers.length; i++) {
+      _pageActiveNotifiers[i].value = !_interactionBlocked && i == _activeIndex;
+    }
+  }
 
-  void _onTick() {
-    // 位置只在**正好落在整页上**时才算换页。
-    //
-    // 指示块从"课表"滑到"设置"的过程中，位置会连续经过 0.3 / 0.5 / 0.7……
-    // 这些都不是"换页了"，只是路过；一旦按 round() 判定，中途 0.5 就会把
-    // 当前页切过去（按钮可点、动画停了），滑到一半被打断就会停在错的状态。
-    final double offset = _position - _position.round();
-    if (offset.abs() > 0.001) return;
-    final int page = _position.round();
-    if (page != widget.index) widget.onIndexChanged(page);
+  /// 轨道当前位置（0 = 第一页正中，1 = 第二页正中，2 = 第三页正中）。
+  double get _position => _positionNotifier.value;
+
+  void setActiveIndex(int index) {
+    if (!mounted || _activeIndex == index) return;
+    _activeIndex = index;
+    _syncPageActiveNotifiers();
+  }
+
+  void setInteractionBlocked(bool blocked) {
+    if (!mounted || _interactionBlocked == blocked) return;
+    _interactionBlocked = blocked;
+    _syncPageActiveNotifiers();
+    setState(() {});
+  }
+
+  /// 无动画兜底切页（仅在 Dock 尚未完成首帧测量时使用）。
+  void jumpToPage(int index) {
+    if (!mounted) return;
+    final double maxPage = (widget.pages.length - 1).toDouble();
+    _positionNotifier.value = index.toDouble().clamp(0.0, maxPage);
   }
 
   /// 把页面放到 dock 指示块所在的位置（0..1）。
   ///
   /// **页面没有自己的动画**：它只是跟着指示块走。指示块滑向手指、跟手拖动、
   /// 松手落位，三种情况都由 dock 的动画驱动，这里只负责把位置抄过来。
-  ///
-  /// 这样只有一处动，就不会出现"阴影已经到位、页面还在路上"（或者反过来）
-  /// 的错位 —— 之前是两套动画（指示块 180ms / 页面 260ms），必然差半拍。
-  ///
-  /// [AnimationController.value] 会顺带停掉正在跑的动画，所以反复调用是安全的；
-  /// 落点判定在 [_onTick] 里（位置正好压在整页上时才算换页）。
   void followPill(double progress) {
     if (!mounted) return;
     final double maxPage = (widget.pages.length - 1).toDouble();
-    _controller.value = (progress * maxPage).clamp(0.0, maxPage);
+    _positionNotifier.value = (progress * maxPage).clamp(0.0, maxPage);
   }
 
   @override
@@ -401,24 +414,27 @@ class _ShellPagerState extends State<_ShellPager>
           children: <Widget>[
             for (var index = 0; index < widget.pages.length; index++)
               Positioned.fill(
-                child: IgnorePointer(
-                  ignoring: index != widget.index,
-                  child: TickerMode(
-                    enabled: index == widget.index,
-                    child: AnimatedBuilder(
-                      animation: _controller,
-                      // 只重建变换：页面内容一个字节都不动。
-                      //
-                      // 缓存层必须**在 Transform 里面**：平移只改图层的位置，
-                      // 边界内那棵子树可以直接复用已缓存的图层。反过来（边界在外）
-                      // 每次平移都会把边界标脏，整页内容跟着重画一遍。
-                      child: RepaintBoundary(child: widget.pages[index]),
-                      builder: (context, child) => Transform.translate(
-                        key: ValueKey<String>('shell-page-$index'),
-                        offset: Offset((index - _position) * width, 0),
-                        child: child,
+                child: AnimatedBuilder(
+                  animation: _positionNotifier,
+                  // 页面内容与页面级菜单作用域均位于平移变换内部：
+                  //  - 缓存层在 Transform 内部，翻页只改位移不重绘页面内容；
+                  //  - AppMenuScope 位于页面 TickerMode 外部，离场页失活时菜单可一边
+                  //    随原页划走一边跑完平滑收起动画，且翻页途中打开菜单也始终锚定
+                  //    在目标页本地坐标系内、随页面一同滑入最终位置。
+                  child: AppMenuScope(
+                    activeListenable: _pageActiveNotifiers[index],
+                    child: IgnorePointer(
+                      ignoring: _interactionBlocked || index != widget.index,
+                      child: TickerMode(
+                        enabled: index == widget.index,
+                        child: RepaintBoundary(child: widget.pages[index]),
                       ),
                     ),
+                  ),
+                  builder: (context, child) => Transform.translate(
+                    key: ValueKey<String>('shell-page-$index'),
+                    offset: Offset((index - _position) * width, 0),
+                    child: child,
                   ),
                 ),
               ),

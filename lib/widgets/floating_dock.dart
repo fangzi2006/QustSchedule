@@ -25,11 +25,17 @@ import 'dart:async' show unawaited;
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform, listEquals, visibleForTesting;
+    show
+        TargetPlatform,
+        ValueListenable,
+        defaultTargetPlatform,
+        listEquals,
+        visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart'
     show SpringDescription, SpringSimulation, Tolerance;
-import 'package:flutter/scheduler.dart' show Ticker;
+import 'package:flutter/scheduler.dart'
+    show SchedulerBinding, SchedulerPhase, Ticker;
 import 'package:flutter/services.dart' show HapticFeedback;
 
 class FloatingDockItem {
@@ -51,6 +57,8 @@ class FloatingDock extends StatefulWidget {
     required this.index,
     this.onPillProgress,
     this.onTargetIndexHint,
+    this.onIndexSelected,
+    this.onPointerActiveChanged,
   });
 
   final List<FloatingDockItem> items;
@@ -61,6 +69,13 @@ class FloatingDock extends StatefulWidget {
 
   /// 指针按下或横向滑动进入某分段时通知目标下标，便于按需单页懒建。
   final ValueChanged<int>? onTargetIndexHint;
+
+  /// 点击松手、拖拽落位或编程切页确定目标页时立即通知外壳激活目标页，
+  /// 使目标页在滑行动画尚未收敛前即可立即响应点击、滚动与进入二级页。
+  final ValueChanged<int>? onIndexSelected;
+
+  /// 指针是否正在 Dock 上按住或拖动预览（为 true 时外壳可暂锁内容区防止误触）。
+  final ValueChanged<bool>? onPointerActiveChanged;
 
   /// 外壳用它加底部留白：让页面最后一行不被悬浮条压住。
   static const double height = 58;
@@ -135,6 +150,11 @@ class FloatingDockState extends State<FloatingDock>
     stiffness: 1150.0,
     damping: 68.0,
   );
+
+  /// 归一化进度空间的同向续速上限：略低于过阻尼慢特征根 `|r1| ≈ 31.55`，
+  /// 数学上保证同向打断继承速度时位移仍严格单调、零过冲。
+  static const double _maxMonotonicSlideVelocity = 31.5;
+
   static const Tolerance _slideTolerance = Tolerance(
     distance: 2e-3,
     velocity: 4e-2,
@@ -194,6 +214,9 @@ class FloatingDockState extends State<FloatingDock>
   Duration _lastTick = Duration.zero;
   double _lastCx = 0;
 
+  /// 透镜中心最近一次实测物理速度（逻辑像素 / 秒），用于拖拽松手与连点同向续速。
+  double _lastCenterVelPx = 0;
+
   /// 形变量（带符号：正 = 向右运动的拉伸，负 = 向左；停下后会过冲到反向）。
   double _stretch = 0;
   double _stretchVel = 0;
@@ -204,6 +227,34 @@ class FloatingDockState extends State<FloatingDock>
   Rect _from = Rect.zero;
   Rect _to = Rect.zero;
   int _slideGen = 0;
+  int _tapCancelGen = 0;
+  int? _activePointer;
+  bool _reportedPointerActive = false;
+  bool _tickersEnabled = true;
+  bool _disabledTickerSettleScheduled = false;
+  bool _abortPointerScheduled = false;
+  bool _reportPillProgressScheduled = false;
+  Animation<double>? _routeAnim;
+  Animation<double>? _routeSecondaryAnim;
+  ValueListenable<bool>? _userGestureNotifier;
+
+  bool get _isRouteInteractive {
+    final route = _modalRoute;
+    if (route == null) return true;
+    if (!route.isCurrent || !route.isActive) return false;
+    if (route.navigator?.userGestureInProgress == true) return false;
+    final animStatus = route.animation?.status;
+    if (animStatus == AnimationStatus.reverse ||
+        animStatus == AnimationStatus.dismissed) {
+      return false;
+    }
+    final secondaryStatus = route.secondaryAnimation?.status;
+    if (secondaryStatus == AnimationStatus.forward ||
+        secondaryStatus == AnimationStatus.completed) {
+      return false;
+    }
+    return true;
+  }
 
   // ───────────────────────── 生命周期 ─────────────────────────
 
@@ -220,7 +271,200 @@ class FloatingDockState extends State<FloatingDock>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _modalRoute = ModalRoute.of(context);
+    final nextRoute = ModalRoute.of(context);
+    if (!identical(nextRoute, _modalRoute)) {
+      _detachRouteListeners();
+      _modalRoute = nextRoute;
+      _attachRouteListeners();
+    }
+    final bool tickersEnabled = TickerMode.valuesOf(context).enabled;
+    _tickersEnabled = tickersEnabled;
+    if (!_isRouteInteractive && (_pressed || _dragging)) {
+      _scheduleAbortUncommittedPointer();
+    }
+    if (!tickersEnabled && _hasUnsettledMotion) {
+      _scheduleDisabledTickerSettle();
+    }
+  }
+
+  void _attachRouteListeners() {
+    final route = _modalRoute;
+    if (route == null) return;
+    _routeAnim = route.animation;
+    _routeAnim?.addStatusListener(_onRouteStatusChanged);
+    _routeSecondaryAnim = route.secondaryAnimation;
+    _routeSecondaryAnim?.addStatusListener(_onRouteStatusChanged);
+    _userGestureNotifier = route.navigator?.userGestureInProgressNotifier;
+    _userGestureNotifier?.addListener(_onRouteActivityChanged);
+  }
+
+  void _detachRouteListeners() {
+    _routeAnim?.removeStatusListener(_onRouteStatusChanged);
+    _routeAnim = null;
+    _routeSecondaryAnim?.removeStatusListener(_onRouteStatusChanged);
+    _routeSecondaryAnim = null;
+    _userGestureNotifier?.removeListener(_onRouteActivityChanged);
+    _userGestureNotifier = null;
+  }
+
+  void _onRouteStatusChanged(AnimationStatus _) => _onRouteActivityChanged();
+
+  void _onRouteActivityChanged() {
+    if (!mounted) return;
+    if (!_isRouteInteractive && (_pressed || _dragging)) {
+      _abortUncommittedPointer();
+    }
+  }
+
+  bool get _isInBuildPhase {
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      return true;
+    }
+    var debugBuilding = false;
+    assert(() {
+      debugBuilding =
+          WidgetsBinding.instance.buildOwner?.debugBuilding ?? false;
+      return true;
+    }());
+    return debugBuilding;
+  }
+
+  void _scheduleAbortUncommittedPointer() {
+    _activePointer = null;
+    ++_tapCancelGen;
+    if (_abortPointerScheduled) return;
+    _abortPointerScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _abortPointerScheduled = false;
+      if (!mounted) return;
+      if ((_pressed || _dragging) &&
+          (!_isRouteInteractive || _activePointer == null)) {
+        _abortUncommittedPointer();
+      }
+    });
+  }
+
+  void _abortUncommittedPointer() {
+    if (_isInBuildPhase) {
+      _scheduleAbortUncommittedPointer();
+      return;
+    }
+    _activePointer = null;
+    if (!_dragging && !_pressed) return;
+    ++_tapCancelGen;
+    final int target = widget.items.isEmpty
+        ? 0
+        : widget.index.clamp(0, widget.items.length - 1);
+    final Rect from = _livePillRect;
+    final double velPx = _currentCenterVelocityPx;
+    setState(() {
+      _dragging = false;
+      _pressed = false;
+      _preview = target;
+      if (_rects.length == widget.items.length) {
+        if (_tickersEnabled) {
+          _snapTo(_rects[target], from: from, initialVelocityPx: velPx);
+        } else {
+          _placePill(_rects[target]);
+        }
+      }
+    });
+    _syncPointerActive();
+    if (_tickersEnabled) {
+      _releaseEdge();
+      _syncLift();
+    } else {
+      _lift.stop();
+      _lift.value = 0.0;
+      _edge.stop();
+      _edge.value = 0.0;
+      _stretch = 0.0;
+      _stretchVel = 0.0;
+      _lastCenterVelPx = 0.0;
+      if (_physics.isActive) {
+        _physics.stop();
+      }
+    }
+    _reportPillProgress();
+  }
+
+  bool get _hasUnsettledMotion =>
+      _slide.isAnimating ||
+      _lift.isAnimating ||
+      _edge.isAnimating ||
+      _physics.isActive ||
+      _pressed ||
+      _dragging ||
+      _hovering ||
+      _stretch != 0 ||
+      _lift.value != 0 ||
+      _edge.value != 0;
+
+  void _scheduleDisabledTickerSettle() {
+    if (_disabledTickerSettleScheduled) return;
+    _disabledTickerSettleScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _disabledTickerSettleScheduled = false;
+      if (!mounted || _tickersEnabled) return;
+      _settleImmediatelyForDisabledTickers();
+    });
+  }
+
+  /// 当首页路由被不透明二级页完全遮挡停帧时，在后台静默收敛到已提交的目标页，
+  /// 保证返回首页时透镜与页面轨道稳稳落在目标页、绝不卡在半路。
+  void _settleImmediatelyForDisabledTickers() {
+    ++_tapCancelGen;
+    _activePointer = null;
+    final bool hadUncommittedPointer = _pressed || _dragging;
+    final bool stateChanged = _pressed || _dragging || _hovering;
+    _pressed = false;
+    _dragging = false;
+    _hovering = false;
+    _syncPointerActive();
+
+    // 若遮挡发生时手指仍停留在 Dock 上（尚未松手提交新目标页），回到当前已提交的 widget.index，
+    // 避免轨道视觉位置与 HomeShell._index 失步；已提交的滑行则直接落稳到 _preview。
+    final int fallbackIndex = hadUncommittedPointer ? widget.index : _preview;
+    final int target = widget.items.isEmpty
+        ? 0
+        : fallbackIndex.clamp(0, widget.items.length - 1);
+    _preview = target;
+    if (_rects.length == widget.items.length && _rects.isNotEmpty) {
+      _placePill(_rects[target]);
+    } else {
+      ++_slideGen;
+      _slide.stop();
+      _slide.value = 1.0;
+    }
+
+    _lift.stop();
+    _lift.value = 0.0;
+    _edge.stop();
+    _edge.value = 0.0;
+    _stretch = 0.0;
+    _stretchVel = 0.0;
+    _lastCenterVelPx = 0.0;
+    if (_physics.isActive) {
+      _physics.stop();
+    }
+    if (stateChanged && mounted) {
+      setState(() {});
+    }
+    _reportPillProgress();
+  }
+
+  void _syncPointerActive() {
+    final bool active = _pressed || _dragging;
+    if (active == _reportedPointerActive) return;
+    _reportedPointerActive = active;
+    widget.onPointerActiveChanged?.call(active);
+  }
+
+  void _commitIndex(int target) {
+    if (target < 0 || target >= widget.items.length) return;
+    widget.onTargetIndexHint?.call(target);
+    widget.onIndexSelected?.call(target);
   }
 
   @override
@@ -246,6 +490,7 @@ class FloatingDockState extends State<FloatingDock>
   @override
   void dispose() {
     _activeInstances.remove(this);
+    _detachRouteListeners();
     _disposeGlyphCache();
     _slide.removeListener(_reportPillProgress);
     _physics.dispose();
@@ -342,17 +587,55 @@ class FloatingDockState extends State<FloatingDock>
   /// 编程式平滑滑动到指定项（例如点击通知气泡时由外壳驱动）。
   void animateToIndex(int target) {
     if (target < 0 || target >= widget.items.length) return;
+    ++_tapCancelGen;
+    _activePointer = null;
     widget.onTargetIndexHint?.call(target);
     if (_rects.length != widget.items.length) {
+      final bool stateChanged = _pressed || _dragging;
+      _pressed = false;
+      _dragging = false;
       _preview = target;
+      if (stateChanged && mounted) {
+        setState(() {});
+      }
+      _commitIndex(target);
+      _syncPointerActive();
       return;
     }
+    if (!_tickersEnabled) {
+      setState(() {
+        _pressed = false;
+        _dragging = false;
+        _preview = target;
+        _placePill(_rects[target]);
+      });
+      _lift.stop();
+      _lift.value = 0.0;
+      _edge.stop();
+      _edge.value = 0.0;
+      _stretch = 0.0;
+      _stretchVel = 0.0;
+      _lastCenterVelPx = 0.0;
+      if (_physics.isActive) {
+        _physics.stop();
+      }
+      _commitIndex(target);
+      _syncPointerActive();
+      _reportPillProgress();
+      return;
+    }
+    final bool wasDragging = _dragging;
+    final Rect? from = wasDragging ? _livePillRect : null;
+    final double? velPx = wasDragging ? _lastCenterVelPx : null;
     setState(() {
       _pressed = false;
       _dragging = false;
       _preview = target;
-      _snapTo(_rects[target]);
+      _snapTo(_rects[target], from: from, initialVelocityPx: velPx);
     });
+    _commitIndex(target);
+    _syncPointerActive();
+    _releaseEdge();
     _syncLift();
     _reportPillProgress();
   }
@@ -363,6 +646,7 @@ class FloatingDockState extends State<FloatingDock>
     if (_physics.isActive) return;
     _lastTick = Duration.zero;
     _lastCx = _livePillRect.center.dx;
+    _lastCenterVelPx = 0.0;
     _physics.start();
   }
 
@@ -387,6 +671,7 @@ class FloatingDockState extends State<FloatingDock>
     final double cx = _livePillRect.center.dx;
     final double v = (cx - _lastCx) / dt;
     _lastCx = cx;
+    _lastCenterVelPx = v;
     final double target = (v / _fullStretchSpeed).clamp(-1.0, 1.0);
     final double acc =
         _stretchK * (target - _stretch) - _stretchC * _stretchVel;
@@ -407,6 +692,7 @@ class FloatingDockState extends State<FloatingDock>
     if (settled && !_dragging) {
       _stretch = 0;
       _stretchVel = 0;
+      _lastCenterVelPx = 0;
       _physicsFrame.value++;
       _physics.stop();
     }
@@ -447,13 +733,51 @@ class FloatingDockState extends State<FloatingDock>
     _to = rect;
   }
 
+  double get _currentCenterVelocityPx {
+    if (_dragging) return _lastCenterVelPx;
+    if (_slide.isAnimating) {
+      return _slide.velocity * (_to.center.dx - _from.center.dx);
+    }
+    return 0.0;
+  }
+
   /// 用临界阻尼弹簧把指示块中心滑到 [rect]。
   ///
   /// [from] 用于"调用者即将改掉 `_dragging`"的场合：那时 [_livePillRect] 已经
   /// 不再指向透镜位置了，必须在改状态**之前**把起点取出来传进来。
-  void _snapTo(Rect rect, {Rect? from}) {
-    if (_to == rect && from == null) return;
-    _from = from ?? _pillRect;
+  /// [initialVelocityPx] 用于透传拖拽松手瞬间的真实水平像素速度。
+  void _snapTo(Rect rect, {Rect? from, double? initialVelocityPx}) {
+    if (_to == rect &&
+        from == null &&
+        (_slide.isAnimating || _pillRect == rect)) {
+      return;
+    }
+    final double inheritedVelPx = initialVelocityPx ?? _currentCenterVelocityPx;
+    final Rect startRect = from ?? _pillRect;
+    final double dx = rect.center.dx - startRect.center.dx;
+    final bool nearZero =
+        dx.abs() < 0.05 &&
+        (rect.width - startRect.width).abs() < 0.05 &&
+        (rect.height - startRect.height).abs() < 0.05 &&
+        (rect.center.dy - startRect.center.dy).abs() < 0.05;
+    if (nearZero) {
+      _placePill(rect);
+      _reportPillProgress();
+      return;
+    }
+
+    // 同向续速、反向干脆折返：
+    // - 同向移动时继承当前像素速度并钳制在单调上界内，消除连点/松手对齐时的顿挫；
+    // - 反向折返时归零初速，从当前视觉位置立刻掉头，避免页面往反方向多冲一段。
+    double normalizedVel = 0.0;
+    if (dx.abs() >= 0.5 && inheritedVelPx * dx > 0) {
+      normalizedVel = (inheritedVelPx / dx).clamp(
+        0.0,
+        _maxMonotonicSlideVelocity,
+      );
+    }
+
+    _from = startRect;
     _to = rect;
     final int gen = ++_slideGen;
     _slide.stop();
@@ -463,7 +787,7 @@ class FloatingDockState extends State<FloatingDock>
             _slideSpring,
             0.0,
             1.0,
-            0.0,
+            normalizedVel,
             tolerance: _slideTolerance,
           ),
         )
@@ -500,10 +824,13 @@ class FloatingDockState extends State<FloatingDock>
       final target = measured[_preview.clamp(0, measured.length - 1)];
       if (_to.isEmpty) {
         _placePill(target);
-      } else {
+      } else if (!_dragging) {
         _snapTo(target);
       }
     });
+    if (_rects.length == widget.items.length) {
+      _reportPillProgress();
+    }
   }
 
   bool _rectsChanged(List<Rect> next) {
@@ -577,8 +904,22 @@ class FloatingDockState extends State<FloatingDock>
   /// 画和"上报给页面的位置"必须用同一个值，否则页面会比透镜快/慢半拍。
   Rect get _livePillRect => _dragging ? _centeredAt(_followX) : _pillRect;
 
+  void _scheduleReportPillProgress() {
+    if (_reportPillProgressScheduled) return;
+    _reportPillProgressScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _reportPillProgressScheduled = false;
+      if (!mounted) return;
+      _reportPillProgress();
+    });
+  }
+
   /// 把指示块中心换算成 0..1，报给外壳（页面跟着这个值平移）。
   void _reportPillProgress() {
+    if (_isInBuildPhase) {
+      _scheduleReportPillProgress();
+      return;
+    }
     final ValueChanged<double>? callback = widget.onPillProgress;
     if (callback == null || _rects.length < 2) return;
     final double first = _rects.first.center.dx;
@@ -616,9 +957,60 @@ class FloatingDockState extends State<FloatingDock>
 
   // ───────────────────────── 手势 ─────────────────────────
 
+  void _onDockPointerDown(PointerDownEvent event) {
+    if (!_isRouteInteractive) return;
+    _activePointer ??= event.pointer;
+  }
+
+  void _onDockPointerUp(PointerUpEvent event) {
+    if (_activePointer != event.pointer) return;
+    _activePointer = null;
+    if (_pressed && !_dragging) {
+      _scheduleReleaseFallback();
+    }
+  }
+
+  void _scheduleReleaseFallback() {
+    final int gen = ++_tapCancelGen;
+    Future<void>.microtask(() {
+      if (!mounted ||
+          gen != _tapCancelGen ||
+          _dragging ||
+          !_pressed ||
+          _activePointer != null) {
+        return;
+      }
+      if (!_isRouteInteractive) {
+        _abortUncommittedPointer();
+        return;
+      }
+      final int target = widget.items.isEmpty
+          ? 0
+          : _preview.clamp(0, widget.items.length - 1);
+      setState(() {
+        _pressed = false;
+        _preview = target;
+        if (_rects.length == widget.items.length) {
+          _snapTo(_rects[target]);
+        }
+      });
+      _commitIndex(target);
+      _syncPointerActive();
+      _releaseEdge();
+      _syncLift();
+      _reportPillProgress();
+    });
+  }
+
   /// 指针按下（还没拖）：透镜鼓起并立刻滑向指针；同时页面开始跟着走。
   void _onPressDown(DragDownDetails details) {
-    if (_rects.length != widget.items.length) return;
+    if (_rects.length != widget.items.length ||
+        _dragging ||
+        _pressed ||
+        !_isRouteInteractive) {
+      return;
+    }
+    ++_tapCancelGen;
     final double x = _clampX(_rawLocalX(details.globalPosition));
     final int target = _indexAt(x);
     widget.onTargetIndexHint?.call(target);
@@ -628,12 +1020,14 @@ class FloatingDockState extends State<FloatingDock>
       _preview = target;
       _snapTo(_centeredAt(x));
     });
+    _syncPointerActive();
     _syncLift();
     _reportPillProgress();
   }
 
   void _onDragStart(DragStartDetails details) {
-    if (_rects.length != widget.items.length) return;
+    if (_rects.length != widget.items.length || !_isRouteInteractive) return;
+    ++_tapCancelGen;
     _rawDragX = _rawLocalX(details.globalPosition);
     final double x = _clampX(_rawDragX);
     final int nextPreview = _indexAt(x);
@@ -643,6 +1037,7 @@ class FloatingDockState extends State<FloatingDock>
     }
     // 透镜从它当前所在的位置开始追手指，而不是瞬移到手指下。
     final double startX = _livePillRect.center.dx;
+    final double carryVelPx = _currentCenterVelocityPx;
     setState(() {
       _dragging = true;
       _dragX = x;
@@ -651,6 +1046,8 @@ class FloatingDockState extends State<FloatingDock>
     });
     ++_slideGen;
     _slide.stop();
+    _lastCenterVelPx = carryVelPx;
+    _syncPointerActive();
     _updateEdgePull();
     _syncLift();
     _ensurePhysics();
@@ -659,6 +1056,10 @@ class FloatingDockState extends State<FloatingDock>
 
   void _onDragUpdate(DragUpdateDetails details) {
     if (!_dragging) return;
+    if (!_isRouteInteractive) {
+      _abortUncommittedPointer();
+      return;
+    }
     _rawDragX = _rawLocalX(details.globalPosition);
     final double x = _clampX(_rawDragX);
     final int nextPreview = _indexAt(x);
@@ -674,63 +1075,76 @@ class FloatingDockState extends State<FloatingDock>
 
   void _onDragEnd(DragEndDetails details) {
     if (!_dragging) return;
+    if (!_isRouteInteractive) {
+      _abortUncommittedPointer();
+      return;
+    }
+    ++_tapCancelGen;
+    _activePointer = null;
     final int target = _preview.clamp(0, widget.items.length - 1);
-    // 必须在清 `_dragging` **之前**取起点：那之后 `_livePillRect` 就不再指向透镜。
+    // 必须在清 `_dragging` **之前**取起点与速度：那之后 `_livePillRect` 就不再指向透镜。
     final Rect from = _livePillRect;
+    final double velPx = _lastCenterVelPx;
     setState(() {
       _dragging = false;
       _pressed = false;
       _preview = target;
-      _snapTo(_rects.isEmpty ? Rect.zero : _rects[target], from: from);
+      if (_rects.length == widget.items.length) {
+        _snapTo(_rects[target], from: from, initialVelocityPx: velPx);
+      }
     });
+    _commitIndex(target);
+    _syncPointerActive();
     _releaseEdge();
     _syncLift();
     // 覆盖"透镜本来就在目标上、动画不启动"的情况（否则页面会停在半路）。
     _reportPillProgress();
   }
 
+  void _onDockPointerCancel(PointerCancelEvent event) {
+    if (_activePointer != null && event.pointer != _activePointer) return;
+    _abortUncommittedPointer();
+  }
+
   void _onDragCancel() {
-    // 没真的拖起来过 → 这是"点击赢了手势仲裁"，松手交给 `_onTapUp`。
+    // 没真的拖起来过 → 这是"点击赢了手势仲裁"，松手交给 `_onTapUp`（或松手兜底微任务）。
     if (!_dragging) return;
-    final Rect from = _livePillRect;
-    setState(() {
-      _dragging = false;
-      _pressed = false;
-      if (_rects.isNotEmpty) _snapTo(_rects[_preview], from: from);
-    });
-    _releaseEdge();
-    _syncLift();
-    _reportPillProgress();
+    _abortUncommittedPointer();
   }
 
   void _onTapUp(TapUpDetails details) {
+    if (!_isRouteInteractive) {
+      _abortUncommittedPointer();
+      return;
+    }
+    ++_tapCancelGen;
+    _activePointer = null;
     if (_rects.length != widget.items.length) {
       setState(() => _pressed = false);
+      _syncPointerActive();
       _syncLift();
       return;
     }
     final int target = _indexAt(_clampX(_rawLocalX(details.globalPosition)));
+    widget.onTargetIndexHint?.call(target);
     setState(() {
       _pressed = false;
       _preview = target;
-      // 手指可能落在按钮边缘：松手后归位到按钮本身。
+      // 手指可能落在按钮边缘：松手后归位到按钮本身（同向时自动续速）。
       _snapTo(_rects[target]);
     });
+    _commitIndex(target);
+    _syncPointerActive();
     _releaseEdge();
     _syncLift();
     _reportPillProgress();
   }
 
   void _onTapCancel() {
-    // 点击没成立（被拖动接管或被系统取消）：按下时已经报过目标，这里**不**往回撤。
-    setState(() {
-      _pressed = false;
-      if (!_dragging && _rects.length == widget.items.length) {
-        _snapTo(_rects[_preview]);
-      }
-    });
-    _syncLift();
-    _reportPillProgress();
+    // 若主指针仍按在屏幕上（例如水平拖拽即将接管，或手指纵向微移但尚未松手），
+    // 不提前解锁页面或提交切页，交由后续 `_onDragStart` / `_onDockPointerUp` / `_onDockPointerCancel` 处理。
+    if (!_pressed || _activePointer != null) return;
+    _scheduleReleaseFallback();
   }
 
   // ───────────────────────── 绘制 ─────────────────────────
@@ -811,144 +1225,150 @@ class FloatingDockState extends State<FloatingDock>
                 onHorizontalDragUpdate: _onDragUpdate,
                 onHorizontalDragEnd: _onDragEnd,
                 onHorizontalDragCancel: _onDragCancel,
-                child: AnimatedBuilder(
-                  animation: Listenable.merge(<Listenable>[_lift, _edge]),
-                  builder: (context, child) {
-                    final double t = _lift.value.clamp(0.0, 1.2);
-                    return Transform.translate(
-                      offset: Offset(_edge.value, 0),
-                      child: Transform.scale(
-                        // 整条 dock 只做很轻的呼吸，主角是透镜。
-                        scale: 1 + 0.015 * t,
-                        child: Container(
-                          height: FloatingDock.height,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: shellHPad,
-                          ),
-                          decoration: BoxDecoration(
-                            color: scheme.surfaceContainerLowest,
-                            borderRadius: BorderRadius.circular(
-                              FloatingDock.height / 2,
+                child: Listener(
+                  behavior: HitTestBehavior.translucent,
+                  onPointerDown: _onDockPointerDown,
+                  onPointerUp: _onDockPointerUp,
+                  onPointerCancel: _onDockPointerCancel,
+                  child: AnimatedBuilder(
+                    animation: Listenable.merge(<Listenable>[_lift, _edge]),
+                    builder: (context, child) {
+                      final double t = _lift.value.clamp(0.0, 1.2);
+                      return Transform.translate(
+                        offset: Offset(_edge.value, 0),
+                        child: Transform.scale(
+                          // 整条 dock 只做很轻的呼吸，主角是透镜。
+                          scale: 1 + 0.015 * t,
+                          child: Container(
+                            height: FloatingDock.height,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: shellHPad,
                             ),
-                            boxShadow: <BoxShadow>[
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.17),
-                                blurRadius: 30,
-                                spreadRadius: 1.5,
-                                offset: const Offset(0, 12),
+                            decoration: BoxDecoration(
+                              color: scheme.surfaceContainerLowest,
+                              borderRadius: BorderRadius.circular(
+                                FloatingDock.height / 2,
                               ),
-                            ],
-                            border: Border.all(
-                              color: scheme.outlineVariant.withValues(
-                                alpha: 0.36,
+                              boxShadow: <BoxShadow>[
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.17),
+                                  blurRadius: 30,
+                                  spreadRadius: 1.5,
+                                  offset: const Offset(0, 12),
+                                ),
+                              ],
+                              border: Border.all(
+                                color: scheme.outlineVariant.withValues(
+                                  alpha: 0.36,
+                                ),
                               ),
                             ),
+                            child: child,
                           ),
-                          child: child,
                         ),
-                      ),
-                    );
-                  },
-                  child: Builder(
-                    builder: (context) {
-                      // 必须先与纯白底色预混合，避免 Color.lerp 在半透插值中段产生暗灰蓝色阶下陷（变深→变浅）。
-                      final restColor = Color.alphaBlend(
-                        scheme.primary.withValues(alpha: 0.11),
-                        scheme.surfaceContainerLowest,
-                      );
-                      final lensColor = Color.alphaBlend(
-                        scheme.primary.withValues(alpha: 0.04),
-                        scheme.surfaceContainerLowest,
-                      ).withValues(alpha: 0.92);
-                      final rimColor = scheme.primary.withValues(alpha: 0.22);
-                      final glyphs = _resolveGlyphs(scheme.primary);
-
-                      return AnimatedBuilder(
-                        animation: Listenable.merge(<Listenable>[
-                          _slide,
-                          _lift,
-                          _physicsFrame,
-                        ]),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: <Widget>[
-                            for (
-                              var position = 0;
-                              position < widget.items.length;
-                              position++
-                            ) ...<Widget>[
-                              if (position > 0) SizedBox(width: itemGap),
-                              _DockButton(
-                                key: _itemKeys[position],
-                                item: widget.items[position],
-                                minWidth: itemMinWidth,
-                              ),
-                            ],
-                          ],
-                        ),
-                        builder: (context, child) {
-                          final base = _livePillRect;
-                          final valid = _isValidLensRect(base);
-                          final lensRect = valid
-                              ? _lensRect(base, _lift.value, _stretch)
-                              : Rect.zero;
-                          final Path lensPath = valid
-                              ? _buildLensPath(lensRect)
-                              : Path();
-                          final double liftClamped = _lift.value.clamp(
-                            0.0,
-                            1.0,
-                          );
-
-                          return Stack(
-                            key: _stackKey,
-                            // 透镜鼓起时比 dock 还高，不能被裁掉。
-                            clipBehavior: Clip.none,
-                            // 必须显式居中：Stack 默认 topStart，按钮会被顶到胶囊上沿。
-                            alignment: Alignment.center,
-                            children: <Widget>[
-                              Positioned.fill(
-                                child: IgnorePointer(
-                                  child: valid
-                                      ? CustomPaint(
-                                          painter: _LensBackdropPainter(
-                                            rect: lensRect,
-                                            path: lensPath,
-                                            lift: liftClamped,
-                                            restColor: restColor,
-                                            lensColor: lensColor,
-                                          ),
-                                        )
-                                      : const SizedBox.shrink(),
-                                ),
-                              ),
-                              ClipPath(
-                                clipper: _OutsideLensClipper(
-                                  rect: lensRect,
-                                  path: lensPath,
-                                ),
-                                child: child,
-                              ),
-                              Positioned.fill(
-                                child: IgnorePointer(
-                                  child: valid
-                                      ? CustomPaint(
-                                          painter: _LensForegroundPainter(
-                                            rect: lensRect,
-                                            path: lensPath,
-                                            lift: liftClamped,
-                                            glyphs: glyphs,
-                                            rimColor: rimColor,
-                                          ),
-                                        )
-                                      : const SizedBox.shrink(),
-                                ),
-                              ),
-                            ],
-                          );
-                        },
                       );
                     },
+                    child: Builder(
+                      builder: (context) {
+                        // 必须先与纯白底色预混合，避免 Color.lerp 在半透插值中段产生暗灰蓝色阶下陷（变深→变浅）。
+                        final restColor = Color.alphaBlend(
+                          scheme.primary.withValues(alpha: 0.11),
+                          scheme.surfaceContainerLowest,
+                        );
+                        final lensColor = Color.alphaBlend(
+                          scheme.primary.withValues(alpha: 0.04),
+                          scheme.surfaceContainerLowest,
+                        ).withValues(alpha: 0.92);
+                        final rimColor = scheme.primary.withValues(alpha: 0.22);
+                        final glyphs = _resolveGlyphs(scheme.primary);
+
+                        return AnimatedBuilder(
+                          animation: Listenable.merge(<Listenable>[
+                            _slide,
+                            _lift,
+                            _physicsFrame,
+                          ]),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              for (
+                                var position = 0;
+                                position < widget.items.length;
+                                position++
+                              ) ...<Widget>[
+                                if (position > 0) SizedBox(width: itemGap),
+                                _DockButton(
+                                  key: _itemKeys[position],
+                                  item: widget.items[position],
+                                  minWidth: itemMinWidth,
+                                ),
+                              ],
+                            ],
+                          ),
+                          builder: (context, child) {
+                            final base = _livePillRect;
+                            final valid = _isValidLensRect(base);
+                            final lensRect = valid
+                                ? _lensRect(base, _lift.value, _stretch)
+                                : Rect.zero;
+                            final Path lensPath = valid
+                                ? _buildLensPath(lensRect)
+                                : Path();
+                            final double liftClamped = _lift.value.clamp(
+                              0.0,
+                              1.0,
+                            );
+
+                            return Stack(
+                              key: _stackKey,
+                              // 透镜鼓起时比 dock 还高，不能被裁掉。
+                              clipBehavior: Clip.none,
+                              // 必须显式居中：Stack 默认 topStart，按钮会被顶到胶囊上沿。
+                              alignment: Alignment.center,
+                              children: <Widget>[
+                                Positioned.fill(
+                                  child: IgnorePointer(
+                                    child: valid
+                                        ? CustomPaint(
+                                            painter: _LensBackdropPainter(
+                                              rect: lensRect,
+                                              path: lensPath,
+                                              lift: liftClamped,
+                                              restColor: restColor,
+                                              lensColor: lensColor,
+                                            ),
+                                          )
+                                        : const SizedBox.shrink(),
+                                  ),
+                                ),
+                                ClipPath(
+                                  clipper: _OutsideLensClipper(
+                                    rect: lensRect,
+                                    path: lensPath,
+                                  ),
+                                  child: child,
+                                ),
+                                Positioned.fill(
+                                  child: IgnorePointer(
+                                    child: valid
+                                        ? CustomPaint(
+                                            painter: _LensForegroundPainter(
+                                              rect: lensRect,
+                                              path: lensPath,
+                                              lift: liftClamped,
+                                              glyphs: glyphs,
+                                              rimColor: rimColor,
+                                            ),
+                                          )
+                                        : const SizedBox.shrink(),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        );
+                      },
+                    ),
                   ),
                 ),
               ),

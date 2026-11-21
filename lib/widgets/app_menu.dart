@@ -81,6 +81,347 @@ final ValueNotifier<(RenderObject?, double)> activeAppMenuMorph =
 /// 长按/下拉交接打开菜单那一刻的全局指针坐标，供 [showAppMenu] 测量后直接定位初始胶囊。
 (int, Offset)? activeTactileDragStart;
 
+/// 判断 [route] 当前是否处于允许展开/保持锚定菜单的前台活跃状态。
+///
+/// 当路由已被新页面/弹窗覆盖（`!isCurrent`）、正在退场（`reverse`/`dismissed`）、
+/// 处于用户交互式返回手势（`userGestureInProgress`）或顶层新路由已开始推入
+/// （`secondaryAnimation` 为 `forward`/`completed`）时返回 false。
+bool isRouteActiveForAppMenu(ModalRoute<dynamic>? route) {
+  if (route == null) return true;
+  if (!route.isCurrent || !route.isActive) return false;
+  if (route.navigator?.userGestureInProgress == true) return false;
+  final animStatus = route.animation?.status;
+  if (animStatus == AnimationStatus.reverse ||
+      animStatus == AnimationStatus.dismissed) {
+    return false;
+  }
+  final secondaryStatus = route.secondaryAnimation?.status;
+  if (secondaryStatus == AnimationStatus.forward ||
+      secondaryStatus == AnimationStatus.completed) {
+    return false;
+  }
+  return true;
+}
+
+/// 判断 [route] 是否正被上层新推入的路由/弹窗覆盖（而非自身退场）。
+///
+/// 菜单挂载在根 [Overlay] 中；若旧页已被上层新路由覆盖，须立即清理旧页收起中的菜单，
+/// 避免其浮在新推入的二级页或弹窗遮罩之上。
+bool _isRouteCoveredByAnotherRoute(ModalRoute<dynamic>? route) {
+  if (route == null) return false;
+  final animStatus = route.animation?.status;
+  if (animStatus == AnimationStatus.reverse ||
+      animStatus == AnimationStatus.dismissed) {
+    return false;
+  }
+  final secondaryStatus = route.secondaryAnimation?.status;
+  if (secondaryStatus == AnimationStatus.forward ||
+      secondaryStatus == AnimationStatus.completed) {
+    return true;
+  }
+  return !route.isCurrent && route.isActive;
+}
+
+bool _isInBuildPhase() {
+  if (SchedulerBinding.instance.schedulerPhase ==
+      SchedulerPhase.persistentCallbacks) {
+    return true;
+  }
+  var debugBuilding = false;
+  assert(() {
+    debugBuilding = WidgetsBinding.instance.buildOwner?.debugBuilding ?? false;
+    return true;
+  }());
+  return debugBuilding;
+}
+
+/// 页面级菜单作用域控制器：通过稳定的 [ValueListenable] 广播页面活跃状态，
+/// 避免活跃度切换触发子树无关控件（如菜单按钮）重建，并承载当前页面本地坐标参考系与 [LayerLink]。
+class AppMenuScopeController {
+  AppMenuScopeController._(this._state);
+
+  _AppMenuScopeState? _state;
+  final ValueNotifier<bool> _active = ValueNotifier<bool>(true);
+
+  /// 当前页面是否处于可展开并保持菜单的活跃态。
+  ValueListenable<bool> get activeListenable => _active;
+
+  bool get isActive => _active.value;
+
+  LayerLink? get layerLink => _state?._layerLink;
+
+  RenderBox? get hostRenderBox => _state?._hostRenderBox;
+
+  bool get tickersEnabled => _state?._tickersEnabled ?? true;
+
+  void _setActive(bool next, {bool deferHostCleanup = false}) {
+    if (_active.value == next) return;
+    _active.value = next;
+    if (!next) {
+      _state?._dismissHostedSessions(deferHostCleanup: deferHostCleanup);
+    }
+  }
+
+  bool _registerSession(_ActiveMenuSession session) {
+    final state = _state;
+    if (state == null || !_active.value) return false;
+    state._sessions.add(session);
+    return true;
+  }
+
+  void _unregisterSession(_ActiveMenuSession session) {
+    _state?._sessions.remove(session);
+  }
+
+  void _detach() {
+    _state = null;
+    if (_active.value) {
+      _active.value = false;
+    }
+    _active.dispose();
+  }
+}
+
+/// 页面级锚定菜单坐标系与生命周期作用域。
+///
+/// 统一解决两类跨页菜单问题：
+///  1. **页面内空间绑定**：通过 [CompositedTransformTarget] 为子树内的 [showAppMenu] 提供
+///     所在页面的本地坐标系与 [LayerLink]（位于翻页平移/路由滑入变换内部），翻页过程中打开菜单会
+///     准确锚定在页面内正确位置并随页面一同滑入落位，离开页面时也会随原页面一同划走；
+///  2. **活跃度门控与自动收起**：当 [active]、[activeListenable]、外层父级 [AppMenuScope]
+///     或所在 [ModalRoute] 任意一项失活（例如切页、按住 Dock 预览、推入二级页/弹窗、页面退场）时，
+///     同步取消未完成的按钮长按/按压、立即收起已展开或尚未进入展开动画的菜单，并拒绝在离场页上展开。
+class AppMenuScope extends StatefulWidget {
+  const AppMenuScope({
+    super.key,
+    required this.child,
+    this.active = true,
+    this.activeListenable,
+  });
+
+  final Widget child;
+  final bool active;
+  final ValueListenable<bool>? activeListenable;
+
+  /// 获取最近的页面菜单作用域控制器。
+  ///
+  /// [listen] 为 true 时仅在控制器对象本身替换（如跨作用域迁移）时触发依赖更新，
+  /// 活跃态布尔值变化不会触发调用方 rebuild。
+  static AppMenuScopeController? maybeControllerOf(
+    BuildContext context, {
+    bool listen = false,
+  }) {
+    final inherited = listen
+        ? context.dependOnInheritedWidgetOfExactType<_AppMenuScopeInherited>()
+        : context.getInheritedWidgetOfExactType<_AppMenuScopeInherited>();
+    return inherited?.controller;
+  }
+
+  /// 当前 [context] 所在页面是否允许展开菜单。
+  static bool isActiveOf(BuildContext context) {
+    final controller = maybeControllerOf(context);
+    if (controller != null) {
+      return controller.isActive;
+    }
+    return isRouteActiveForAppMenu(ModalRoute.of(context));
+  }
+
+  @override
+  State<AppMenuScope> createState() => _AppMenuScopeState();
+}
+
+class _AppMenuScopeInherited extends InheritedWidget {
+  const _AppMenuScopeInherited({
+    required this.controller,
+    required super.child,
+  });
+
+  final AppMenuScopeController controller;
+
+  @override
+  bool updateShouldNotify(covariant _AppMenuScopeInherited oldWidget) =>
+      !identical(oldWidget.controller, controller);
+}
+
+class _AppMenuScopeState extends State<AppMenuScope> {
+  final GlobalKey _hostKey = GlobalKey(debugLabel: 'app-menu-scope-host');
+  final LayerLink _layerLink = LayerLink();
+  late final AppMenuScopeController _controller = AppMenuScopeController._(
+    this,
+  );
+  final Set<_ActiveMenuSession> _sessions = <_ActiveMenuSession>{};
+
+  AppMenuScopeController? _parentController;
+  ModalRoute<dynamic>? _modalRoute;
+  Animation<double>? _routeAnim;
+  Animation<double>? _routeSecondaryAnim;
+  ValueListenable<bool>? _userGestureNotifier;
+  ValueListenable<TickerModeData>? _tickerModeNotifier;
+  bool _tickersEnabled = true;
+  bool _disposed = false;
+
+  RenderBox? get _hostRenderBox {
+    final ro = _hostKey.currentContext?.findRenderObject();
+    if (ro is RenderBox && ro.attached && ro.hasSize) {
+      return ro;
+    }
+    return null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    widget.activeListenable?.addListener(_syncEffectiveActive);
+    _controller._active.value =
+        widget.active && (widget.activeListenable?.value ?? true);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final nextTickerNotifier = TickerMode.getValuesNotifier(context);
+    if (!identical(nextTickerNotifier, _tickerModeNotifier)) {
+      _tickerModeNotifier?.removeListener(_onTickerModeChanged);
+      _tickerModeNotifier = nextTickerNotifier;
+      _tickerModeNotifier!.addListener(_onTickerModeChanged);
+    }
+    _tickersEnabled = _tickerModeNotifier!.value.enabled;
+
+    final nextParent = AppMenuScope.maybeControllerOf(context, listen: true);
+    if (!identical(nextParent, _parentController)) {
+      _parentController?.activeListenable.removeListener(_syncEffectiveActive);
+      _parentController = nextParent;
+      _parentController?.activeListenable.addListener(_syncEffectiveActive);
+    }
+
+    final nextRoute = ModalRoute.of(context);
+    if (!identical(nextRoute, _modalRoute)) {
+      _detachRouteListeners();
+      _modalRoute = nextRoute;
+      _attachRouteListeners();
+    }
+    _syncEffectiveActive(deferHostCleanup: true);
+    if (!_tickersEnabled) {
+      _cleanupHostedSessionsImmediately(deferHostCleanup: true);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant AppMenuScope oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.activeListenable != widget.activeListenable) {
+      oldWidget.activeListenable?.removeListener(_syncEffectiveActive);
+      widget.activeListenable?.addListener(_syncEffectiveActive);
+    }
+    _syncEffectiveActive(deferHostCleanup: true);
+  }
+
+  void _attachRouteListeners() {
+    final route = _modalRoute;
+    if (route == null) return;
+    _routeAnim = route.animation;
+    _routeAnim?.addStatusListener(_onRouteStatusChanged);
+    _routeSecondaryAnim = route.secondaryAnimation;
+    _routeSecondaryAnim?.addStatusListener(_onRouteStatusChanged);
+    _userGestureNotifier = route.navigator?.userGestureInProgressNotifier;
+    _userGestureNotifier?.addListener(_syncEffectiveActive);
+  }
+
+  void _detachRouteListeners() {
+    _routeAnim?.removeStatusListener(_onRouteStatusChanged);
+    _routeAnim = null;
+    _routeSecondaryAnim?.removeStatusListener(_onRouteStatusChanged);
+    _routeSecondaryAnim = null;
+    _userGestureNotifier?.removeListener(_syncEffectiveActive);
+    _userGestureNotifier = null;
+  }
+
+  void _onRouteStatusChanged(AnimationStatus _) {
+    _syncEffectiveActive();
+  }
+
+  void _onTickerModeChanged() {
+    if (_disposed || !mounted) return;
+    _tickersEnabled = _tickerModeNotifier?.value.enabled ?? true;
+    if (!_tickersEnabled) {
+      _cleanupHostedSessionsImmediately(deferHostCleanup: _isInBuildPhase());
+    }
+  }
+
+  void _cleanupHostedSessionsImmediately({bool deferHostCleanup = false}) {
+    if (_sessions.isEmpty) return;
+    final defer = deferHostCleanup || _isInBuildPhase();
+    final snapshot = List<_ActiveMenuSession>.of(_sessions);
+    for (final session in snapshot) {
+      session.dismiss(immediate: true, deferHostCleanup: defer);
+      session.cleanupEntry(deferHostCleanup: defer);
+    }
+  }
+
+  bool _computeEffectiveActive() {
+    if (_disposed || !mounted) return false;
+    if (!widget.active) return false;
+    if (widget.activeListenable?.value == false) return false;
+    if (_parentController?.isActive == false) return false;
+    if (!isRouteActiveForAppMenu(_modalRoute)) return false;
+    return true;
+  }
+
+  void _syncEffectiveActive({bool deferHostCleanup = false}) {
+    if (_disposed) return;
+    final defer = deferHostCleanup || _isInBuildPhase();
+    _controller._setActive(_computeEffectiveActive(), deferHostCleanup: defer);
+    if (_isRouteCoveredByAnotherRoute(_modalRoute)) {
+      _cleanupHostedSessionsImmediately(deferHostCleanup: defer);
+    }
+  }
+
+  void _dismissHostedSessions({bool deferHostCleanup = false}) {
+    if (_sessions.isEmpty) return;
+    final defer = deferHostCleanup || _isInBuildPhase();
+    final forceCleanup =
+        !_tickersEnabled || _isRouteCoveredByAnotherRoute(_modalRoute);
+    final snapshot = List<_ActiveMenuSession>.of(_sessions);
+    for (final session in snapshot) {
+      if (!session.closing) {
+        session.dismiss(immediate: forceCleanup, deferHostCleanup: defer);
+      }
+      if (forceCleanup) {
+        session.cleanupEntry(deferHostCleanup: defer);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    widget.activeListenable?.removeListener(_syncEffectiveActive);
+    _parentController?.activeListenable.removeListener(_syncEffectiveActive);
+    _tickerModeNotifier?.removeListener(_onTickerModeChanged);
+    _detachRouteListeners();
+    final snapshot = List<_ActiveMenuSession>.of(_sessions);
+    _sessions.clear();
+    for (final session in snapshot) {
+      session.dismiss(immediate: true, deferHostCleanup: true);
+      session.cleanupEntry(deferHostCleanup: true);
+    }
+    _controller._detach();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _AppMenuScopeInherited(
+      controller: _controller,
+      child: CompositedTransformTarget(
+        key: _hostKey,
+        link: _layerLink,
+        child: widget.child,
+      ),
+    );
+  }
+}
+
 /// 贴着 [context] 对应的控件展开菜单；选中后回调 [onSelected]。
 ///
 /// [anchorRadius] 用于按钮 → 菜单容器形变衔接的起始圆角半径；
@@ -97,16 +438,53 @@ Future<void> showAppMenu<T>({
   int? dragPointer,
   bool centerHorizontally = false,
 }) async {
+  void clearStaleDragStart() {
+    if (dragPointer != null && activeTactileDragStart?.$1 == dragPointer) {
+      activeTactileDragStart = null;
+    }
+  }
+
   final box = context.findRenderObject();
-  final overlayState = Overlay.of(context, rootOverlay: true);
-  final overlayBox = overlayState.context.findRenderObject();
-  if (box is! RenderBox || overlayBox is! RenderBox || !box.hasSize) return;
+  if (box is! RenderBox || !box.attached || !box.hasSize) {
+    clearStaleDragStart();
+    return;
+  }
+
+  final modalRoute = ModalRoute.of(context);
+  final scope = AppMenuScope.maybeControllerOf(context);
+  final isPageActive = scope != null
+      ? scope.isActive
+      : isRouteActiveForAppMenu(modalRoute);
+  if (!isPageActive) {
+    clearStaleDragStart();
+    return;
+  }
+
+  final overlayState = Overlay.maybeOf(context, rootOverlay: true);
+  if (overlayState == null) {
+    clearStaleDragStart();
+    return;
+  }
+  final overlayRo = overlayState.context.findRenderObject();
+  final RenderBox? hostBox;
+  if (scope != null) {
+    hostBox = scope.hostRenderBox;
+  } else {
+    hostBox = overlayRo is RenderBox && overlayRo.attached && overlayRo.hasSize
+        ? overlayRo
+        : null;
+  }
+  if (hostBox == null) {
+    clearStaleDragStart();
+    return;
+  }
 
   // 若同一按钮对应的菜单正打开着（例如键盘/无障碍直接触发），直接收起。
   final existing = _activeSession;
   if (existing != null &&
       !existing.closing &&
       identical(existing.triggerRenderObject, box)) {
+    clearStaleDragStart();
     existing.dismiss();
     return;
   }
@@ -116,73 +494,132 @@ Future<void> showAppMenu<T>({
         identical(existing.triggerRenderObject, box) &&
         existing.state != null &&
         existing.state!.mounted &&
-        existing.state!._targetRect != null) {
+        existing.state!._targetRect != null &&
+        identical(existing.scope, scope)) {
       handoffClosingSession = existing;
     } else {
-      existing.dismiss();
+      existing.dismiss(immediate: true);
       existing.cleanupEntry();
     }
   }
 
-  final anchor =
-      box.localToGlobal(Offset.zero, ancestor: overlayBox) & box.size;
-  final overlaySize = overlayBox.size;
-  final modalRoute = ModalRoute.of(context);
+  if (scope != null && !scope.isActive) {
+    clearStaleDragStart();
+    return;
+  }
+
+  final anchor = box.localToGlobal(Offset.zero, ancestor: hostBox) & box.size;
+  final overlaySize = hostBox.size;
+  final layerLink = scope?.layerLink;
+
+  RenderBox? resolveHostRenderBox() {
+    if (scope != null) {
+      return scope.hostRenderBox;
+    }
+    final ro = overlayState.context.findRenderObject();
+    if (ro is RenderBox && ro.attached && ro.hasSize) {
+      return ro;
+    }
+    return null;
+  }
 
   final completer = Completer<T?>();
   late final _ActiveMenuSession session;
   late final OverlayEntry entry;
+  var entryInserted = false;
 
   final menuKey = GlobalKey<_AppMenuState<T>>();
   Widget? cachedMenu;
 
   entry = OverlayEntry(
-    builder: (_) => cachedMenu ??= _AppMenu<T>(
-      key: menuKey,
-      session: session,
-      previousClosingSession: handoffClosingSession,
-      items: items,
-      maxHeight: maxHeight,
-      anchor: anchor,
-      anchorRadius: anchorRadius,
-      minWidth: minWidth,
-      overlaySize: overlaySize,
-      dragPointer: dragPointer,
-      centerHorizontally: centerHorizontally,
-      onDismissed: (T? picked) {
-        if (!completer.isCompleted) {
-          completer.complete(picked);
-        }
-      },
-      onEntryDisposeReady: () {
-        session.cleanupEntry();
-      },
-    ),
+    builder: (_) {
+      if (session.cleaned) {
+        return const SizedBox.shrink();
+      }
+      return cachedMenu ??= _AppMenu<T>(
+        key: menuKey,
+        session: session,
+        previousClosingSession: handoffClosingSession,
+        items: items,
+        maxHeight: maxHeight,
+        anchor: anchor,
+        anchorRadius: anchorRadius,
+        minWidth: minWidth,
+        overlaySize: overlaySize,
+        layerLink: layerLink,
+        resolveHostRenderBox: resolveHostRenderBox,
+        dragPointer: dragPointer,
+        centerHorizontally: centerHorizontally,
+        onDismissed: (T? picked) {
+          if (!completer.isCompleted) {
+            completer.complete(picked);
+          }
+        },
+        onEntryDisposeReady: ({bool deferHostCleanup = false}) {
+          session.cleanupEntry(deferHostCleanup: deferHostCleanup);
+        },
+      );
+    },
   );
 
   session = _ActiveMenuSession(
     triggerRenderObject: box,
-    entry: entry,
+    scope: scope,
     modalRoute: modalRoute,
     pendingDragPointer: dragPointer,
-    onRequestClose: ([Object? result]) {
-      final state = menuKey.currentState;
-      if (state != null) {
-        state.closeWithResult(result as T?);
-      } else {
-        if (!completer.isCompleted) {
-          completer.complete(result as T?);
+    handoffClosingSession: handoffClosingSession,
+    onCleanupHost: (bool defer) {
+      scope?._unregisterSession(session);
+      if (entryInserted) {
+        entryInserted = false;
+        void removeAndDispose() {
+          entry.remove();
+          entry.dispose();
         }
-        session.cleanupEntry();
+
+        if (defer) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            removeAndDispose();
+          });
+        } else {
+          removeAndDispose();
+        }
       }
     },
+    onRequestClose:
+        ({
+          Object? result,
+          bool immediate = false,
+          bool deferHostCleanup = false,
+        }) {
+          final state = menuKey.currentState;
+          if (state != null) {
+            state.closeWithResult(
+              result as T?,
+              immediate: immediate,
+              deferHostCleanup: deferHostCleanup,
+            );
+          } else {
+            if (!completer.isCompleted) {
+              completer.complete(result as T?);
+            }
+            session.cleanupEntry(deferHostCleanup: deferHostCleanup);
+          }
+        },
   );
+
+  if (scope != null && !scope._registerSession(session)) {
+    entry.dispose();
+    clearStaleDragStart();
+    return;
+  }
 
   _activeSession = session;
   if (handoffClosingSession == null) {
     activeAppMenuMorph.value = (box, 0.0);
   }
   session.attach();
+  entryInserted = true;
   overlayState.insert(entry);
 
   final picked = await completer.future;
@@ -194,32 +631,56 @@ Future<void> showAppMenu<T>({
 class _ActiveMenuSession {
   _ActiveMenuSession({
     required this.triggerRenderObject,
-    required this.entry,
+    required this.scope,
     required this.modalRoute,
+    required this.onCleanupHost,
     required this.onRequestClose,
     this.pendingDragPointer,
+    this.handoffClosingSession,
   });
 
   final RenderObject triggerRenderObject;
-  final OverlayEntry entry;
+  final AppMenuScopeController? scope;
   final ModalRoute<dynamic>? modalRoute;
-  final void Function([Object? result]) onRequestClose;
+  final void Function(bool defer) onCleanupHost;
+  final void Function({Object? result, bool immediate, bool deferHostCleanup})
+  onRequestClose;
   final int? pendingDragPointer;
+  _ActiveMenuSession? handoffClosingSession;
 
   bool closing = false;
   bool cleaned = false;
   bool dragPointerEnded = false;
-  bool _pendingDragAttached = false;
+  bool _pendingPointerAttached = false;
+  bool _routeListenersAttached = false;
+  ValueListenable<bool>? _userGestureNotifier;
   LocalHistoryEntry? _historyEntry;
   bool _removingHistory = false;
   _AppMenuState<dynamic>? state;
 
+  void _clearPendingDragStart() {
+    if (pendingDragPointer != null &&
+        activeTactileDragStart?.$1 == pendingDragPointer) {
+      activeTactileDragStart = null;
+    }
+  }
+
   void attach() {
-    if (pendingDragPointer != null && !_pendingDragAttached) {
-      _pendingDragAttached = true;
+    if (!_pendingPointerAttached) {
+      _pendingPointerAttached = true;
       GestureBinding.instance.pointerRouter.addGlobalRoute(
-        _handlePendingDragPointer,
+        _handlePendingGlobalPointer,
       );
+    }
+    if (scope == null && modalRoute != null && !_routeListenersAttached) {
+      _routeListenersAttached = true;
+      modalRoute!.animation?.addStatusListener(_onFallbackRouteStatusChanged);
+      modalRoute!.secondaryAnimation?.addStatusListener(
+        _onFallbackRouteStatusChanged,
+      );
+      _userGestureNotifier =
+          modalRoute!.navigator?.userGestureInProgressNotifier;
+      _userGestureNotifier?.addListener(_onFallbackRouteActivityChanged);
     }
     if (modalRoute != null && modalRoute!.isActive) {
       // impliesAppBarDismissal: false —— 只让系统返回键能收起菜单，
@@ -227,6 +688,7 @@ class _ActiveMenuSession {
       final localHistory = LocalHistoryEntry(
         impliesAppBarDismissal: false,
         onRemove: () {
+          _historyEntry = null;
           if (_removingHistory || closing) return;
           dismiss();
         },
@@ -236,57 +698,141 @@ class _ActiveMenuSession {
     }
   }
 
-  void _handlePendingDragPointer(PointerEvent event) {
-    if (event.pointer != pendingDragPointer) return;
-    if (event is PointerUpEvent || event is PointerCancelEvent) {
-      dragPointerEnded = true;
-      detachPendingDragListener();
+  void _onFallbackRouteStatusChanged(AnimationStatus _) =>
+      _onFallbackRouteActivityChanged();
+
+  void _onFallbackRouteActivityChanged() {
+    if (cleaned) return;
+    final defer = _isInBuildPhase();
+    final covered = _isRouteCoveredByAnotherRoute(modalRoute);
+    if (!isRouteActiveForAppMenu(modalRoute)) {
+      dismiss(immediate: covered, deferHostCleanup: defer);
+    }
+    if (covered) {
+      cleanupEntry(deferHostCleanup: defer);
     }
   }
 
-  void detachPendingDragListener() {
-    if (!_pendingDragAttached) return;
-    _pendingDragAttached = false;
+  void _detachFallbackRouteListeners() {
+    if (!_routeListenersAttached) return;
+    _routeListenersAttached = false;
+    modalRoute?.animation?.removeStatusListener(_onFallbackRouteStatusChanged);
+    modalRoute?.secondaryAnimation?.removeStatusListener(
+      _onFallbackRouteStatusChanged,
+    );
+    _userGestureNotifier?.removeListener(_onFallbackRouteActivityChanged);
+    _userGestureNotifier = null;
+  }
+
+  /// 在 [_AppMenuState.initState] 接管全局指针前的首帧窗口内，
+  /// 同步追踪待交接手指松手/取消，并在外部按下（如立即点击 Dock）时取消展开。
+  void _handlePendingGlobalPointer(PointerEvent event) {
+    if (closing) {
+      detachPendingPointerListener();
+      return;
+    }
+    if (pendingDragPointer != null && event.pointer == pendingDragPointer) {
+      if (event is PointerUpEvent || event is PointerCancelEvent) {
+        dragPointerEnded = true;
+      }
+      return;
+    }
+    if (event is PointerDownEvent && pendingDragPointer == null) {
+      dismiss();
+    }
+  }
+
+  void detachPendingPointerListener() {
+    if (!_pendingPointerAttached) return;
+    _pendingPointerAttached = false;
     GestureBinding.instance.pointerRouter.removeGlobalRoute(
-      _handlePendingDragPointer,
+      _handlePendingGlobalPointer,
     );
   }
 
-  void dismiss([Object? result]) {
+  void dismiss({
+    Object? result,
+    bool immediate = false,
+    bool deferHostCleanup = false,
+  }) {
     if (closing) return;
     closing = true;
-    _removeHistoryEntry();
-    onRequestClose(result);
+    final defer = deferHostCleanup || _isInBuildPhase();
+    _clearPendingDragStart();
+    detachPendingPointerListener();
+    _removeHistoryEntry(defer: defer);
+    onRequestClose(
+      result: result,
+      immediate: immediate,
+      deferHostCleanup: defer,
+    );
   }
 
-  void _removeHistoryEntry() {
+  void _removeHistoryEntry({required bool defer}) {
     final history = _historyEntry;
     _historyEntry = null;
     if (history == null) return;
-    _removingHistory = true;
-    try {
-      history.remove();
-    } finally {
-      _removingHistory = false;
+    void removeNow() {
+      if (modalRoute != null && !modalRoute!.isActive) return;
+      _removingHistory = true;
+      try {
+        history.remove();
+      } finally {
+        _removingHistory = false;
+      }
+    }
+
+    if (defer) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => removeNow());
+    } else {
+      removeNow();
     }
   }
 
-  void cleanupEntry() {
+  void cleanupEntry({bool deferHostCleanup = false}) {
     if (cleaned) return;
     cleaned = true;
-    detachPendingDragListener();
-    _removeHistoryEntry();
+    state?._onSessionCleaned();
+    final defer = deferHostCleanup || _isInBuildPhase();
+    _clearPendingDragStart();
+    detachPendingPointerListener();
+    _detachFallbackRouteListeners();
+    _removeHistoryEntry(defer: defer);
+    final previous = handoffClosingSession;
+    handoffClosingSession = null;
     if (identical(_activeSession, this)) {
-      _activeSession = null;
-      if (identical(activeAppMenuMorph.value.$1, triggerRenderObject)) {
-        activeAppMenuMorph.value = (null, 0.0);
+      if (previous != null && !previous.cleaned) {
+        _activeSession = previous;
+        if (defer) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            previous.state?._syncAnchorMorph();
+          });
+        } else {
+          previous.state?._syncAnchorMorph();
+        }
+      } else {
+        _activeSession = null;
+        _clearAnchorMorph(defer: defer);
       }
-    } else if (_activeSession == null &&
-        identical(activeAppMenuMorph.value.$1, triggerRenderObject)) {
-      activeAppMenuMorph.value = (null, 0.0);
+    } else if (_activeSession == null) {
+      _clearAnchorMorph(defer: defer);
     }
-    if (entry.mounted) {
-      entry.remove();
+    onCleanupHost(defer);
+  }
+
+  void _clearAnchorMorph({required bool defer}) {
+    if (!identical(activeAppMenuMorph.value.$1, triggerRenderObject)) {
+      return;
+    }
+    if (defer) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_activeSession == null &&
+            identical(activeAppMenuMorph.value.$1, triggerRenderObject)) {
+          activeAppMenuMorph.value = (null, 0.0);
+        }
+      });
+    } else {
+      activeAppMenuMorph.value = (null, 0.0);
     }
   }
 }
@@ -302,6 +848,8 @@ class _AppMenu<T> extends StatefulWidget {
     required this.anchorRadius,
     required this.minWidth,
     required this.overlaySize,
+    required this.layerLink,
+    required this.resolveHostRenderBox,
     required this.dragPointer,
     required this.centerHorizontally,
     required this.onDismissed,
@@ -316,10 +864,12 @@ class _AppMenu<T> extends StatefulWidget {
   final double anchorRadius;
   final double minWidth;
   final Size overlaySize;
+  final LayerLink? layerLink;
+  final RenderBox? Function() resolveHostRenderBox;
   final int? dragPointer;
   final bool centerHorizontally;
   final ValueChanged<T?> onDismissed;
-  final VoidCallback onEntryDisposeReady;
+  final void Function({bool deferHostCleanup}) onEntryDisposeReady;
 
   @override
   State<_AppMenu<T>> createState() => _AppMenuState<T>();
@@ -432,6 +982,7 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     _heightMorph,
     _pressLift,
     _rubberOffset,
+    _cleanedNotifier,
   ]);
 
   List<Rect> _itemRects = const <Rect>[];
@@ -465,6 +1016,19 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     );
   }
 
+  final ValueNotifier<bool> _cleanedNotifier = ValueNotifier<bool>(false);
+
+  void _onSessionCleaned() {
+    if (_disposed) return;
+    _widthMorph.stop();
+    _heightMorph.stop();
+    _pressLift.stop();
+    _rubberAnim.stop();
+    if (!_cleanedNotifier.value) {
+      _cleanedNotifier.value = true;
+    }
+  }
+
   int? _activePointer;
   int? _handoffPointer;
   Offset? _handoffPosition;
@@ -486,15 +1050,34 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
   );
 
   bool _globalRouterAttached = false;
+  bool _tickersEnabled = true;
 
   @override
   void initState() {
     super.initState();
     widget.session.state = this;
-    widget.session.detachPendingDragListener();
+    widget.session.detachPendingPointerListener();
     _syncKeys();
     _rubberAnim.addListener(_syncRubberOffset);
     _morphGeometryListenable.addListener(_syncAnchorMorph);
+
+    if (widget.session.closing ||
+        widget.session.cleaned ||
+        widget.session.scope?.isActive == false) {
+      _closing = true;
+      _committed = true;
+      if (widget.dragPointer != null &&
+          activeTactileDragStart?.$1 == widget.dragPointer) {
+        activeTactileDragStart = null;
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_disposed && mounted) {
+          widget.onEntryDisposeReady();
+        }
+      });
+      return;
+    }
+
     _attachGlobalPointerRouter();
 
     if (widget.dragPointer != null && !widget.session.dragPointerEnded) {
@@ -504,7 +1087,11 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
         _handoffPosition = activeTactileDragStart!.$2;
         activeTactileDragStart = null;
       } else {
-        _handoffPosition = widget.anchor.center;
+        final hostBox = widget.resolveHostRenderBox();
+        _handoffPosition =
+            hostBox != null && hostBox.attached && hostBox.hasSize
+            ? hostBox.localToGlobal(widget.anchor.center)
+            : widget.anchor.center;
       }
       _suppressInitialHoverHaptic = true;
       // 长按触发瞬间统一下发唯一一次轻触震动，避免后续初次落入菜单项再重复震动。
@@ -639,6 +1226,30 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
   void didChangeDependencies() {
     super.didChangeDependencies();
     _needsMeasure = true;
+    final tickersEnabled = TickerMode.valuesOf(context).enabled;
+    _tickersEnabled = tickersEnabled;
+    if (widget.session.scope == null && !widget.session.closing) {
+      if (!isRouteActiveForAppMenu(widget.session.modalRoute)) {
+        Future<void>.microtask(() {
+          if (!_disposed && mounted && !widget.session.closing) {
+            widget.session.dismiss();
+          }
+        });
+      }
+    }
+    if (!tickersEnabled && (_closing || widget.session.closing)) {
+      _pendingPreviousClosing?.cleanupEntry(deferHostCleanup: true);
+      _pendingPreviousClosing = null;
+      _widthMorph.stop();
+      _heightMorph.stop();
+      _pressLift.stop();
+      _rubberAnim.stop();
+      Future<void>.microtask(() {
+        if (!_disposed && mounted && !_tickersEnabled) {
+          widget.onEntryDisposeReady();
+        }
+      });
+    }
   }
 
   @override
@@ -672,9 +1283,14 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
   @override
   void dispose() {
     _disposed = true;
-    _pendingPreviousClosing?.cleanupEntry();
+    _pendingPreviousClosing?.cleanupEntry(deferHostCleanup: true);
     _pendingPreviousClosing = null;
     _detachGlobalPointerRouter();
+    widget.session.detachPendingPointerListener();
+    widget.session._detachFallbackRouteListeners();
+    if (!_committed && !widget.session.closing) {
+      widget.onDismissed(null);
+    }
     _morphGeometryListenable.removeListener(_syncAnchorMorph);
     final triggerRo = widget.session.triggerRenderObject;
     final canClearMorph =
@@ -682,8 +1298,7 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
         identical(_activeSession?.state, this) ||
         _activeSession == null;
     if (canClearMorph && identical(activeAppMenuMorph.value.$1, triggerRo)) {
-      if (SchedulerBinding.instance.schedulerPhase ==
-          SchedulerPhase.persistentCallbacks) {
+      if (_isInBuildPhase()) {
         Future<void>.microtask(() {
           if ((identical(_activeSession, widget.session) ||
                   _activeSession == null) &&
@@ -699,7 +1314,11 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
       _activeSession?.state = null;
       _activeSession = null;
     }
+    if (identical(widget.session.state, this)) {
+      widget.session.state = null;
+    }
     _rubberAnim.removeListener(_syncRubberOffset);
+    _cleanedNotifier.dispose();
     _highlightedIndex.dispose();
     _rubberOffset.dispose();
     _scrollController.dispose();
@@ -762,7 +1381,7 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
   }
 
   void _measure() {
-    if (!mounted) return;
+    if (!mounted || widget.session.cleaned) return;
     final closing = _closing || _committed || widget.session.closing;
     if (closing && _targetRect != null) return;
     final stackBox = _menuStackKey.currentContext?.findRenderObject();
@@ -823,6 +1442,7 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     if (_pendingPreviousClosing != null) {
       final prev = _pendingPreviousClosing;
       _pendingPreviousClosing = null;
+      widget.session.handoffClosingSession = null;
       var initW = 0.0;
       var initWV = 0.0;
       var initH = 0.0;
@@ -987,17 +1607,11 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
       }
     }
     // 长按交接初帧期间按未缩放的目标菜单坐标映射，避免静止/微抖动手指误命中下方菜单项后再滑回上方。
-    final overlayBox = Overlay.of(
-      context,
-      rootOverlay: true,
-    ).context.findRenderObject();
-    final inOverlay = overlayBox is RenderBox && overlayBox.hasSize
-        ? overlayBox.globalToLocal(globalPosition)
+    final hostBox = widget.resolveHostRenderBox();
+    final inHost = hostBox != null && hostBox.attached && hostBox.hasSize
+        ? hostBox.globalToLocal(globalPosition)
         : globalPosition;
-    return inOverlay -
-        target.topLeft -
-        _rubberOffset.value +
-        Offset(0, scrollY);
+    return inHost - target.topLeft - _rubberOffset.value + Offset(0, scrollY);
   }
 
   int? _nearestSelectable(int around, {required bool preferAbove}) {
@@ -1074,13 +1688,18 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
       _highlightedIndex.value = index;
     }
     _committed = true;
-    widget.session.dismiss(item.value);
+    widget.session.dismiss(result: item.value);
   }
 
-  void closeWithResult(T? picked) {
+  void closeWithResult(
+    T? picked, {
+    bool immediate = false,
+    bool deferHostCleanup = false,
+  }) {
+    final defer = deferHostCleanup || _isInBuildPhase();
     if (!mounted) {
       widget.onDismissed(picked);
-      widget.onEntryDisposeReady();
+      widget.onEntryDisposeReady(deferHostCleanup: defer);
       return;
     }
     if (_closing) {
@@ -1099,12 +1718,14 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
     final hasStarted =
         _targetRect != null &&
         (_widthMorph.value.abs() > 0.001 || _heightMorph.value.abs() > 0.001);
-    if (!hasStarted) {
-      _pendingPreviousClosing?.cleanupEntry();
+    if (immediate || !hasStarted || !_tickersEnabled) {
+      _pendingPreviousClosing?.cleanupEntry(deferHostCleanup: defer);
       _pendingPreviousClosing = null;
       _widthMorph.stop();
       _heightMorph.stop();
-      widget.onEntryDisposeReady();
+      _pressLift.stop();
+      _rubberAnim.stop();
+      widget.onEntryDisposeReady(deferHostCleanup: defer);
       return;
     }
 
@@ -1257,14 +1878,16 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
 
   @override
   Widget build(BuildContext context) {
+    final targetRect = _targetRect;
+    if (widget.session.cleaned || (_closing && targetRect == null)) {
+      return const SizedBox.shrink();
+    }
     final divider = Theme.of(context).dividerTheme;
     final scheme = Theme.of(context).colorScheme;
     if (_needsMeasure) {
       _needsMeasure = false;
       WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
     }
-
-    final targetRect = _targetRect;
     final menuStack = Stack(
       key: _menuStackKey,
       children: <Widget>[
@@ -1419,6 +2042,53 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
       ),
     );
 
+    final morphCard = _ClosingIgnorePointer(
+      isClosing: _isClosingSession,
+      child: _MenuMorphBox(
+        key: _morphBoxKey,
+        morphListenable: _cardMorphListenable,
+        widthMorph: _widthMorph,
+        heightMorph: _heightMorph,
+        pressLift: _pressLift,
+        rubberOffset: _rubberOffset,
+        isClosing: () => _closing,
+        isCleaned: () => widget.session.cleaned,
+        getClosePeakMorph: _effectiveFadeMorph,
+        anchor: widget.anchor,
+        targetRect: targetRect,
+        anchorRadius: widget.anchorRadius,
+        cardRadius: 20.0,
+        alignX: _alignX,
+        alignY: alignY,
+        liftSpan: liftSpan,
+        isScrollable: _isScrollable,
+        cardColor: scheme.surfaceContainerLowest,
+        borderColor: scheme.outlineVariant,
+        child: interactiveCard,
+      ),
+    );
+    final layerLink = widget.layerLink;
+    final Widget positionedCard = layerLink != null
+        ? Positioned(
+            left: 0,
+            top: 0,
+            width: targetRect.width,
+            height: targetRect.height,
+            child: CompositedTransformFollower(
+              link: layerLink,
+              showWhenUnlinked: false,
+              offset: targetRect.topLeft,
+              child: morphCard,
+            ),
+          )
+        : Positioned(
+            left: targetRect.left,
+            top: targetRect.top,
+            width: targetRect.width,
+            height: targetRect.height,
+            child: morphCard,
+          );
+
     return Positioned.fill(
       child: Stack(
         children: <Widget>[
@@ -1429,36 +2099,7 @@ class _AppMenuState<T> extends State<_AppMenu<T>>
               onDismiss: _dismissFromBarrier,
             ),
           ),
-          Positioned(
-            left: targetRect.left,
-            top: targetRect.top,
-            width: targetRect.width,
-            height: targetRect.height,
-            child: _ClosingIgnorePointer(
-              isClosing: _isClosingSession,
-              child: _MenuMorphBox(
-                key: _morphBoxKey,
-                morphListenable: _cardMorphListenable,
-                widthMorph: _widthMorph,
-                heightMorph: _heightMorph,
-                pressLift: _pressLift,
-                rubberOffset: _rubberOffset,
-                isClosing: () => _closing,
-                getClosePeakMorph: _effectiveFadeMorph,
-                anchor: widget.anchor,
-                targetRect: targetRect,
-                anchorRadius: widget.anchorRadius,
-                cardRadius: 20.0,
-                alignX: _alignX,
-                alignY: alignY,
-                liftSpan: liftSpan,
-                isScrollable: _isScrollable,
-                cardColor: scheme.surfaceContainerLowest,
-                borderColor: scheme.outlineVariant,
-                child: interactiveCard,
-              ),
-            ),
-          ),
+          positionedCard,
         ],
       ),
     );
@@ -1497,6 +2138,7 @@ class _MenuMorphBox extends SingleChildRenderObjectWidget {
     required this.pressLift,
     required this.rubberOffset,
     required this.isClosing,
+    required this.isCleaned,
     required this.getClosePeakMorph,
     required this.anchor,
     required this.targetRect,
@@ -1517,6 +2159,7 @@ class _MenuMorphBox extends SingleChildRenderObjectWidget {
   final ValueListenable<double> pressLift;
   final ValueListenable<Offset> rubberOffset;
   final bool Function() isClosing;
+  final bool Function() isCleaned;
   final double Function() getClosePeakMorph;
   final Rect anchor;
   final Rect targetRect;
@@ -1537,6 +2180,7 @@ class _MenuMorphBox extends SingleChildRenderObjectWidget {
     pressLift: pressLift,
     rubberOffset: rubberOffset,
     isClosing: isClosing,
+    isCleaned: isCleaned,
     getClosePeakMorph: getClosePeakMorph,
     anchor: anchor,
     targetRect: targetRect,
@@ -1562,6 +2206,7 @@ class _MenuMorphBox extends SingleChildRenderObjectWidget {
       pressLift: pressLift,
       rubberOffset: rubberOffset,
       isClosing: isClosing,
+      isCleaned: isCleaned,
       getClosePeakMorph: getClosePeakMorph,
       anchor: anchor,
       targetRect: targetRect,
@@ -1622,6 +2267,7 @@ class RenderMenuMorphBox extends RenderProxyBox {
     required this._pressLift,
     required this._rubberOffset,
     required this._isClosing,
+    required this._isCleaned,
     required this._getClosePeakMorph,
     required this._anchor,
     required this._targetRect,
@@ -1641,6 +2287,7 @@ class RenderMenuMorphBox extends RenderProxyBox {
   ValueListenable<double> _pressLift;
   ValueListenable<Offset> _rubberOffset;
   bool Function() _isClosing;
+  bool Function() _isCleaned;
   double Function() _getClosePeakMorph;
   Rect _anchor;
   Rect _targetRect;
@@ -1720,6 +2367,7 @@ class RenderMenuMorphBox extends RenderProxyBox {
     required ValueListenable<double> pressLift,
     required ValueListenable<Offset> rubberOffset,
     required bool Function() isClosing,
+    required bool Function() isCleaned,
     required double Function() getClosePeakMorph,
     required Rect anchor,
     required Rect targetRect,
@@ -1763,6 +2411,7 @@ class RenderMenuMorphBox extends RenderProxyBox {
     _pressLift = pressLift;
     _rubberOffset = rubberOffset;
     _isClosing = isClosing;
+    _isCleaned = isCleaned;
     _getClosePeakMorph = getClosePeakMorph;
     _anchor = anchor;
     _targetRect = targetRect;
@@ -1831,11 +2480,14 @@ class RenderMenuMorphBox extends RenderProxyBox {
         ? math.min(clampedAvg, _getClosePeakMorph())
         : clampedAvg;
 
+    final cleaned = _isCleaned();
     final shellU = (fadeMorph / 0.18).clamp(0.0, 1.0);
-    final shellAlpha = Curves.easeOut.transform(shellU);
+    final shellAlpha = cleaned ? 0.0 : Curves.easeOut.transform(shellU);
 
     final contentU = ((fadeMorph - 0.06) / 0.42).clamp(0.0, 1.0);
-    final contentAlpha = Curves.easeOutCubic.transform(contentU);
+    final contentAlpha = cleaned
+        ? 0.0
+        : Curves.easeOutCubic.transform(contentU);
 
     final targetSize = _targetRect.size;
     final anchorLocal = _anchor.shift(-_targetRect.topLeft);
