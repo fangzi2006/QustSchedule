@@ -3547,6 +3547,40 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('输入框提示文字采用低对比度淡化色且验证码页局部样式不丢失主题淡化色', (tester) async {
+      final lightTheme = buildLightTheme();
+      final themeHintStyle = lightTheme.inputDecorationTheme.hintStyle;
+      expect(themeHintStyle, isNotNull);
+      expect(themeHintStyle!.fontSize, 14);
+      expect(themeHintStyle.fontWeight, FontWeight.w400);
+      expect(themeHintStyle.color?.a, lessThanOrEqualTo(0.45));
+
+      final backend = FakeBackend(
+        loginBehavior: (_, _) async => const CaptchaState(
+          continuationId: 'c1',
+          imageBase64: 'not-valid-base64!!!',
+          mimeType: 'image/png',
+        ),
+      );
+      final model = buildModel(backend: backend);
+      addTearDown(model.dispose);
+      await model.signIn('20240001', 'pw');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: lightTheme,
+          home: CaptchaPage(model: model),
+        ),
+      );
+      await tester.pump();
+
+      final field = tester.widget<TextField>(find.byType(TextField));
+      final fieldHintStyle = field.decoration?.hintStyle;
+      expect(fieldHintStyle?.letterSpacing, 0);
+      expect(fieldHintStyle?.fontSize, 15);
+      expect(fieldHintStyle?.color, themeHintStyle.color);
+    });
+
     testWidgets(
       'AppColors 回退与纯白容器面、SectionTitle 紧凑标题、ChangelogCategoryBadge 语义色及 UpdateProxyPage 零阴影卡片',
       (tester) async {

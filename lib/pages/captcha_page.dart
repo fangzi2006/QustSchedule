@@ -209,11 +209,17 @@ class _CaptchaPageState extends State<CaptchaPage> {
                           ),
                           decoration: InputDecoration(
                             hintText: '输入验证码',
-                            hintStyle: const TextStyle(
-                              fontSize: 15,
-                              letterSpacing: 0,
-                              fontWeight: FontWeight.w400,
-                            ),
+                            hintStyle:
+                                (theme.inputDecorationTheme.hintStyle ??
+                                        TextStyle(
+                                          color: scheme.onSurfaceVariant
+                                              .withValues(alpha: 0.40),
+                                        ))
+                                    .copyWith(
+                                      fontSize: 15,
+                                      letterSpacing: 0,
+                                      fontWeight: FontWeight.w400,
+                                    ),
                             suffixIcon: IconButton(
                               icon: const Icon(Icons.refresh_rounded, size: 20),
                               tooltip: '换一张',

@@ -309,6 +309,12 @@ ThemeData buildLightTheme() {
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: scheme.surfaceContainerLowest,
+      // 全局淡化占位提示文字，避免与已输入正文混淆。
+      hintStyle: TextStyle(
+        color: scheme.onSurfaceVariant.withValues(alpha: 0.40),
+        fontSize: 14,
+        fontWeight: FontWeight.w400,
+      ),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(AppRadius.medium),
         borderSide: BorderSide(color: scheme.outlineVariant),
