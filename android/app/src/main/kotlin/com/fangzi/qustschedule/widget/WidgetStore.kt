@@ -35,16 +35,15 @@ internal data class WidgetStyleData(
                 cornerRadius = obj.optFiniteFloat("cornerRadius", base.cornerRadius, 8f, 28f),
                 fontScale = obj.optFiniteFloat("fontScale", base.fontScale, 0.75f, 1.20f),
                 density = obj.optNonNullString("density", base.density),
-                showHeader = if (obj.has("showHeader")) obj.optBoolean("showHeader", base.showHeader) else base.showHeader,
-                showLocation = if (obj.has("showLocation")) obj.optBoolean("showLocation", base.showLocation) else base.showLocation,
-                showTeacher = if (obj.has("showTeacher")) obj.optBoolean("showTeacher", base.showTeacher) else base.showTeacher,
-                showTime = if (obj.has("showTime")) obj.optBoolean("showTime", base.showTime) else base.showTime,
-                showExams = if (obj.has("showExams")) obj.optBoolean("showExams", base.showExams) else base.showExams,
-                autoSwitchTomorrow = if (obj.has("autoSwitchTomorrow")) {
-                    obj.optBoolean("autoSwitchTomorrow", base.autoSwitchTomorrow)
-                } else {
-                    base.autoSwitchTomorrow
-                },
+                showHeader = obj.optNonNullBoolean("showHeader", base.showHeader),
+                showLocation = obj.optNonNullBoolean("showLocation", base.showLocation),
+                showTeacher = obj.optNonNullBoolean("showTeacher", base.showTeacher),
+                showTime = obj.optNonNullBoolean("showTime", base.showTime),
+                showExams = obj.optNonNullBoolean("showExams", base.showExams),
+                autoSwitchTomorrow = obj.optNonNullBoolean(
+                    "autoSwitchTomorrow",
+                    base.autoSwitchTomorrow,
+                ),
                 finishedCourseMode = obj.optNonNullString("finishedCourseMode", base.finishedCourseMode),
                 weekendMode = obj.optNonNullString("weekendMode", base.weekendMode),
             )
@@ -314,6 +313,9 @@ internal const val KIND_NEXT = "next"
 
 private fun JSONObject.optNonNullString(key: String, fallback: String): String =
     if (isNull(key)) fallback else optString(key, fallback)
+
+private fun JSONObject.optNonNullBoolean(key: String, fallback: Boolean): Boolean =
+    if (isNull(key)) fallback else optBoolean(key, fallback)
 
 private fun JSONObject.optFiniteFloat(
     key: String,
