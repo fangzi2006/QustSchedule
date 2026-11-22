@@ -237,7 +237,8 @@ class _LoginPageState extends State<LoginPage> {
                                       controller: _addressController,
                                       decoration: const InputDecoration(
                                         labelText: '教务系统地址',
-                                        hintText: 'https://jwglxt1.qust.edu.cn/jwglxt',
+                                        hintText:
+                                            'https://jwglxt.qust.edu.cn/jwglxt',
                                         helperText: '支持新正方教务系统，地址写到 /jwglxt 为止',
                                         helperMaxLines: 2,
                                       ),

@@ -9,7 +9,7 @@
 ///
 /// // 带 dart:io 传输层的客户端
 /// final client = vmZhengfangClient(
-///   const ZfClientConfig(baseUrl: 'https://jwglxt1.qust.edu.cn/jwglxt'),
+///   const ZfClientConfig(baseUrl: 'https://jwglxt.qust.edu.cn/jwglxt'),
 /// );
 /// final state = await client.login(Credentials('20240001', '…'));
 /// await client.close();

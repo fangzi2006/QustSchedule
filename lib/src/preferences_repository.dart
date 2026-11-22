@@ -408,9 +408,9 @@ class Preferences {
             .toList();
         if (parsed.isNotEmpty) schools = parsed;
       }
-      // schema 8：地址簿出厂带 6 条青科大线路。老文件里只有当初那一条
-      // （或用户自己加的几条），这里把缺的补上；用户删过的线路在 schema 8
-      // 之后不会再被补回来（迁移只跑一次）。
+      // schema 8：历史升级补齐出厂预设线路（当前预设仅保留默认线路）。
+      // 老文件里只有当初那一条（或用户自己加的几条），这里把缺的补上；
+      // 用户删过的线路在 schema 8 之后不会再被补回来（迁移只跑一次）。
       final int rawSchema = (decoded['schema'] as num?)?.toInt() ?? 1;
       if (rawSchema < 8) schools = withPresetSchools(schools);
 

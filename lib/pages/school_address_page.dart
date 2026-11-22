@@ -221,7 +221,7 @@ class _AddressDialogState extends State<_AddressDialog> {
               autofocus: true,
               decoration: InputDecoration(
                 labelText: '教务系统地址',
-                hintText: 'https://jwglxt1.qust.edu.cn/jwglxt',
+                hintText: 'https://jwglxt.qust.edu.cn/jwglxt',
                 errorText: _error,
                 helperText: '写到 /jwglxt 为止，不带登录页文件名',
                 helperMaxLines: 2,

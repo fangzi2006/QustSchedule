@@ -262,23 +262,23 @@ void main() {
       expect(renamed.timetables.single.name, '我的作息');
     });
 
-    test('出厂 6 条线路及 schema 7 补齐、schema 8 删除保留', () {
+    test('出厂默认线路及 schema 7 补齐、schema 8 删除保留', () {
       final fresh = Preferences.inMemory();
-      expect(fresh.schools.length, 6);
-      expect(fresh.schools.first, 'https://jwglxt1.qust.edu.cn/jwglxt');
-      expect(fresh.schools.last, 'https://jwglxt6.qust.edu.cn/jwglxt');
-      expect(fresh.currentSchool, 'https://jwglxt1.qust.edu.cn/jwglxt');
+      expect(fresh.schools, <String>['https://jwglxt.qust.edu.cn/jwglxt']);
+      expect(fresh.currentSchool, 'https://jwglxt.qust.edu.cn/jwglxt');
 
       final s7 = Preferences.decode(
-        '{"schema":7,"schools":["https://jwglxt1.qust.edu.cn/jwglxt"]}',
+        '{"schema":7,"schools":["https://custom.example.edu.cn/jwglxt"]}',
       );
-      expect(s7.schools.length, 6);
-      expect(s7.schools.first, 'https://jwglxt1.qust.edu.cn/jwglxt');
+      expect(s7.schools, <String>[
+        'https://custom.example.edu.cn/jwglxt',
+        'https://jwglxt.qust.edu.cn/jwglxt',
+      ]);
 
       final s8 = Preferences.decode(
-        '{"schema":8,"schools":["https://jwglxt1.qust.edu.cn/jwglxt"]}',
+        '{"schema":8,"schools":["https://custom.example.edu.cn/jwglxt"]}',
       );
-      expect(s8.schools.length, 1);
+      expect(s8.schools, <String>['https://custom.example.edu.cn/jwglxt']);
     });
 
     test('schema 4/5/6：静默更新、调课规则与课表备注开关读回及旧版默认值', () {

@@ -130,7 +130,7 @@ class StatusPopup extends StatelessWidget {
           );
         }
         if (model.status == AppStatus.loading) {
-          // 有具体文案就用它（例如"正在切换到「线路 2」…"），没写才退回通用文案。
+          // 有具体文案就用它（例如"正在切换到「青岛科技大学」…"），没写才退回通用文案。
           return _PopupData(
             text: model.message.isEmpty ? '获取中…' : model.message,
             busy: true,

@@ -183,8 +183,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('教务系统地址'), findsOneWidget);
-      // 6 条线路统一命名，第一条是默认线路。
-      expect(find.text('青岛科技大学（线路 1）'), findsOneWidget);
+      // 默认预设仅保留外网可登录的青科大线路。
+      expect(find.text('青岛科技大学'), findsOneWidget);
     });
   });
 
@@ -2652,7 +2652,7 @@ void main() {
       await tester.pumpWidget(wrap(SchoolAddressPage(model: model)));
 
       expect(find.text('使用中'), findsOneWidget);
-      await tester.tap(find.byIcon(Icons.add_rounded));
+      await tester.tap(find.byTooltip('新增地址'));
       await tester.pumpAndSettle();
 
       final dialog = find.byType(AlertDialog);

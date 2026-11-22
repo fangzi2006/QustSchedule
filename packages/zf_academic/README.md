@@ -63,7 +63,7 @@ import 'package:zf_academic/zf_academic_io.dart';
 
 // 1) 登录（表单直登；RSA 加密自动处理）
 final client = vmZhengfangClient(
-  const ZfClientConfig(baseUrl: 'https://jwglxt1.qust.edu.cn/jwglxt'),
+  const ZfClientConfig(baseUrl: 'https://jwglxt.qust.edu.cn/jwglxt'),
 );
 final state = await client.login(const Credentials('20240001', '…'));
 if (state is AuthenticatedState) {
@@ -76,7 +76,7 @@ if (state is AuthenticatedState) {
 final snapshot = await storage.load();
 final restored = vmZhengfangClient(
   ZfClientConfig(
-    baseUrl: 'https://jwglxt1.qust.edu.cn/jwglxt',
+    baseUrl: 'https://jwglxt.qust.edu.cn/jwglxt',
     cookies: snapshot,
   ),
 );

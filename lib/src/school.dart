@@ -1,6 +1,6 @@
 /// 学校配置：适配青岛科技大学，但保留换校能力。
 ///
-/// 6 条线路（`jwglxt1` ~ `jwglxt6`）是同一套教务系统的多台前端，账号密码通用。
+/// 受登录策略影响，当前仅保留外网可登录的默认线路（`https://jwglxt.qust.edu.cn/jwglxt`）。
 ///
 /// 换线路只改 `baseUrl`，协议层能力（登录 / Cookie / 课表 / 路由发现）与前端口径无关：
 ///  - 地址：`ZfClientConfig.baseUrl`；
@@ -28,50 +28,22 @@ class SchoolProfile {
 
 /// 默认学校：青岛科技大学。
 const SchoolProfile qustProfile = SchoolProfile(
-  name: '青岛科技大学（线路 1）',
-  baseUrl: 'https://jwglxt1.qust.edu.cn/jwglxt',
-  notes: '实测可用；登录成功后会 302 到同主机 http，客户端已自动升级回 https。',
+  name: '青岛科技大学',
+  baseUrl: 'https://jwglxt.qust.edu.cn/jwglxt',
+  notes: '当前外网可登录的默认线路；若登录成功后 302 到同主机 http，客户端已自动升级回 https。',
 );
 
-/// 青科大的 6 条教务线路：`jwglxt1` ~ `jwglxt6`。
+/// 青科大的预设教务线路。
 ///
-/// 同一套系统的多台前端，**账号密码通用**；某条线路检修或超时时换一条即可。
-/// 线路 1 是默认地址（也是实测过的那条），2~6 作为备用预设。
-const List<SchoolProfile> qustLines = <SchoolProfile>[
-  qustProfile,
-  SchoolProfile(
-    name: '青岛科技大学（线路 2）',
-    baseUrl: 'https://jwglxt2.qust.edu.cn/jwglxt',
-    notes: '备用线路',
-  ),
-  SchoolProfile(
-    name: '青岛科技大学（线路 3）',
-    baseUrl: 'https://jwglxt3.qust.edu.cn/jwglxt',
-    notes: '备用线路',
-  ),
-  SchoolProfile(
-    name: '青岛科技大学（线路 4）',
-    baseUrl: 'https://jwglxt4.qust.edu.cn/jwglxt',
-    notes: '备用线路',
-  ),
-  SchoolProfile(
-    name: '青岛科技大学（线路 5）',
-    baseUrl: 'https://jwglxt5.qust.edu.cn/jwglxt',
-    notes: '备用线路',
-  ),
-  SchoolProfile(
-    name: '青岛科技大学（线路 6）',
-    baseUrl: 'https://jwglxt6.qust.edu.cn/jwglxt',
-    notes: '备用线路',
-  ),
-];
+/// 受外网登录策略限制，当前默认仅保留 `https://jwglxt.qust.edu.cn/jwglxt` 一条线路。
+const List<SchoolProfile> qustLines = <SchoolProfile>[qustProfile];
 
-/// 全部已知接入（目前只有青科大 6 条线路）。加线路时改这里，登录页与地址页的快捷选项随之更新。
+/// 全部已知接入（当前仅保留青科大默认线路）。加线路时改这里，登录页与地址页的快捷选项随之更新。
 const List<SchoolProfile> knownSchools = qustLines;
 
 /// 出厂预设的教务地址（地址簿的初始内容，顺序即展示顺序）。
 ///
-/// 第一条就是默认地址：`jwglxt1`。
+/// 当前默认只保留一条：`https://jwglxt.qust.edu.cn/jwglxt`。
 final List<String> presetSchoolUrls = <String>[
   for (final SchoolProfile profile in qustLines) profile.baseUrl,
 ];
