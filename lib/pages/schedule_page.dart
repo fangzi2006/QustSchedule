@@ -1252,7 +1252,7 @@ class _DayHeader extends StatelessWidget {
                   final hasConflict =
                       hasRescheduleConflict || hasTimetableConflict;
                   final Color? background = isToday
-                      ? theme.colorScheme.primary.withValues(alpha: 0.10)
+                      ? theme.colorScheme.primary.withValues(alpha: 0.20)
                       : null;
                   final Color textColor = isToday
                       ? theme.colorScheme.primary
