@@ -1,17 +1,22 @@
 /// 更新日志页面：展示根目录 CHANGELOG.md 中的版本历史与改进说明。
+///
+/// 并发与转场解耦设计：
+/// - 资产读取、UTF-8 解码、Markdown 结构解析与行内 `**加粗**`/`` `代码` `` 分词
+///   在进入页面时立即并行发起，并卸载到后台 Isolate 执行（UI 线程 0ms 解析开销）；
+/// - 260ms 路由滑入期间仅渲染超轻量骨架外壳且不中途触发 `setState`，
+///   动画落稳瞬间直接挂载已就绪数据，交由原生 `ListView.separated` 按视口懒构建。
 library;
 
 import 'dart:convert';
-import 'dart:math' as math;
 
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import '../src/app_version.dart';
 import '../src/formatted_text_span.dart';
+import '../src/route_settled.dart';
 import '../widgets/changelog_category_badge.dart';
+import '../widgets/page_skeleton.dart';
 import '../widgets/tactile_button.dart';
 
 /// 更新日志页面。
@@ -22,50 +27,61 @@ class ChangelogPage extends StatefulWidget {
     this.forceRefresh = false,
   });
 
-  /// 首屏初始渲染的版本批次数量（刚好铺满首屏且转场零卡顿）
-  @visibleForTesting
-  static const int initialBatchSize = 2;
-
-  /// 转场完成后每帧分段加载的版本批次数量
-  @visibleForTesting
-  static const int incrementalBatchSize = 2;
-
-  /// 可选的预加载更新日志列表（命中缓存或测试传入时首帧直出首屏批次）
+  /// 可选的预加载更新日志列表（命中缓存或测试传入时无需再读资产）
   final List<ReleaseLog>? initialReleases;
 
-  /// 是否忽略内存缓存重新加载并分段解析
+  /// 是否忽略内存缓存重新加载并解析
   final bool forceRefresh;
 
-  /// 单例静态缓存：全量解析完成后保留，后续打开 0 I/O 且首屏直出
+  /// 单例静态缓存：解析完成后保留，后续打开 0 I/O
   static List<ReleaseLog>? _cachedReleases;
 
-  /// 测试清理静态缓存
-  @visibleForTesting
-  static void resetCache() => _cachedReleases = null;
+  /// 并发去重中的在途加载任务
+  static Future<List<ReleaseLog>>? _inFlightLoad;
 
-  /// 加载并解析 CHANGELOG.md（若已缓存直接返回，否则读取并全量解析）
+  /// 测试清理静态缓存与在途状态
+  @visibleForTesting
+  static void resetCache() {
+    _cachedReleases = null;
+    _inFlightLoad = null;
+  }
+
+  /// 读取并解析 CHANGELOG.md（命中缓存直接返回，否则后台 Isolate 并行解码与解析）。
   static Future<List<ReleaseLog>> loadReleases({
     bool forceRefresh = false,
   }) async {
-    if (!forceRefresh && _cachedReleases != null) return _cachedReleases!;
-    final content = await rootBundle.loadString('CHANGELOG.md', cache: false);
-    final parsed = List<ReleaseLog>.unmodifiable(parseChangelog(content));
-    _cachedReleases = parsed;
-    return parsed;
+    if (!forceRefresh && _cachedReleases != null) {
+      return _cachedReleases!;
+    }
+    if (!forceRefresh && _inFlightLoad != null) {
+      return _inFlightLoad!;
+    }
+
+    late final Future<List<ReleaseLog>> future;
+    future = _loadAndParseReleases().whenComplete(() {
+      if (identical(_inFlightLoad, future)) {
+        _inFlightLoad = null;
+      }
+    });
+    _inFlightLoad = future;
+    return future;
   }
 
-  /// 空闲帧静默预热 CHANGELOG 缓存：首开页面直接命中内存缓存。
-  static Future<void> warmUp() async {
-    if (_cachedReleases != null) return;
-    try {
-      await loadReleases();
-    } catch (_) {
-      // 预热失败静默忽略，页面打开时再按正常流程读取或重试。
-    }
+  static Future<List<ReleaseLog>> _loadAndParseReleases() async {
+    final data = await rootBundle.load('CHANGELOG.md');
+    final bytes = Uint8List.fromList(
+      data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+    );
+    final parsed = await runInBackground<List<ReleaseLog>>(
+      () => parseChangelogBytes(bytes),
+    );
+    final unmodifiable = List<ReleaseLog>.unmodifiable(parsed);
+    _cachedReleases = unmodifiable;
+    return unmodifiable;
   }
 
   /// 点击「更新日志」时的即时导航快捷方法：
-  /// 立即发起切页动画不阻塞点击响应；页面挂载后再按首屏批次与转场避让策略分段解析与渲染。
+  /// 立即发起切页动画不阻塞点击响应，同时在页面挂载首帧并行加载与解析日志。
   static Future<void> open(BuildContext context, {bool forceRefresh = false}) {
     final cached = !forceRefresh ? _cachedReleases : null;
     return Navigator.of(context).push<void>(
@@ -80,258 +96,44 @@ class ChangelogPage extends StatefulWidget {
   State<ChangelogPage> createState() => _ChangelogPageState();
 }
 
-class _ChangelogPageState extends State<ChangelogPage> {
-  final ScrollController _scrollController = ScrollController();
-
+class _ChangelogPageState extends State<ChangelogPage>
+    with RouteSettledStateMixin<ChangelogPage> {
   List<ReleaseLog>? _releases;
-  List<List<String>> _pendingRawGroups = const <List<String>>[];
-  int _pendingGroupCursor = 0;
-  int _visibleCount = 0;
   String? _errorMessage;
-
-  ModalRoute<dynamic>? _modalRoute;
-  Animation<double>? _routeAnimation;
-  bool _batchScheduled = false;
-  bool _offstageCheckScheduled = false;
-  bool _isLoading = false;
   int _loadGeneration = 0;
-
-  bool get _hasRemainingChunks =>
-      (_releases != null && _visibleCount < _releases!.length) ||
-      _pendingGroupCursor < _pendingRawGroups.length;
-
-  bool get _isRouteExiting {
-    final status = _routeAnimation?.status;
-    return status == AnimationStatus.reverse ||
-        status == AnimationStatus.dismissed;
-  }
-
-  bool get _canScheduleBackgroundBatches {
-    if (_modalRoute?.offstage ?? false) return false;
-    final status = _routeAnimation?.status;
-    return status == null || status == AnimationStatus.completed;
-  }
 
   @override
   void initState() {
     super.initState();
-    _scrollController.addListener(_onScroll);
     final preloaded =
         widget.initialReleases ??
         (!widget.forceRefresh ? ChangelogPage._cachedReleases : null);
     if (preloaded != null) {
-      _releases = List<ReleaseLog>.from(preloaded);
-      _visibleCount = math.min(
-        ChangelogPage.initialBatchSize,
-        _releases!.length,
-      );
+      _releases = preloaded;
     } else {
-      _loadChangelog();
+      // 立即并行启动后台 I/O 与 Isolate 解析，与 260ms 路由滑入动画完全并行。
+      _loadChangelog(forceRefresh: widget.forceRefresh);
     }
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final route = ModalRoute.of(context);
-    _modalRoute = route;
-    final routeAnim = route?.animation;
-    if (!identical(_routeAnimation, routeAnim)) {
-      _routeAnimation?.removeStatusListener(_handleRouteAnimationStatus);
-      _routeAnimation = routeAnim;
-      _routeAnimation?.addStatusListener(_handleRouteAnimationStatus);
-    }
-    if (route != null && route.offstage) {
-      _scheduleOffstageCheck();
-      return;
-    }
-    _scheduleNextBatchIfNeeded();
-  }
-
-  void _scheduleOffstageCheck() {
-    if (_offstageCheckScheduled) return;
-    _offstageCheckScheduled = true;
-    SchedulerBinding.instance.addPostFrameCallback((_) {
-      _offstageCheckScheduled = false;
-      if (!mounted || _isRouteExiting) return;
-      final route = _modalRoute;
-      if (route != null && route.offstage) {
-        _scheduleOffstageCheck();
-        return;
-      }
-      if (_canScheduleBackgroundBatches) {
-        _scheduleNextBatchIfNeeded();
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _batchScheduled = false;
-    _routeAnimation?.removeStatusListener(_handleRouteAnimationStatus);
-    _scrollController.removeListener(_onScroll);
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  void _handleRouteAnimationStatus(AnimationStatus status) {
-    if (status == AnimationStatus.reverse ||
-        status == AnimationStatus.dismissed) {
-      _batchScheduled = false;
-      return;
-    }
-    if (status == AnimationStatus.forward) {
-      _batchScheduled = false;
-    }
-    if ((status == AnimationStatus.forward ||
-            status == AnimationStatus.completed) &&
-        _releases == null &&
-        _errorMessage == null &&
-        !_isLoading) {
-      _loadChangelog();
-    }
-    if (status == AnimationStatus.completed) {
-      if (_modalRoute?.offstage ?? false) {
-        _scheduleOffstageCheck();
-        return;
-      }
-      _scheduleNextBatchIfNeeded();
-    }
-  }
-
-  void _onScroll() {
-    if (!_scrollController.hasClients ||
-        !_hasRemainingChunks ||
-        _isRouteExiting) {
-      return;
-    }
-    if (_scrollController.position.extentAfter < 360) {
-      _appendNextBatch(count: ChangelogPage.incrementalBatchSize);
-    }
-  }
-
-  bool _handleOverscroll(OverscrollNotification notification) {
-    if (notification.overscroll > 0 &&
-        _hasRemainingChunks &&
-        !_isRouteExiting) {
-      _appendNextBatch(count: ChangelogPage.incrementalBatchSize);
-    }
-    return false;
-  }
-
-  void _handlePointerSignal(PointerSignalEvent event) {
-    if (event is PointerScrollEvent &&
-        event.scrollDelta.dy > 0 &&
-        _hasRemainingChunks &&
-        !_isRouteExiting &&
-        (!_scrollController.hasClients ||
-            _scrollController.position.extentAfter < 360)) {
-      _appendNextBatch(count: ChangelogPage.incrementalBatchSize);
-    }
-  }
-
-  void _scheduleNextBatchIfNeeded() {
-    if (!mounted ||
-        _batchScheduled ||
-        !_hasRemainingChunks ||
-        !_canScheduleBackgroundBatches ||
-        _isRouteExiting) {
-      return;
-    }
-    _batchScheduled = true;
-
-    SchedulerBinding.instance.addPostFrameCallback((_) {
-      _batchScheduled = false;
-      if (!mounted || !_canScheduleBackgroundBatches || _isRouteExiting) {
-        return;
-      }
-      _appendNextBatch();
-    });
-    SchedulerBinding.instance.scheduleFrame();
-  }
-
-  void _appendNextBatch({int count = ChangelogPage.incrementalBatchSize}) {
-    final releases = _releases;
-    if (releases == null || !_hasRemainingChunks || _isRouteExiting) return;
-
-    var changed = false;
-    if (_pendingGroupCursor < _pendingRawGroups.length) {
-      final end = math.min(
-        _pendingGroupCursor + count,
-        _pendingRawGroups.length,
-      );
-      for (var i = _pendingGroupCursor; i < end; i++) {
-        releases.add(_parseReleaseGroup(_pendingRawGroups[i]));
-      }
-      _pendingGroupCursor = end;
-      _visibleCount = releases.length;
-      changed = true;
-      if (_pendingGroupCursor >= _pendingRawGroups.length) {
-        _pendingRawGroups = const <List<String>>[];
-        _pendingGroupCursor = 0;
-        ChangelogPage._cachedReleases = List<ReleaseLog>.unmodifiable(releases);
-      }
-    } else if (_visibleCount < releases.length) {
-      _visibleCount = math.min(releases.length, _visibleCount + count);
-      changed = true;
-    }
-
-    if (changed) {
-      setState(() {});
-    }
-    _scheduleNextBatchIfNeeded();
-  }
-
-  Future<void> _loadChangelog() async {
+  Future<void> _loadChangelog({required bool forceRefresh}) async {
     final generation = ++_loadGeneration;
-    _isLoading = true;
     try {
-      final content = await rootBundle.loadString('CHANGELOG.md', cache: false);
-      if (!mounted || generation != _loadGeneration || _isRouteExiting) return;
-
-      final groups = _splitReleaseLineGroups(content);
-      if (groups.isEmpty) {
-        ChangelogPage._cachedReleases = const <ReleaseLog>[];
-        setState(() {
-          _releases = <ReleaseLog>[];
-          _pendingRawGroups = const <List<String>>[];
-          _pendingGroupCursor = 0;
-          _visibleCount = 0;
-        });
-        return;
-      }
-
-      final initialEnd = math.min(
-        ChangelogPage.initialBatchSize,
-        groups.length,
+      final parsed = await ChangelogPage.loadReleases(
+        forceRefresh: forceRefresh,
       );
-      final initialReleases = <ReleaseLog>[
-        for (var i = 0; i < initialEnd; i++) _parseReleaseGroup(groups[i]),
-      ];
-
-      setState(() {
-        _releases = initialReleases;
-        _visibleCount = initialReleases.length;
-        if (initialEnd < groups.length) {
-          _pendingRawGroups = groups;
-          _pendingGroupCursor = initialEnd;
-        } else {
-          _pendingRawGroups = const <List<String>>[];
-          _pendingGroupCursor = 0;
-          ChangelogPage._cachedReleases = List<ReleaseLog>.unmodifiable(
-            initialReleases,
-          );
-        }
-      });
-      _scheduleNextBatchIfNeeded();
+      if (!mounted || generation != _loadGeneration) return;
+      _releases = parsed;
+      _errorMessage = null;
+      // 入场动画尚未落稳时不触发中途 setState，待 onRouteSettled 一次性挂载。
+      if (isRouteSettled) {
+        setState(() {});
+      }
     } catch (e) {
-      if (!mounted || generation != _loadGeneration || _isRouteExiting) return;
-      setState(() {
-        _errorMessage = '无法加载更新日志: $e';
-      });
-    } finally {
-      if (generation == _loadGeneration) {
-        _isLoading = false;
+      if (!mounted || generation != _loadGeneration) return;
+      _errorMessage = '无法加载更新日志: $e';
+      if (isRouteSettled) {
+        setState(() {});
       }
     }
   }
@@ -350,6 +152,10 @@ class _ChangelogPageState extends State<ChangelogPage> {
   }
 
   Widget _buildBody(ThemeData theme) {
+    if (!isRouteSettled) {
+      return const CardListTransitionPlaceholder(cardCount: 2);
+    }
+
     if (_errorMessage != null) {
       return Center(
         child: Padding(
@@ -375,11 +181,8 @@ class _ChangelogPageState extends State<ChangelogPage> {
                   setState(() {
                     _errorMessage = null;
                     _releases = null;
-                    _pendingRawGroups = const <List<String>>[];
-                    _pendingGroupCursor = 0;
-                    _visibleCount = 0;
                   });
-                  _loadChangelog();
+                  _loadChangelog(forceRefresh: true);
                 },
                 label: const Text('重试'),
               ),
@@ -389,47 +192,22 @@ class _ChangelogPageState extends State<ChangelogPage> {
       );
     }
 
-    if (_releases == null) {
+    final releases = _releases;
+    if (releases == null) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (_releases!.isEmpty) {
+    if (releases.isEmpty) {
       return const Center(child: Text('暂无更新日志记录'));
     }
 
-    final showFooter = _hasRemainingChunks;
-    return Listener(
-      onPointerSignal: _handlePointerSignal,
-      child: NotificationListener<OverscrollNotification>(
-        onNotification: _handleOverscroll,
-        child: SelectionArea(
-          child: ListView.separated(
-            controller: _scrollController,
-            physics: _hasRemainingChunks
-                ? const AlwaysScrollableScrollPhysics()
-                : null,
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-            itemCount: _visibleCount + (showFooter ? 1 : 0),
-            separatorBuilder: (_, _) => const SizedBox(height: 12),
-            itemBuilder: (context, index) {
-              if (index >= _visibleCount) {
-                return const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12),
-                  child: Center(
-                    child: SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  ),
-                );
-              }
-              return RepaintBoundary(
-                child: _ReleaseLogCard(release: _releases![index]),
-              );
-            },
-          ),
-        ),
+    return SelectionArea(
+      child: ListView.separated(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        itemCount: releases.length,
+        separatorBuilder: (_, _) => const SizedBox(height: 12),
+        itemBuilder: (context, index) =>
+            _ReleaseLogCard(release: releases[index]),
       ),
     );
   }
@@ -444,8 +222,15 @@ class _ReleaseLogCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isCurrentVersion = appVersion != '-' && release.version == appVersion;
+    final descBaseStyle = theme.textTheme.bodyMedium?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+      height: 1.5,
+    );
+    final itemBaseStyle = theme.textTheme.bodyMedium?.copyWith(height: 1.45);
 
     return Card(
+      // 卡片内部全为带 16px 内边距的纯展示内容、无点击水波纹，关闭抗锯齿圆角裁剪减少光栅开销。
+      clipBehavior: Clip.none,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
         side: isCurrentVersion
@@ -528,14 +313,16 @@ class _ReleaseLogCard extends StatelessWidget {
                   ),
                 ),
                 child: Text.rich(
-                  buildFormattedTextSpan(
-                    context,
-                    release.description,
-                    baseStyle: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                      height: 1.5,
-                    ),
-                  ),
+                  release.descriptionSegments != null
+                      ? buildTextSpanFromSegments(
+                          release.descriptionSegments!,
+                          baseStyle: descBaseStyle,
+                        )
+                      : buildFormattedTextSpan(
+                          context,
+                          release.description,
+                          baseStyle: descBaseStyle,
+                        ),
                 ),
               ),
             ],
@@ -549,7 +336,7 @@ class _ReleaseLogCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
               ],
-              for (final item in section.items) ...[
+              for (var i = 0; i < section.items.length; i++) ...[
                 Padding(
                   padding: const EdgeInsets.only(bottom: 6),
                   child: Row(
@@ -574,13 +361,17 @@ class _ReleaseLogCard extends StatelessWidget {
                       ),
                       Expanded(
                         child: Text.rich(
-                          buildFormattedTextSpan(
-                            context,
-                            item,
-                            baseStyle: theme.textTheme.bodyMedium?.copyWith(
-                              height: 1.45,
-                            ),
-                          ),
+                          section.itemSegments != null &&
+                                  i < section.itemSegments!.length
+                              ? buildTextSpanFromSegments(
+                                  section.itemSegments![i],
+                                  baseStyle: itemBaseStyle,
+                                )
+                              : buildFormattedTextSpan(
+                                  context,
+                                  section.items[i],
+                                  baseStyle: itemBaseStyle,
+                                ),
                         ),
                       ),
                     ],
@@ -601,19 +392,30 @@ class ReleaseLog {
     required this.date,
     required this.description,
     required this.sections,
+    this.descriptionSegments,
   });
 
   final String version;
   final String date;
   final String description;
   final List<LogSection> sections;
+
+  /// 后台预解析好的亮点描述行内分词（为空时回退按需解析，兼容测试直接构造）。
+  final List<FormattedSegment>? descriptionSegments;
 }
 
 class LogSection {
-  const LogSection({required this.title, required this.items});
+  const LogSection({
+    required this.title,
+    required this.items,
+    this.itemSegments,
+  });
 
   final String title;
   final List<String> items;
+
+  /// 后台预解析好的各条目行内分词（与 [items] 一一对应，为空时回退按需解析）。
+  final List<List<FormattedSegment>>? itemSegments;
 }
 
 final RegExp _changelogVersionRegex = RegExp(
@@ -647,10 +449,17 @@ ReleaseLog _parseReleaseGroup(List<String> lines) {
 
   void commitCurrentSection() {
     if (currentSectionItems.isNotEmpty || currentSectionTitle != null) {
+      final items = List<String>.unmodifiable(currentSectionItems);
+      final itemSegments = List<List<FormattedSegment>>.unmodifiable(
+        <List<FormattedSegment>>[
+          for (final item in items) parseFormattedSegments(item),
+        ],
+      );
       currentSections.add(
         LogSection(
           title: currentSectionTitle ?? '',
-          items: List.unmodifiable(currentSectionItems),
+          items: items,
+          itemSegments: itemSegments,
         ),
       );
       currentSectionItems.clear();
@@ -687,15 +496,24 @@ ReleaseLog _parseReleaseGroup(List<String> lines) {
   }
 
   commitCurrentSection();
+  final description = descBuffer.toString().trim();
   return ReleaseLog(
     version: version,
     date: date,
-    description: descBuffer.toString().trim(),
-    sections: List.unmodifiable(currentSections),
+    description: description,
+    descriptionSegments: description.isEmpty
+        ? const <FormattedSegment>[]
+        : parseFormattedSegments(description),
+    sections: List<LogSection>.unmodifiable(currentSections),
   );
 }
 
-/// 解析 CHANGELOG.md 为结构化数据
+/// 从 UTF-8 字节直接解码并解析 CHANGELOG.md（纯 Dart 顶层函数，可直接在后台 Isolate 执行）。
+List<ReleaseLog> parseChangelogBytes(Uint8List bytes) {
+  return parseChangelog(utf8.decode(bytes));
+}
+
+/// 解析 CHANGELOG.md 为结构化数据（并预拆行内加粗/代码分词）。
 List<ReleaseLog> parseChangelog(String markdown) {
   return <ReleaseLog>[
     for (final group in _splitReleaseLineGroups(markdown))

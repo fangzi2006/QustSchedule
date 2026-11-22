@@ -31,39 +31,34 @@ class ReminderPage extends StatefulWidget {
 }
 
 class _ReminderPageState extends State<ReminderPage>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, RouteSettledStateMixin<ReminderPage> {
   late final ValueNotifier<ReminderRuntimeStatus?> _statusNotifier =
       ValueNotifier<ReminderRuntimeStatus?>(widget.service.lastStatus);
 
   /// 是否正在跑一次原生操作。**故意不进 State，也不 setState**。
   bool _running = false;
   int? _queuedLeadMinutes;
-  bool _initialRefreshScheduled = false;
-  RouteSettledHandle? _initialRefreshHandle;
+  int _statusEpoch = 0;
+  ReminderRuntimeStatus? _pendingStatus;
+  int _pendingStatusEpoch = 0;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // 原生状态查询在 Android ReminderWorker 后台线程执行，立即与 260ms 入场动画并行启动，
+    // 仅将 UI 通知提交对齐到路由落稳后，避免转场中途触发卡片重绘。
+    unawaited(_refreshStatus(deferUntilSettled: true));
   }
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (_initialRefreshScheduled) return;
-    _initialRefreshScheduled = true;
-    // 推入转场期间暂缓首次原生状态查询，等进场动画落稳后再发，避免抢占 260ms 滑入帧。
-    _initialRefreshHandle = scheduleAfterRouteSettled(
-      context: context,
-      isMounted: () => mounted,
-      task: _refreshStatus,
-    );
+  void onRouteSettled() {
+    // 仅提交局部 ValueNotifier，无需触发整页 setState 重建。
+    _flushPendingStatus();
   }
 
   @override
   void dispose() {
-    _initialRefreshHandle?.cancel();
-    _initialRefreshHandle = null;
     WidgetsBinding.instance.removeObserver(this);
     _statusNotifier.dispose();
     super.dispose();
@@ -74,10 +69,30 @@ class _ReminderPageState extends State<ReminderPage>
     if (state == AppLifecycleState.resumed) unawaited(_refreshStatus());
   }
 
-  Future<void> _refreshStatus() async {
-    final status = await widget.service.refreshStatus();
-    if (!mounted) return;
-    _statusNotifier.value = status;
+  void _flushPendingStatus() {
+    final pending = _pendingStatus;
+    if (pending == null) return;
+    _pendingStatus = null;
+    if (_pendingStatusEpoch == _statusEpoch) {
+      _statusNotifier.value = pending;
+    }
+  }
+
+  Future<void> _refreshStatus({bool deferUntilSettled = false}) async {
+    final epoch = ++_statusEpoch;
+    try {
+      final status = await widget.service.refreshStatus();
+      if (!mounted || epoch != _statusEpoch) return;
+      if (deferUntilSettled && !isRouteSettled) {
+        _pendingStatus = status;
+        _pendingStatusEpoch = epoch;
+        return;
+      }
+      _pendingStatus = null;
+      _statusNotifier.value = status;
+    } catch (_) {
+      // 查询异常时保持上次状态，避免未捕获异步异常。
+    }
   }
 
   /// 串行执行一次原生操作：重入时直接忽略，但已排队的提前量更新会在收尾时合并重跑。

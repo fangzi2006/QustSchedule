@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:isolate';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -111,8 +114,50 @@ void main() {
       expect(release.sections.length, 2);
       expect(release.sections[0].title, '新增');
       expect(release.sections[0].items.length, 2);
+      expect(release.sections[0].itemSegments, isNotNull);
+      expect(release.sections[0].itemSegments!.length, 2);
+      expect(release.descriptionSegments, isNotNull);
       expect(release.sections[1].title, '修复');
       expect(release.sections[1].items.length, 1);
+    });
+
+    test('parseChangelogBytes 可在真实后台 Isolate 中解码并预拆行内加粗/代码片段', () async {
+      const mockMarkdown = '''
+## [2.0.0] - 2026-11-22
+
+**并行加载**：后台 `Isolate` 预解析无 UI 阻塞。
+
+### 优化
+
+- 去除 `Clip.antiAlias` 与手工分页补丁，**原生懒构建**更轻量。
+''';
+      final bytes = Uint8List.fromList(utf8.encode(mockMarkdown));
+      final releases = await Isolate.run(() => parseChangelogBytes(bytes));
+
+      expect(releases, hasLength(1));
+      final release = releases.first;
+      expect(release.version, '2.0.0');
+      expect(release.descriptionSegments, isNotNull);
+      expect(
+        release.descriptionSegments!.any(
+          (s) => s.kind == FormattedSegmentKind.bold && s.text == '并行加载',
+        ),
+        isTrue,
+      );
+      expect(
+        release.descriptionSegments!.any(
+          (s) => s.kind == FormattedSegmentKind.code && s.text == 'Isolate',
+        ),
+        isTrue,
+      );
+      expect(release.sections.single.itemSegments, isNotNull);
+      expect(
+        release.sections.single.itemSegments!.single.any(
+          (s) =>
+              s.kind == FormattedSegmentKind.code && s.text == 'Clip.antiAlias',
+        ),
+        isTrue,
+      );
     });
   });
 
@@ -260,15 +305,17 @@ void main() {
       expect(find.text('v$latestVersion'), findsOneWidget);
     });
 
-    testWidgets('分段加载首帧仅构建首批版本卡片并在后续帧渐进补齐', (tester) async {
+    testWidgets('原生 ListView.separated 按视口懒构建大量版本卡片、无伪加载底栏且关闭无意义卡片裁剪', (
+      tester,
+    ) async {
       final manyReleases = <ReleaseLog>[
-        for (var v = 8; v >= 1; v--)
+        for (var v = 20; v >= 1; v--)
           ReleaseLog(
             version: '$v.0.0',
-            date: '2026-11-0$v',
+            date: '2026-11-${v.toString().padLeft(2, '0')}',
             description: '版本 **$v** 核心更新摘要',
             sections: const <LogSection>[
-              LogSection(title: '优化', items: <String>['性能优化条目']),
+              LogSection(title: '优化', items: <String>['性能优化条目一', '性能优化条目二']),
             ],
           ),
       ];
@@ -277,29 +324,18 @@ void main() {
         MaterialApp(home: ChangelogPage(initialReleases: manyReleases)),
       );
 
-      // 第 0 帧仅渲染首屏批次（initialBatchSize = 2），避免一口气构建全部卡片引发卡顿
-      expect(find.text('v8.0.0'), findsOneWidget);
-      expect(find.text('v7.0.0'), findsOneWidget);
-      expect(find.text('v6.0.0'), findsNothing);
-      expect(find.text('v5.0.0'), findsNothing);
-      expect(find.byType(CircularProgressIndicator), findsOneWidget);
-
-      // 下一帧渐进追加第二批，第 3 张卡片随即进入可视/预加载区
-      await tester.pump();
-      expect(find.text('v6.0.0'), findsOneWidget);
-
-      // 全部批次完成后底部加载指示器自动消失，向下滚动可看到后续全部版本
-      await tester.pumpAndSettle();
+      // 已落稳路由首帧即渲染视口内卡片，无人工分页底栏转圈，远端离屏卡片不会提前建树
       expect(find.byType(CircularProgressIndicator), findsNothing);
-      await tester.scrollUntilVisible(
-        find.text('v5.0.0'),
-        200,
-        scrollable: find.byType(Scrollable),
-      );
-      expect(find.text('v5.0.0'), findsOneWidget);
+      expect(find.text('v20.0.0'), findsOneWidget);
+      expect(find.text('v1.0.0'), findsNothing);
+
+      final firstCard = tester.widget<Card>(find.byType(Card).first);
+      expect(firstCard.clipBehavior, Clip.none);
+
+      // 向下滚动时按需懒构建后续全部版本
       await tester.scrollUntilVisible(
         find.text('v1.0.0'),
-        300,
+        400,
         scrollable: find.byType(Scrollable),
       );
       expect(find.text('v1.0.0'), findsOneWidget);

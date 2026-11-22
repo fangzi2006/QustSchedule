@@ -11,9 +11,69 @@ import 'dart:async';
 import 'package:zf_academic/zf_academic.dart';
 
 import 'app_model.dart';
+import 'reschedule.dart';
+import 'timetable.dart';
 import 'widget_gateway.dart';
 import 'widget_planner.dart';
 import 'widget_style.dart';
+
+/// 纯 Dart 可跨 Isolate 传递的小组件快照计算入参。
+class WidgetSnapshotInput {
+  const WidgetSnapshotInput.signedOut({required this.styles, required this.now})
+    : signedIn = false,
+      termId = '',
+      entries = const <ScheduleEntry>[],
+      reschedules = const <RescheduleRule>[],
+      termStart = null,
+      timetables = const <Timetable>[],
+      sectionCounts = const <PeriodGroup, int>{},
+      maxWeek = 0,
+      exams = const <ExamItem>[];
+
+  const WidgetSnapshotInput.signedIn({
+    required this.termId,
+    required this.entries,
+    required this.reschedules,
+    required this.termStart,
+    required this.timetables,
+    required this.sectionCounts,
+    required this.maxWeek,
+    required this.styles,
+    required this.now,
+    required this.exams,
+  }) : signedIn = true;
+
+  final bool signedIn;
+  final String termId;
+  final List<ScheduleEntry> entries;
+  final List<RescheduleRule> reschedules;
+  final DateTime? termStart;
+  final List<Timetable> timetables;
+  final Map<PeriodGroup, int> sectionCounts;
+  final int maxWeek;
+  final DesktopWidgetConfigSet styles;
+  final DateTime now;
+  final List<ExamItem> exams;
+
+  /// 纯函数执行快照计算（无 UI/I/O 依赖，可直接在后台 Isolate 调用）。
+  WidgetSnapshot compute() {
+    if (!signedIn || termStart == null) {
+      return buildSignedOutWidgetSnapshot(styles, now: now);
+    }
+    return buildWidgetSnapshot(
+      termId: termId,
+      entries: entries,
+      reschedules: reschedules,
+      termStart: termStart!,
+      timetables: timetables,
+      sectionCounts: sectionCounts,
+      maxWeek: maxWeek,
+      styles: styles,
+      now: now,
+      exams: exams,
+    );
+  }
+}
 
 class DesktopWidgetService {
   DesktopWidgetService({
@@ -113,34 +173,41 @@ class DesktopWidgetService {
     return ok;
   }
 
-  /// 基于当前 [AppModel] 构造桌面小组件快照；`preferencesLoaded == false` 时返回 null。
-  WidgetSnapshot? buildSnapshot() {
+  /// 采集当前不可变快照计算入参（UI 线程 O(1)），供页面在后台 Isolate 并行计算快照；
+  /// `preferencesLoaded == false` 时返回 null。
+  WidgetSnapshotInput? captureSnapshotInput() {
     if (!model.preferencesLoaded) return null;
     final now = _now();
     final schedule = model.schedule;
     final termStart = model.termStart;
     if (schedule == null || termStart == null) {
-      return buildSignedOutWidgetSnapshot(model.widgetConfig, now: now);
+      return WidgetSnapshotInput.signedOut(
+        styles: model.widgetConfig,
+        now: now,
+      );
     }
 
     // 严格遵守跨学期隔离契约：仅当内存考试实际归属当前课表学期时纳入小组件。
     final exams = model.loadedAcademicTerm == schedule.termId
-        ? model.exams
+        ? List<ExamItem>.unmodifiable(model.exams)
         : const <ExamItem>[];
 
-    return buildWidgetSnapshot(
+    return WidgetSnapshotInput.signedIn(
       termId: schedule.termId,
-      entries: schedule.entries,
-      reschedules: model.reschedules,
+      entries: List<ScheduleEntry>.unmodifiable(schedule.entries),
+      reschedules: List<RescheduleRule>.unmodifiable(model.reschedules),
       termStart: termStart,
-      timetables: model.timetables,
-      sectionCounts: model.sectionCounts,
+      timetables: List<Timetable>.unmodifiable(model.timetables),
+      sectionCounts: Map<PeriodGroup, int>.unmodifiable(model.sectionCounts),
       maxWeek: model.maxWeek,
       styles: model.widgetConfig,
       now: now,
       exams: exams,
     );
   }
+
+  /// 基于当前 [AppModel] 构造桌面小组件快照；`preferencesLoaded == false` 时返回 null。
+  WidgetSnapshot? buildSnapshot() => captureSnapshotInput()?.compute();
 
   /// 强制清空原生快照并复位指纹记忆。
   Future<void> clearAll() async {

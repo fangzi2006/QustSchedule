@@ -493,50 +493,46 @@ class _ReminderAndWidgetCard extends StatefulWidget {
 }
 
 class _ReminderAndWidgetCardState extends State<_ReminderAndWidgetCard>
-    with WidgetsBindingObserver {
+    with
+        WidgetsBindingObserver,
+        RouteSettledStateMixin<_ReminderAndWidgetCard> {
   late final ValueNotifier<ReminderRuntimeStatus?> _statusNotifier =
       ValueNotifier<ReminderRuntimeStatus?>(widget.reminders?.lastStatus);
 
   bool _running = false;
-  bool _initialRefreshScheduled = false;
-  RouteSettledHandle? _initialRefreshHandle;
+  int _statusEpoch = 0;
+  ReminderRuntimeStatus? _pendingStatus;
+  int _pendingStatusEpoch = 0;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (widget.reminders != null) {
+      unawaited(_refreshStatus(deferUntilSettled: true));
+    }
   }
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (_initialRefreshScheduled || widget.reminders == null) return;
-    _initialRefreshScheduled = true;
-    _initialRefreshHandle = scheduleAfterRouteSettled(
-      context: context,
-      isMounted: () => mounted,
-      task: _refreshStatus,
-    );
+  void onRouteSettled() {
+    _flushPendingStatus();
   }
 
   @override
   void didUpdateWidget(covariant _ReminderAndWidgetCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.reminders != oldWidget.reminders) {
+      _statusEpoch++;
+      _pendingStatus = null;
       _statusNotifier.value = widget.reminders?.lastStatus;
       if (widget.reminders != null) {
-        _initialRefreshScheduled = true;
         unawaited(_refreshStatus());
-      } else {
-        _initialRefreshScheduled = false;
       }
     }
   }
 
   @override
   void dispose() {
-    _initialRefreshHandle?.cancel();
-    _initialRefreshHandle = null;
     WidgetsBinding.instance.removeObserver(this);
     _statusNotifier.dispose();
     super.dispose();
@@ -549,15 +545,37 @@ class _ReminderAndWidgetCardState extends State<_ReminderAndWidgetCard>
     }
   }
 
-  Future<void> _refreshStatus() async {
-    final service = widget.reminders;
-    if (service == null) return;
-    final status = await service.refreshStatus();
-    if (!mounted) return;
-    _statusNotifier.value = status;
+  void _flushPendingStatus() {
+    final pending = _pendingStatus;
+    if (pending == null) return;
+    _pendingStatus = null;
+    if (_pendingStatusEpoch == _statusEpoch) {
+      _statusNotifier.value = pending;
+    }
   }
 
-  Future<void> _run(Future<void> Function(ReminderService service) action) async {
+  Future<void> _refreshStatus({bool deferUntilSettled = false}) async {
+    final service = widget.reminders;
+    if (service == null) return;
+    final epoch = ++_statusEpoch;
+    try {
+      final status = await service.refreshStatus();
+      if (!mounted || epoch != _statusEpoch) return;
+      if (deferUntilSettled && !isRouteSettled) {
+        _pendingStatus = status;
+        _pendingStatusEpoch = epoch;
+        return;
+      }
+      _pendingStatus = null;
+      _statusNotifier.value = status;
+    } catch (_) {
+      // 查询异常时保持上次状态，避免未捕获异步异常。
+    }
+  }
+
+  Future<void> _run(
+    Future<void> Function(ReminderService service) action,
+  ) async {
     final service = widget.reminders;
     if (service == null || _running) return;
     _running = true;
@@ -664,7 +682,9 @@ class _ReminderAndWidgetCardState extends State<_ReminderAndWidgetCard>
                       title: '忽略电池优化',
                       value: status == null
                           ? '查询中…'
-                          : (status.batteryOptOut ? '已忽略' : '受省电策略限制 · 后台可能被清理'),
+                          : (status.batteryOptOut
+                                ? '已忽略'
+                                : '受省电策略限制 · 后台可能被清理'),
                       ok: status?.batteryOptOut ?? false,
                       actionLabel: '去设置',
                       onAction: _openBattery,

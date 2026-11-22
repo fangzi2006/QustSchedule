@@ -526,9 +526,11 @@ class _SmoothSlidePageTransitionState
     // 无论是否为首页，都保留 secondaryAnimation 的视差与微暗遮罩，
     // 并在转场位移内部挂载路由级 AppMenuScope，使二级页入场途中打开菜单也随页面同步滑入落位，
     // 并在页面退场或被上层路由覆盖时自动收起并拒绝继续展开。
+    // 以 RepaintBoundary 隔离页面图层，避免逐帧刷新的 _RouteScrimPainter、
+    // _EdgeShadowPainter 与 SlideTransition 触发进出双方页面整页重绘。
     Widget content = CustomPaint(
       foregroundPainter: _RouteScrimPainter(progress: _secondaryVisual),
-      child: AppMenuScope(child: widget.child),
+      child: RepaintBoundary(child: AppMenuScope(child: widget.child)),
     );
 
     if (!widget.route.isFirst && !widget.route.fullscreenDialog) {

@@ -4,6 +4,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -21,20 +22,30 @@ import 'package:qustschedule/pages/reminder_page.dart';
 import 'package:qustschedule/pages/reschedule_page.dart';
 import 'package:qustschedule/pages/schedule_page.dart';
 import 'package:qustschedule/pages/settings_page.dart';
+import 'package:qustschedule/pages/widget_settings_page.dart';
 import 'package:qustschedule/src/academic_cache.dart';
 import 'package:qustschedule/src/app_model.dart';
 import 'package:qustschedule/src/credentials_repository.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
+import 'package:qustschedule/src/reminder_gateway.dart';
 import 'package:qustschedule/src/reminder_service.dart';
+import 'package:qustschedule/src/reschedule.dart';
 import 'package:qustschedule/src/route_settled.dart';
 import 'package:qustschedule/src/safe_json_file.dart';
 import 'package:qustschedule/src/schedule_cache.dart';
 import 'package:qustschedule/src/schedule_service.dart';
 import 'package:qustschedule/src/session_repository.dart';
+import 'package:qustschedule/src/timetable.dart';
 import 'package:qustschedule/src/updater/update_service.dart';
+import 'package:qustschedule/src/widget_gateway.dart';
+import 'package:qustschedule/src/widget_planner.dart';
+import 'package:qustschedule/src/widget_service.dart';
+import 'package:qustschedule/src/widget_style.dart';
 import 'package:qustschedule/theme/app_theme.dart';
 import 'package:qustschedule/widgets/course_tile.dart';
+import 'package:qustschedule/widgets/desktop_widget_preview.dart';
 import 'package:qustschedule/widgets/floating_dock.dart';
+import 'package:qustschedule/widgets/page_skeleton.dart';
 import 'package:zf_academic/zf_academic_io.dart';
 
 import 'support/fake_backend.dart';
@@ -135,58 +146,80 @@ void main() {
   });
 
   group('路由落稳调度与冷启动 I/O 优化', () {
-    testWidgets('scheduleAfterRouteSettled 等待入场转场完成，中途返回时自动取消', (tester) async {
-      await tester.pumpWidget(
-        _wrapApp(
-          Builder(
-            builder: (context) => Scaffold(
-              body: ElevatedButton(
-                onPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => const _RouteSettledProbePage(),
+    testWidgets(
+      'scheduleAfterRouteSettled 等待入场转场完成，中途退场取消、取消返回（reverse -> forward）仍正常触发',
+      (tester) async {
+        late _ControllableRoute<void> controlledRoute;
+        await tester.pumpWidget(
+          _wrapApp(
+            Builder(
+              builder: (context) => Scaffold(
+                body: Column(
+                  children: <Widget>[
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const _RouteSettledProbePage(),
+                          ),
+                        );
+                      },
+                      child: const Text('push'),
                     ),
-                  );
-                },
-                child: const Text('push'),
+                    ElevatedButton(
+                      onPressed: () {
+                        controlledRoute = _ControllableRoute<void>(
+                          builder: (_) => const _RouteSettledProbePage(),
+                        );
+                        Navigator.of(context).push(controlledRoute);
+                      },
+                      child: const Text('push-controlled'),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
-        ),
-      );
+        );
 
-      _RouteSettledProbePage.ranCount = 0;
-      await tester.tap(find.text('push'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 120));
-      // 入场动画未结束前绝不抢跑执行。
-      expect(_RouteSettledProbePage.ranCount, 0);
+        _RouteSettledProbePage.ranCount = 0;
+        await tester.tap(find.text('push'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 120));
+        // 入场动画未结束前绝不抢跑执行。
+        expect(_RouteSettledProbePage.ranCount, 0);
 
-      // 在转场中途直接 pop 退场，已注册任务应立即取消，之后也不会补跑。
-      Navigator.of(tester.element(find.byType(_RouteSettledProbePage))).pop();
-      await tester.pumpAndSettle();
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(_RouteSettledProbePage.ranCount, 0);
+        // 在转场中途直接 pop 退场，已注册任务应立即取消，之后也不会补跑。
+        Navigator.of(tester.element(find.byType(_RouteSettledProbePage))).pop();
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(_RouteSettledProbePage.ranCount, 0);
 
-      // 完整推入直至动画落稳后，任务应顺利执行。
-      await tester.tap(find.text('push'));
-      await tester.pumpAndSettle();
-      await tester.pump(const Duration(milliseconds: 120));
-      expect(_RouteSettledProbePage.ranCount, 1);
+        // 入场中途触发取消返回（forward -> reverse -> forward -> completed），不应作废任务。
+        await tester.tap(find.text('push-controlled'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 80));
+        expect(_RouteSettledProbePage.ranCount, 0);
+        controlledRoute.exposedController!.reverse();
+        await tester.pump(const Duration(milliseconds: 30));
+        controlledRoute.exposedController!.forward();
+        await tester.pumpAndSettle();
+        expect(_RouteSettledProbePage.ranCount, 1);
 
-      // 若调用方未显式 cancel 但 isMounted 变为 false，回调阶段应安全忽略并不再触发。
-      var simulatedMounted = true;
-      var orphanRan = false;
-      final orphanHandle = scheduleAfterRouteSettled(
-        context: tester.element(find.byType(_RouteSettledProbePage)),
-        isMounted: () => simulatedMounted,
-        task: () => orphanRan = true,
-      );
-      simulatedMounted = false;
-      await tester.pump();
-      expect(orphanRan, isFalse);
-      expect(orphanHandle.isDone, isTrue);
-    });
+        // 若调用方未显式 cancel 但 isMounted 变为 false，回调阶段应安全忽略并不再触发。
+        var simulatedMounted = true;
+        var orphanRan = false;
+        final orphanHandle = scheduleAfterRouteSettled(
+          context: tester.element(find.byType(_RouteSettledProbePage)),
+          isMounted: () => simulatedMounted,
+          task: () => orphanRan = true,
+        );
+        simulatedMounted = false;
+        await tester.pump();
+        expect(orphanRan, isFalse);
+        expect(orphanHandle.isDone, isTrue);
+      },
+    );
 
     test('SecureCredentialStore.get 并发同时发起账号与密码 Keystore 读取', () async {
       final storage = _ConcurrentSecureStorage();
@@ -794,7 +827,9 @@ void main() {
       model.dispose();
     });
 
-    testWidgets('LicenseTextPage 分段重排预处理、支持 warmUp 缓存直出与懒列表渲染', (tester) async {
+    testWidgets('LicenseTextPage 分段重排预处理、支持 loadParagraphs 缓存复用与懒列表渲染', (
+      tester,
+    ) async {
       final paragraphs = LicenseTextPage.reflowParagraphs(
         'Line one\r\ncontinued.\r\n\r\nSecond paragraph\nline two.\n\n  \nThird.\n',
       );
@@ -805,7 +840,15 @@ void main() {
       ]);
 
       LicenseTextPage.resetCache();
-      await tester.runAsync(() => LicenseTextPage.warmUp());
+      final first = await tester.runAsync(
+        () => LicenseTextPage.loadParagraphs(),
+      );
+      final second = await tester.runAsync(
+        () => LicenseTextPage.loadParagraphs(),
+      );
+      expect(first, isNotNull);
+      expect(first, isNotEmpty);
+      expect(identical(first, second), isTrue);
 
       await tester.pumpWidget(_wrapApp(const LicenseTextPage()));
       // 命中缓存后首帧直接渲染文本，不先展示全屏转圈。
@@ -814,7 +857,17 @@ void main() {
       expect(find.byType(ListView), findsOneWidget);
     });
 
-    testWidgets('ReminderPage 路由推入期间暂缓首次权限状态查询，落稳后自动刷新', (tester) async {
+    test('reflowLicenseBytes 可在真实后台 Isolate 中解码并分段重排协议全文', () async {
+      final rawBytes = Uint8List.fromList(
+        utf8.encode('First line\r\nwrapped.\r\n\r\nSecond\nparagraph.\n'),
+      );
+      final paragraphs = await Isolate.run(() => reflowLicenseBytes(rawBytes));
+      expect(paragraphs, <String>['First line wrapped.', 'Second paragraph.']);
+    });
+
+    testWidgets('ReminderPage 入场动画与原生状态查询并行执行：滑入期不抢跑重绘，落稳瞬间直出结果', (
+      tester,
+    ) async {
       final model = _buildTestModel();
       final gateway = FakeReminderGateway();
       final service = ReminderService(
@@ -847,19 +900,158 @@ void main() {
       await tester.tap(find.text('open-reminder'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
-      // 推入动画进行中（含首帧 Hero offstage 测量期）不抢跑状态查询。
-      expect(gateway.statusCount, 0);
+      // 后台线程状态查询立即与 260ms 滑入动画并行启动，但动画期间不提前提交 UI 状态变更。
+      expect(gateway.statusCount, 1);
+      expect(find.text('查询中…'), findsWidgets);
 
       await tester.pumpAndSettle();
+      // 落稳瞬间直接消费并行查询结果，不发起二次查询，UI 立刻展示真实权限状态。
       expect(gateway.statusCount, 1);
+      expect(find.text('查询中…'), findsNothing);
 
       service.dispose();
       model.dispose();
     });
 
+    testWidgets('ReminderPage 慢速初始查询晚于落稳返回时不丢失，且不会覆盖中途用户触发的新状态', (
+      tester,
+    ) async {
+      final model = _buildTestModel();
+      final firstCompleter = Completer<ReminderRuntimeStatus>();
+      final gateway = _SlowFirstStatusGateway(firstCompleter);
+      final service = ReminderService(
+        model: model,
+        gateway: gateway,
+        debounce: const Duration(milliseconds: 1),
+      );
+
+      await tester.pumpWidget(
+        _wrapApp(
+          Builder(
+            builder: (context) => Scaffold(
+              body: ElevatedButton(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          ReminderPage(model: model, service: service),
+                    ),
+                  );
+                },
+                child: const Text('open-slow-reminder'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('open-slow-reminder'));
+      await tester.pumpAndSettle();
+      // 初始查询仍未返回，落稳后继续显示查询中。
+      expect(gateway.statusCount, 1);
+      expect(find.text('查询中…'), findsWidgets);
+
+      // 慢查询在落稳后完成，UI 立即更新（scheduled = 7, exactAlarmAllowed = true）。
+      firstCompleter.complete(
+        const ReminderRuntimeStatus(
+          notificationPermission: true,
+          notificationsEnabled: true,
+          exactAlarmAllowed: true,
+          batteryOptimizationIgnored: true,
+          scheduled: 7,
+          style: 'banner',
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('查询中…'), findsNothing);
+      expect(find.text('7 条'), findsOneWidget);
+      expect(find.text('精确闹钟'), findsOneWidget);
+
+      // 退回后再测一次：慢初始查询尚未返回时用户主动切换开关，晚到的旧结果不得覆盖新状态。
+      Navigator.of(tester.element(find.byType(ReminderPage))).pop();
+      await tester.pumpAndSettle();
+
+      final staleCompleter = Completer<ReminderRuntimeStatus>();
+      final gateway2 = _SlowFirstStatusGateway(
+        staleCompleter,
+        statusValue: const ReminderRuntimeStatus(
+          notificationPermission: true,
+          notificationsEnabled: true,
+          exactAlarmAllowed: false,
+          batteryOptimizationIgnored: false,
+          scheduled: 2,
+          style: 'banner',
+        ),
+      );
+      final service2 = ReminderService(
+        model: model,
+        gateway: gateway2,
+        debounce: const Duration(milliseconds: 1),
+      );
+      await tester.pumpWidget(
+        _wrapApp(
+          Builder(
+            builder: (context) => Scaffold(
+              body: ElevatedButton(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          ReminderPage(model: model, service: service2),
+                    ),
+                  );
+                },
+                child: const Text('open-race-reminder'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('open-race-reminder'));
+      await tester.pumpAndSettle();
+      expect(gateway2.statusCount, 1);
+
+      // 用户点击开关触发新一次刷新（返回 scheduled = 2, exactAlarmAllowed = false）。
+      await tester.tap(find.byType(Switch).first);
+      await tester.pumpAndSettle();
+      expect(gateway2.statusCount, 2);
+      expect(find.text('2 条'), findsOneWidget);
+      expect(find.text('精确闹钟'), findsNothing);
+
+      // 此时初始慢查询携带过期 scheduled = 99 / exactAlarmAllowed = true 晚到，应被 epoch 守卫丢弃。
+      staleCompleter.complete(
+        const ReminderRuntimeStatus(
+          notificationPermission: true,
+          notificationsEnabled: true,
+          exactAlarmAllowed: true,
+          batteryOptimizationIgnored: true,
+          scheduled: 99,
+          style: 'banner',
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('2 条'), findsOneWidget);
+      expect(find.text('99 条'), findsNothing);
+      expect(find.text('精确闹钟'), findsNothing);
+
+      service2.dispose();
+      service.dispose();
+      model.dispose();
+    });
+
     testWidgets(
-      'ChangelogPage 预热缓存命中后推入：首帧 offstage 与 260ms 滑入期间仅渲染首屏批次，落稳后再展开',
+      'ChangelogPage、WidgetSettingsPage 与 DebugPage 推入期间保持轻量骨架零重子树干扰，落稳直出完整内容',
       (tester) async {
+        final model = _buildTestModel();
+        await model.boot();
+        final widgetGateway = _SpyWidgetGateway();
+        final widgetService = DesktopWidgetService(
+          model: model,
+          gateway: widgetGateway,
+          debounce: const Duration(milliseconds: 1),
+        );
+
         final releases = <ReleaseLog>[
           for (var i = 1; i <= 6; i++)
             ReleaseLog(
@@ -876,35 +1068,618 @@ void main() {
           _wrapApp(
             Builder(
               builder: (context) => Scaffold(
-                body: ElevatedButton(
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) =>
-                            ChangelogPage(initialReleases: releases),
-                      ),
-                    );
-                  },
-                  child: const Text('open-changelog'),
+                body: Column(
+                  children: <Widget>[
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) =>
+                                ChangelogPage(initialReleases: releases),
+                          ),
+                        );
+                      },
+                      child: const Text('open-changelog'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => WidgetSettingsPage(
+                              model: model,
+                              widgetService: widgetService,
+                            ),
+                          ),
+                        );
+                      },
+                      child: const Text('open-widget-settings'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => DebugPage(model: model),
+                          ),
+                        );
+                      },
+                      child: const Text('open-debug'),
+                    ),
+                  ],
                 ),
               ),
             ),
           ),
         );
 
+        // 1. ChangelogPage：滑入期间仅骨架占位，绝不提前挂载 SelectionArea 或大段文本
         await tester.tap(find.text('open-changelog'));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 100));
-        // 260ms 入场转场未完成前只渲染首屏 2 个版本，后续批次不抢跑展开。
-        expect(find.text('v1.1.0'), findsOneWidget);
-        expect(find.text('v1.2.0'), findsOneWidget);
-        expect(find.text('v1.3.0'), findsNothing);
+        expect(find.byType(CardListTransitionPlaceholder), findsOneWidget);
+        expect(find.byType(SelectionArea), findsNothing);
+        expect(find.text('v1.1.0'), findsNothing);
 
         await tester.pumpAndSettle();
+        expect(find.byType(SelectionArea), findsOneWidget);
+        expect(find.text('v1.1.0'), findsOneWidget);
         expect(find.text('v1.3.0'), findsOneWidget);
+
+        Navigator.of(tester.element(find.byType(ChangelogPage))).pop();
+        await tester.pumpAndSettle();
+
+        // 2. WidgetSettingsPage：滑入期间并行查询已添加数量且不构建重预览舞台，落稳瞬间直出
+        expect(widgetGateway.pinnedQueryCount, 0);
+        await tester.tap(find.text('open-widget-settings'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(widgetGateway.pinnedQueryCount, 1);
+        expect(
+          find.byType(PreviewSettingsTransitionPlaceholder),
+          findsOneWidget,
+        );
+        expect(find.byType(DesktopWidgetPreview), findsNothing);
+
+        await tester.pumpAndSettle();
+        expect(widgetGateway.pinnedQueryCount, 1);
+        expect(find.byType(DesktopWidgetPreview), findsOneWidget);
+        expect(find.textContaining('桌面上已有 2 个'), findsOneWidget);
+
+        Navigator.of(tester.element(find.byType(WidgetSettingsPage))).pop();
+        await tester.pumpAndSettle();
+
+        // 3. DebugPage：滑入期间不构建 TabBarView/SelectionArea，落稳后直出
+        await tester.tap(find.text('open-debug'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.byType(CardListTransitionPlaceholder), findsOneWidget);
+        expect(find.byType(TabBarView), findsNothing);
+
+        await tester.pumpAndSettle();
+        expect(find.byType(TabBarView), findsOneWidget);
+        expect(find.byType(SelectionArea), findsOneWidget);
+
+        widgetService.dispose();
+        model.dispose();
       },
     );
+
+    testWidgets(
+      'RouteSettledStateMixin 处于 offstage 时保持未落稳，解除 offstage 后必定触发一次 onRouteSettled 且 ReminderPage 安全提交',
+      (tester) async {
+        var settledCalls = 0;
+        final model = _buildTestModel();
+        final completer = Completer<ReminderRuntimeStatus>();
+        final gateway = _SlowFirstStatusGateway(completer);
+        final service = ReminderService(
+          model: model,
+          gateway: gateway,
+          debounce: const Duration(milliseconds: 1),
+        );
+        addTearDown(() {
+          service.dispose();
+          model.dispose();
+        });
+
+        late MaterialPageRoute<void> offstageRoute;
+        await tester.pumpWidget(
+          _wrapApp(
+            Builder(
+              builder: (context) => Scaffold(
+                body: ElevatedButton(
+                  onPressed: () {
+                    offstageRoute = MaterialPageRoute<void>(
+                      builder: (_) => _OffstageSettledSpyPage(
+                        onSettled: () => settledCalls++,
+                        child: ReminderPage(model: model, service: service),
+                      ),
+                    );
+                    Navigator.of(context).push(offstageRoute);
+                  },
+                  child: const Text('push-offstage'),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        await tester.tap(find.text('push-offstage'));
+        await tester.pump();
+        // 模拟 Hero 预测量或外部将路由置为 offstage（此时 animationProxy 切换为 kAlwaysCompleteAnimation）
+        offstageRoute.offstage = true;
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(settledCalls, 0);
+
+        // 路由仍处于 offstage 期间异步查询完成，不得提前提交 UI
+        completer.complete(
+          const ReminderRuntimeStatus(
+            notificationPermission: true,
+            notificationsEnabled: true,
+            exactAlarmAllowed: true,
+            batteryOptimizationIgnored: true,
+            scheduled: 5,
+            style: 'banner',
+          ),
+        );
+        await tester.pump();
+        expect(settledCalls, 0);
+
+        // 解除 offstage 后必须稳定触发一次 onRouteSettled 且 ReminderPage 正常提交状态
+        offstageRoute.offstage = false;
+        await tester.pumpAndSettle();
+
+        expect(settledCalls, 1);
+        expect(find.text('5 条'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    test(
+      'computeWidgetSettingsSnapshots 可在真实后台 Isolate 中并行计算含课程/调课/考试的真实快照与示例快照',
+      () async {
+        final clock = samplePreviewClock();
+        final input = WidgetSnapshotInput.signedIn(
+          termId: '2026-2027-1',
+          entries: const <ScheduleEntry>[
+            ScheduleEntry(
+              id: 'c1',
+              name: '高等数学',
+              day: 1,
+              startPeriod: 1,
+              endPeriod: 2,
+              weeks: <int>[1, 2, 3, 4],
+              location: '弘毅楼 C101',
+              teacher: '张老师',
+            ),
+          ],
+          reschedules: const <RescheduleRule>[
+            RescheduleRule(
+              id: 'r1',
+              fromMonth: 9,
+              fromDay: 7,
+              toMonth: 9,
+              toDay: 12,
+            ),
+          ],
+          termStart: DateTime(2026, 9, 7),
+          timetables: defaultTimetables(),
+          sectionCounts: defaultSectionCounts,
+          maxWeek: 20,
+          styles: DesktopWidgetConfigSet.defaults(),
+          now: DateTime(2026, 9, 7, 8, 0),
+          exams: <ExamItem>[
+            ExamItem(
+              courseName: '高等数学期末',
+              startTime: DateTime(2026, 9, 9, 9, 0),
+              endTime: DateTime(2026, 9, 9, 11, 0),
+              rawTimeStr: '2026-09-09(09:00-11:00)',
+              classroom: '弘毅楼 A201',
+              seatNumber: '12',
+              examForm: '闭卷',
+            ),
+          ],
+        );
+
+        final result = await Isolate.run(
+          () => computeWidgetSettingsSnapshots(clock, input),
+        );
+        expect(result.sample.days, isNotEmpty);
+        expect(result.real, isNotNull);
+        expect(result.real!.signedIn, isTrue);
+        expect(result.real!.days, isNotEmpty);
+      },
+    );
+
+    testWidgets(
+      'WidgetSettingsPage 推入路由走后台并行快照准备（0 次同步 buildSnapshot），DebugPage 滑入末期切换 Tab 落稳一致',
+      (tester) async {
+        final model = _buildTestModel();
+        await model.boot();
+        final gateway = _SpyWidgetGateway();
+        final widgetService = _SpySnapshotWidgetService(
+          model: model,
+          gateway: gateway,
+        );
+        addTearDown(() {
+          widgetService.dispose();
+          model.dispose();
+        });
+
+        await tester.pumpWidget(
+          _wrapApp(
+            Builder(
+              builder: (context) => Scaffold(
+                body: Column(
+                  children: <Widget>[
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => WidgetSettingsPage(
+                              model: model,
+                              widgetService: widgetService,
+                            ),
+                          ),
+                        );
+                      },
+                      child: const Text('push-widget-bg'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => DebugPage(model: model),
+                          ),
+                        );
+                      },
+                      child: const Text('push-debug-tab'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+
+        // 1. 推入 WidgetSettingsPage：滑入期间并行走 captureSnapshotInput，落稳时不阻塞 UI 线程同步构建
+        await tester.tap(find.text('push-widget-bg'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 80));
+        expect(widgetService.captureInputCalls, 1);
+        expect(widgetService.syncBuildCalls, 0);
+
+        await tester.pumpAndSettle();
+        expect(widgetService.syncBuildCalls, 0);
+        expect(find.byType(DesktopWidgetPreview), findsOneWidget);
+
+        Navigator.of(tester.element(find.byType(WidgetSettingsPage))).pop();
+        await tester.pumpAndSettle();
+
+        // 2. DebugPage 在 240ms（TabBarView 挂载前 20ms）点击「原始课表」Tab，落稳后准确落在目标页签
+        await tester.tap(find.text('push-debug-tab'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 240));
+        await tester.tap(find.text('原始课表'));
+        await tester.pump(const Duration(milliseconds: 20));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(find.text('还没有获取过课表'), findsOneWidget);
+      },
+    );
+
+    testWidgets('过渡占位骨架在 200px 极窄分屏下零溢出且屏蔽无障碍语义遍历', (tester) async {
+      tester.view.physicalSize = const Size(200, 640);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      for (final placeholder in const <Widget>[
+        CardListTransitionPlaceholder(),
+        DocumentTransitionPlaceholder(),
+        PreviewSettingsTransitionPlaceholder(),
+      ]) {
+        await tester.pumpWidget(_wrapApp(Scaffold(body: placeholder)));
+        expect(tester.takeException(), isNull);
+        expect(
+          find.descendant(
+            of: find.byWidget(placeholder),
+            matching: find.byType(ExcludeSemantics),
+          ),
+          findsOneWidget,
+        );
+      }
+    });
+
+    testWidgets('WidgetSettingsPage 落稳帧通过 SliverChildBuilderDelegate 懒构建屏外分组', (
+      tester,
+    ) async {
+      final model = _buildTestModel();
+      await model.boot();
+      final widgetService = DesktopWidgetService(
+        model: model,
+        gateway: _SpyWidgetGateway(),
+        debounce: const Duration(milliseconds: 1),
+      );
+      addTearDown(() {
+        widgetService.dispose();
+        model.dispose();
+      });
+
+      await tester.pumpWidget(
+        _wrapApp(
+          WidgetSettingsPage(model: model, widgetService: widgetService),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final customScrollView = tester.widget<CustomScrollView>(
+        find.byType(CustomScrollView),
+      );
+      final settingsSliverList =
+          (customScrollView.slivers.last as SliverPadding).child! as SliverList;
+      expect(settingsSliverList.delegate, isA<SliverChildBuilderDelegate>());
+
+      // 首屏可见顶部引导与精选预设，但屏外底部的「内容显示」与「恢复默认」尚未建树。
+      expect(find.text('精选预设'), findsOneWidget);
+      expect(find.text('内容显示'), findsNothing);
+      expect(find.text('恢复「今日课表」默认样式'), findsNothing);
+
+      // 向下滚动后按需构建屏外分组与底部恢复按钮。
+      await tester.scrollUntilVisible(
+        find.text('恢复「今日课表」默认样式'),
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('内容显示'), findsOneWidget);
+      expect(find.text('恢复「今日课表」默认样式'), findsOneWidget);
+    });
+
+    testWidgets('WidgetSettingsPage 入场滑行中途源数据更新不抢占 UI 线程同步建快照，落稳后自动补齐最新数据', (
+      tester,
+    ) async {
+      final model = _buildTestModel();
+      await model.boot();
+      final widgetService = _SpySnapshotWidgetService(
+        model: model,
+        gateway: _SpyWidgetGateway(),
+        debounce: const Duration(seconds: 10),
+        now: () => DateTime(2026, 9, 9, 10, 0),
+      );
+      addTearDown(() {
+        widgetService.dispose();
+        model.dispose();
+      });
+
+      await tester.pumpWidget(
+        _wrapApp(
+          Builder(
+            builder: (context) => Center(
+              child: ElevatedButton(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => WidgetSettingsPage(
+                      model: model,
+                      widgetService: widgetService,
+                    ),
+                  ),
+                ),
+                child: const Text('打开小组件设置'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('打开小组件设置'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 60));
+
+      // 入场动画进行中：后台已完成初始快照捕获，但 UI 线程未执行同步 buildSnapshot。
+      expect(find.byType(PreviewSettingsTransitionPlaceholder), findsOneWidget);
+      expect(widgetService.captureInputCalls, 1);
+      expect(widgetService.syncBuildCalls, 0);
+
+      // 在 260ms 滑入中途更新课表源数据并触发 model.notifyListeners()：
+      // 绝不在滑入帧同步执行 buildSnapshot() 或中途切换页面主体。
+      model.hydrateForTest(
+        schedule: sampleSchedule(),
+        termStart: DateTime(2026, 9, 7),
+        week: 1,
+      );
+      await tester.pump(const Duration(milliseconds: 40));
+      expect(widgetService.syncBuildCalls, 0);
+      expect(find.byType(PreviewSettingsTransitionPlaceholder), findsOneWidget);
+
+      // 动画落稳后一次性补齐最新真实快照并自动切换为「实时课表」。
+      await tester.pumpAndSettle();
+      expect(widgetService.syncBuildCalls, 1);
+      expect(find.text('实时课表'), findsOneWidget);
+
+      // 先卸载页面并释放 10s 防抖定时器，避免触发测试框架 pending timer 断言。
+      await tester.pumpWidget(const SizedBox.shrink());
+      widgetService.dispose();
+    });
+
+    testWidgets('WidgetSettingsPage 在窄分屏与桌面大视口下跨 0% 不透明度边界拖动滑块不丢手势、无溢出', (
+      tester,
+    ) async {
+      for (final size in const <Size>[Size(360, 520), Size(1280, 900)]) {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final model = _buildTestModel();
+        await model.boot();
+        final widgetService = DesktopWidgetService(
+          model: model,
+          gateway: _SpyWidgetGateway(),
+          debounce: const Duration(milliseconds: 1),
+        );
+
+        await tester.pumpWidget(
+          _wrapApp(
+            WidgetSettingsPage(model: model, widgetService: widgetService),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+
+        final scrollable = find.byType(Scrollable).first;
+        // 先滚动构建出「背景不透明度」与对应滑块，再确保滑块完整落在吸顶预览区下方。
+        await tester.scrollUntilVisible(
+          find.text('背景不透明度'),
+          80,
+          scrollable: scrollable,
+        );
+        await tester.pumpAndSettle();
+        final opacitySlider = find.byType(Slider).first;
+        final headerBottom = tester.getBottomLeft(find.text('添加到桌面')).dy + 16;
+        // 若滑块仍被底部截断则继续上拉，若被吸顶预览压住则下移露出。
+        for (var guard = 0; guard < 8; guard++) {
+          final rect = tester.getRect(opacitySlider);
+          if (rect.top >= headerBottom && rect.bottom <= size.height - 4) {
+            break;
+          }
+          final dy = rect.bottom > size.height - 4 ? -48.0 : 48.0;
+          await tester.drag(scrollable, Offset(0, dy));
+          await tester.pumpAndSettle();
+        }
+        expect(find.text('背景不透明度'), findsOneWidget);
+        expect(find.text('卡片圆角'), findsOneWidget);
+
+        // 持续按住「背景不透明度」滑块拖至 0%（折叠卡片圆角）再拉回约 50% 后松手落盘。
+        final sliderRect = tester.getRect(opacitySlider);
+        final gesture = await tester.startGesture(sliderRect.center);
+        await tester.pump();
+        await gesture.moveTo(Offset(sliderRect.left + 8, sliderRect.center.dy));
+        await tester.pump();
+        expect(find.text('0%'), findsOneWidget);
+        expect(find.text('卡片圆角'), findsNothing);
+        expect(tester.takeException(), isNull);
+
+        await gesture.moveTo(sliderRect.center);
+        await tester.pump();
+        expect(find.text('卡片圆角'), findsOneWidget);
+
+        await gesture.up();
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(
+          model.widgetStyleOf(DesktopWidgetKind.today).backgroundOpacity,
+          greaterThan(0.2),
+        );
+
+        // 滚至底部校验懒构建的「排版与字号」与「恢复默认」均正常。
+        await tester.scrollUntilVisible(
+          find.text('恢复「今日课表」默认样式'),
+          240,
+          scrollable: scrollable,
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('恢复「今日课表」默认样式'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+
+        await tester.pumpWidget(const SizedBox.shrink());
+        widgetService.dispose();
+        model.dispose();
+      }
+    });
   });
+}
+
+class _OffstageSettledSpyPage extends StatefulWidget {
+  const _OffstageSettledSpyPage({required this.onSettled, required this.child});
+
+  final VoidCallback onSettled;
+  final Widget child;
+
+  @override
+  State<_OffstageSettledSpyPage> createState() =>
+      _OffstageSettledSpyPageState();
+}
+
+class _OffstageSettledSpyPageState extends State<_OffstageSettledSpyPage>
+    with RouteSettledStateMixin<_OffstageSettledSpyPage> {
+  @override
+  void onRouteSettled() {
+    widget.onSettled();
+    super.onRouteSettled();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
+class _SpySnapshotWidgetService extends DesktopWidgetService {
+  _SpySnapshotWidgetService({
+    required super.model,
+    required super.gateway,
+    super.debounce,
+    super.now,
+  });
+
+  int captureInputCalls = 0;
+  int syncBuildCalls = 0;
+
+  @override
+  WidgetSnapshotInput? captureSnapshotInput() {
+    captureInputCalls++;
+    return super.captureSnapshotInput();
+  }
+
+  @override
+  WidgetSnapshot? buildSnapshot() {
+    syncBuildCalls++;
+    return super.buildSnapshot();
+  }
+}
+
+class _ControllableRoute<T> extends MaterialPageRoute<T> {
+  _ControllableRoute({required super.builder});
+
+  AnimationController? exposedController;
+
+  @override
+  AnimationController createAnimationController() {
+    exposedController = super.createAnimationController();
+    return exposedController!;
+  }
+}
+
+class _SlowFirstStatusGateway extends FakeReminderGateway {
+  _SlowFirstStatusGateway(this._firstCompleter, {super.statusValue});
+
+  final Completer<ReminderRuntimeStatus> _firstCompleter;
+
+  @override
+  Future<ReminderRuntimeStatus> status() {
+    if (statusCount == 0) {
+      statusCount++;
+      return _firstCompleter.future;
+    }
+    return super.status();
+  }
+}
+
+class _SpyWidgetGateway implements DesktopWidgetGateway {
+  int pinnedQueryCount = 0;
+
+  @override
+  Future<void> clearSnapshot() async {}
+
+  @override
+  Future<Map<DesktopWidgetKind, int>> getPinnedCounts() async {
+    pinnedQueryCount++;
+    return const <DesktopWidgetKind, int>{DesktopWidgetKind.today: 2};
+  }
+
+  @override
+  Future<bool> requestPinWidget(DesktopWidgetKind kind) async => true;
+
+  @override
+  Future<bool> syncSnapshot(String payloadJson) async => true;
 }
 
 class _RouteSettledProbePage extends StatefulWidget {

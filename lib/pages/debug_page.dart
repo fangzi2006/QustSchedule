@@ -15,11 +15,13 @@ import 'package:flutter/services.dart';
 import 'package:zf_academic/zf_academic.dart';
 
 import '../src/app_model.dart';
+import '../src/route_settled.dart';
 import '../src/term_calendar.dart' show formatIsoDate;
 import '../theme/app_theme.dart';
 import '../widgets/course_detail_sheet.dart'
     show compressWeeks, showEntryDetails;
 import '../widgets/app_snack_bar.dart';
+import '../widgets/page_skeleton.dart';
 import '../widgets/tactile_button.dart';
 
 class DebugPage extends StatelessWidget {
@@ -35,12 +37,6 @@ class DebugPage extends StatelessWidget {
       const Tab(text: '原始课表'),
       const Tab(text: '解析结果'),
     ];
-    final views = <Widget>[
-      _OverviewTab(model: model),
-      _RequestsTab(model: model),
-      _RawTab(model: model),
-      _ParsedTab(model: model),
-    ];
     return DefaultTabController(
       length: tabs.length,
       child: Scaffold(
@@ -49,7 +45,17 @@ class DebugPage extends StatelessWidget {
           title: const Text('调试信息'),
           bottom: TabBar(isScrollable: true, tabs: tabs),
         ),
-        body: TabBarView(children: views),
+        body: RouteSettledGate(
+          placeholder: const CardListTransitionPlaceholder(cardCount: 1),
+          builder: (_) => TabBarView(
+            children: <Widget>[
+              _OverviewTab(model: model),
+              _RequestsTab(model: model),
+              _RawTab(model: model),
+              _ParsedTab(model: model),
+            ],
+          ),
+        ),
       ),
     );
   }

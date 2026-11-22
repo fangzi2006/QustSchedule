@@ -22,8 +22,20 @@ import '../src/widget_style.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_snack_bar.dart';
 import '../widgets/desktop_widget_preview.dart';
+import '../widgets/page_skeleton.dart';
 import '../widgets/section_title.dart';
 import '../widgets/tactile_button.dart';
+
+/// 后台 Isolate 并行计算小组件配置页首屏所需的示例快照与真实快照（纯 Dart 无 UI 依赖）。
+@visibleForTesting
+({WidgetSnapshot sample, WidgetSnapshot? real}) computeWidgetSettingsSnapshots(
+  DateTime sampleClock,
+  WidgetSnapshotInput? realInput,
+) {
+  final sample = buildSampleWidgetSnapshot(reference: sampleClock);
+  final real = realInput?.compute();
+  return (sample: sample, real: real);
+}
 
 class WidgetSettingsPage extends StatefulWidget {
   const WidgetSettingsPage({
@@ -42,17 +54,23 @@ class WidgetSettingsPage extends StatefulWidget {
 }
 
 class _WidgetSettingsPageState extends State<WidgetSettingsPage>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, RouteSettledStateMixin<WidgetSettingsPage> {
   late DesktopWidgetKind _selectedKind = widget.initialKind;
   PreviewWallpaper _wallpaper = PreviewWallpaper.softLight;
   bool _todayNarrow = false;
   bool _nextWide = false;
-  late bool _useSampleData;
+  bool _useSampleData = true;
 
-  // 缓存真实快照与黄金示例快照，彻底消除滑块拖动 60fps 重建整份 14 天日程快照。
+  // 缓存真实快照与黄金示例快照，彻底消除滑块拖动 60fps 重建整份 14 天日程快照；
+  // 推入动画期间立即在后台 Isolate 与 260ms 滑入并行计算，落稳帧 UI 线程 0ms 快照开销。
+  bool _snapshotsInitialized = false;
+  bool _backgroundSnapshotStarted = false;
+  bool _pendingRealSnapshotRefresh = false;
+  bool _pendingForceRealSnapshotRefresh = false;
+  int _snapshotGeneration = 0;
   WidgetSnapshot? _cachedRealSnapshot;
-  late final WidgetSnapshot _cachedSampleSnapshot;
-  late final DateTime _sampleClock;
+  WidgetSnapshot? _cachedSampleSnapshot;
+  DateTime? _sampleClock;
   Object? _lastDataKey;
 
   // 滑块局部草稿，拖动期间不触发写盘和跨通道同步。
@@ -61,8 +79,8 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
   double? _fontScaleDraft;
 
   bool _pinning = false;
-  bool _initialPinnedQueried = false;
-  RouteSettledHandle? _pinnedQueryHandle;
+  int _pinnedEpoch = 0;
+  Map<DesktopWidgetKind, int>? _pendingPinnedCounts;
   final ValueNotifier<Map<DesktopWidgetKind, int>> _pinnedCounts =
       ValueNotifier<Map<DesktopWidgetKind, int>>(
         const <DesktopWidgetKind, int>{},
@@ -72,10 +90,76 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _sampleClock = samplePreviewClock();
-    _cachedSampleSnapshot = buildSampleWidgetSnapshot(reference: _sampleClock);
-    _refreshRealSnapshotCache(force: true);
 
+    widget.model.addListener(_onSourceDataChanged);
+    widget.model.academicNotifier.addListener(_onSourceDataChanged);
+    widget.widgetService.ensureLivePinnedUpdates();
+    MethodChannelDesktopWidgetGateway.livePinnedCounts.addListener(
+      _onLivePinnedCounts,
+    );
+
+    // 立即并行发起后台线程查询已添加的小组件数量，与 260ms 路由滑入动画并行不阻塞。
+    unawaited(_refreshPinnedCounts());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_snapshotsInitialized && !_backgroundSnapshotStarted) {
+      if (isRouteSettled) {
+        // 已落稳路由（如根路由或测试直接挂载）：首帧同步构建直出。
+        _ensureSnapshotsInitializedSync();
+      } else {
+        // 入场动画进行中：立即在后台 Isolate 并行计算示例快照与真实快照。
+        unawaited(_startBackgroundSnapshotInit());
+      }
+    }
+  }
+
+  @override
+  void onRouteSettled() {
+    _flushPendingPinnedCounts();
+    if (!_snapshotsInitialized && !_backgroundSnapshotStarted) {
+      _ensureSnapshotsInitializedSync();
+    } else if (_snapshotsInitialized && _pendingRealSnapshotRefresh) {
+      final force = _pendingForceRealSnapshotRefresh;
+      _pendingRealSnapshotRefresh = false;
+      _pendingForceRealSnapshotRefresh = false;
+      _refreshRealSnapshotCache(force: force);
+      _applyInitialSampleToggle();
+    }
+    super.onRouteSettled();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (_snapshotsInitialized) {
+        if (!isRouteSettled) {
+          _pendingRealSnapshotRefresh = true;
+          _pendingForceRealSnapshotRefresh = true;
+        } else {
+          _refreshRealSnapshotCache(force: true);
+          if (mounted) setState(() {});
+        }
+      }
+      unawaited(_refreshPinnedCounts());
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.model.removeListener(_onSourceDataChanged);
+    widget.model.academicNotifier.removeListener(_onSourceDataChanged);
+    MethodChannelDesktopWidgetGateway.livePinnedCounts.removeListener(
+      _onLivePinnedCounts,
+    );
+    WidgetsBinding.instance.removeObserver(this);
+    _pinnedCounts.dispose();
+    super.dispose();
+  }
+
+  void _applyInitialSampleToggle() {
     final real = _cachedRealSnapshot;
     final hasRealContent =
         real != null &&
@@ -85,48 +169,60 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
         (real.days.first.items.isNotEmpty ||
             real.weeks.first.blocks.isNotEmpty);
     _useSampleData = !hasRealContent;
-
-    widget.model.addListener(_onSourceDataChanged);
-    widget.model.academicNotifier.addListener(_onSourceDataChanged);
-    widget.widgetService.ensureLivePinnedUpdates();
-    MethodChannelDesktopWidgetGateway.livePinnedCounts.addListener(
-      _onLivePinnedCounts,
-    );
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (_initialPinnedQueried) return;
-    _initialPinnedQueried = true;
-    _pinnedQueryHandle = scheduleAfterRouteSettled(
-      context: context,
-      isMounted: () => mounted,
-      task: _refreshPinnedCounts,
-    );
+  void _ensureSnapshotsInitializedSync() {
+    if (_snapshotsInitialized) return;
+    _snapshotsInitialized = true;
+    final clock = samplePreviewClock();
+    _sampleClock = clock;
+    _cachedSampleSnapshot = buildSampleWidgetSnapshot(reference: clock);
+    _refreshRealSnapshotCache(force: true);
+    _applyInitialSampleToggle();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _refreshRealSnapshotCache(force: true);
-      if (mounted) setState(() {});
-      unawaited(_refreshPinnedCounts());
+  Future<void> _startBackgroundSnapshotInit() async {
+    if (_snapshotsInitialized || _backgroundSnapshotStarted) return;
+    _backgroundSnapshotStarted = true;
+    final generation = ++_snapshotGeneration;
+    final clock = samplePreviewClock();
+    final sourceKey = _computeSourceDataKey();
+    final realInput = widget.widgetService.captureSnapshotInput();
+    try {
+      final result = await runInBackground(
+        () => computeWidgetSettingsSnapshots(clock, realInput),
+      );
+      if (!mounted || generation != _snapshotGeneration) return;
+      _sampleClock = clock;
+      _cachedSampleSnapshot = result.sample;
+      if (_computeSourceDataKey() == sourceKey) {
+        _lastDataKey = sourceKey;
+        _cachedRealSnapshot = result.real;
+        _applyInitialSampleToggle();
+      } else if (isRouteSettled) {
+        // 后台计算期间源数据发生变化且路由已落稳，按最新状态刷新真实快照。
+        _refreshRealSnapshotCache(force: true);
+        _applyInitialSampleToggle();
+      } else {
+        // 入场动画尚未落稳时不在 UI 线程中途同步重建快照，延后至 onRouteSettled 一次性补齐。
+        _lastDataKey = null;
+        _cachedRealSnapshot = result.real;
+        _pendingRealSnapshotRefresh = true;
+        _pendingForceRealSnapshotRefresh = true;
+      }
+      _snapshotsInitialized = true;
+      // 入场动画未落稳时不触发中途 setState，待 onRouteSettled 一次性挂载。
+      if (isRouteSettled) {
+        setState(() {});
+      }
+    } catch (_) {
+      if (!mounted || generation != _snapshotGeneration) return;
+      _backgroundSnapshotStarted = false;
+      if (isRouteSettled) {
+        _ensureSnapshotsInitializedSync();
+        setState(() {});
+      }
     }
-  }
-
-  @override
-  void dispose() {
-    _pinnedQueryHandle?.cancel();
-    _pinnedQueryHandle = null;
-    widget.model.removeListener(_onSourceDataChanged);
-    widget.model.academicNotifier.removeListener(_onSourceDataChanged);
-    MethodChannelDesktopWidgetGateway.livePinnedCounts.removeListener(
-      _onLivePinnedCounts,
-    );
-    WidgetsBinding.instance.removeObserver(this);
-    _pinnedCounts.dispose();
-    super.dispose();
   }
 
   Object _computeSourceDataKey() {
@@ -154,6 +250,12 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
   }
 
   void _onSourceDataChanged() {
+    if (!_snapshotsInitialized) return;
+    if (!isRouteSettled) {
+      // 入场动画未落稳期间不抢占 UI 线程同步重建快照，延后到 onRouteSettled 一并提交。
+      _pendingRealSnapshotRefresh = true;
+      return;
+    }
     final prevKey = _lastDataKey;
     _refreshRealSnapshotCache();
     if (mounted && prevKey != _lastDataKey) {
@@ -161,17 +263,40 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
     }
   }
 
+  void _commitOrQueuePinnedCounts(Map<DesktopWidgetKind, int> counts) {
+    if (!mounted) return;
+    if (isRouteSettled) {
+      _pendingPinnedCounts = null;
+      _pinnedCounts.value = counts;
+    } else {
+      _pendingPinnedCounts = counts;
+    }
+  }
+
+  void _flushPendingPinnedCounts() {
+    final pending = _pendingPinnedCounts;
+    if (pending == null) return;
+    _pendingPinnedCounts = null;
+    _pinnedCounts.value = pending;
+  }
+
   void _onLivePinnedCounts() {
     final latest = MethodChannelDesktopWidgetGateway.livePinnedCounts.value;
     if (latest != null && mounted) {
-      _pinnedCounts.value = latest;
+      _pinnedEpoch++;
+      _commitOrQueuePinnedCounts(latest);
     }
   }
 
   Future<void> _refreshPinnedCounts() async {
-    final counts = await widget.widgetService.getPinnedCounts();
-    if (!mounted) return;
-    _pinnedCounts.value = counts;
+    final epoch = ++_pinnedEpoch;
+    try {
+      final counts = await widget.widgetService.getPinnedCounts();
+      if (!mounted || epoch != _pinnedEpoch) return;
+      _commitOrQueuePinnedCounts(counts);
+    } catch (_) {
+      // 查询失败时保持现有计数，避免未捕获异常。
+    }
   }
 
   void _selectKind(DesktopWidgetKind kind) {
@@ -297,398 +422,444 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
 
   @override
   Widget build(BuildContext context) {
-    final viewportHeight = MediaQuery.sizeOf(context).height;
+    final bodyReady = isRouteSettled && _snapshotsInitialized;
     return Scaffold(
       appBar: TactileAppBar(
         leading: const TactileBackButton(),
         title: const Text('桌面小组件'),
       ),
-      body: ListenableBuilder(
-        listenable: widget.model.prefsNotifier,
-        builder: (context, _) {
-          final style = _effectiveStyle();
-          final previewSnapshot = _useSampleData
-              ? _cachedSampleSnapshot
-              : _cachedRealSnapshot;
-          final previewNow = _useSampleData ? _sampleClock : null;
-          final isTransparent = style.backgroundOpacity <= 0.01;
-          final isToday = _selectedKind == DesktopWidgetKind.today;
-          final isWeek = _selectedKind == DesktopWidgetKind.week;
-          final isNext = _selectedKind == DesktopWidgetKind.next;
-          final scheme = Theme.of(context).colorScheme;
+      body: bodyReady
+          ? _buildSettledBody(context)
+          : const PreviewSettingsTransitionPlaceholder(),
+    );
+  }
 
-          // 按当前小组件高度、系统字号缩放与视口计算吸顶预览舞台的展开/折叠高度，
-          // 确保本周课表滚动及超大字体模式下控制项依然宽松顺手、绝不溢出。
-          final textScaleFactor =
-              (MediaQuery.textScalerOf(context).scale(14.0) / 14.0).clamp(
-                1.0,
-                2.2,
-              );
-          final chromeHeight = 112.0 + (textScaleFactor - 1.0) * 26.0;
-          final rawMaxCanvas = switch (_selectedKind) {
-            DesktopWidgetKind.today => 196.0,
-            DesktopWidgetKind.week => 336.0,
-            DesktopWidgetKind.next => _nextWide ? 96.0 : 196.0,
-          };
-          final rawMinCanvas = switch (_selectedKind) {
-            DesktopWidgetKind.today => 148.0,
-            DesktopWidgetKind.week => 190.0,
-            DesktopWidgetKind.next => _nextWide ? 84.0 : 136.0,
-          };
-          final maxAllowedExtent = math.max(
-            chromeHeight + 88.0,
-            viewportHeight * 0.56,
-          );
-          final minAllowedExtent = math.max(
-            chromeHeight + 64.0,
-            viewportHeight * 0.36,
-          );
-          final maxExtent = math.min(
-            chromeHeight + rawMaxCanvas,
-            maxAllowedExtent,
-          );
-          final minExtent = math.min(
-            math.min(chromeHeight + rawMinCanvas, minAllowedExtent),
-            maxExtent,
-          );
+  Widget _buildSettledBody(BuildContext context) {
+    final viewportHeight = MediaQuery.sizeOf(context).height;
+    return ListenableBuilder(
+      listenable: widget.model.prefsNotifier,
+      builder: (context, _) {
+        final style = _effectiveStyle();
+        final previewSnapshot = _useSampleData
+            ? _cachedSampleSnapshot
+            : _cachedRealSnapshot;
+        final previewNow = _useSampleData ? _sampleClock : null;
+        final isTransparent = style.backgroundOpacity <= 0.01;
+        final isToday = _selectedKind == DesktopWidgetKind.today;
+        final isWeek = _selectedKind == DesktopWidgetKind.week;
+        final isNext = _selectedKind == DesktopWidgetKind.next;
+        final scheme = Theme.of(context).colorScheme;
 
-          return CustomScrollView(
-            slivers: <Widget>[
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
-                sliver: SliverToBoxAdapter(
-                  child: _KindSegmentedHeader(
-                    selected: _selectedKind,
-                    onSelect: _selectKind,
+        // 按当前小组件高度、系统字号缩放与视口计算吸顶预览舞台的展开/折叠高度，
+        // 确保本周课表滚动及超大字体模式下控制项依然宽松顺手、绝不溢出。
+        final textScaleFactor =
+            (MediaQuery.textScalerOf(context).scale(14.0) / 14.0).clamp(
+              1.0,
+              2.2,
+            );
+        final chromeHeight = 112.0 + (textScaleFactor - 1.0) * 26.0;
+        final rawMaxCanvas = switch (_selectedKind) {
+          DesktopWidgetKind.today => 196.0,
+          DesktopWidgetKind.week => 336.0,
+          DesktopWidgetKind.next => _nextWide ? 96.0 : 196.0,
+        };
+        final rawMinCanvas = switch (_selectedKind) {
+          DesktopWidgetKind.today => 148.0,
+          DesktopWidgetKind.week => 190.0,
+          DesktopWidgetKind.next => _nextWide ? 84.0 : 136.0,
+        };
+        final maxAllowedExtent = math.max(
+          chromeHeight + 88.0,
+          viewportHeight * 0.56,
+        );
+        final minAllowedExtent = math.max(
+          chromeHeight + 64.0,
+          viewportHeight * 0.36,
+        );
+        final maxExtent = math.min(
+          chromeHeight + rawMaxCanvas,
+          maxAllowedExtent,
+        );
+        final minExtent = math.min(
+          math.min(chromeHeight + rawMinCanvas, minAllowedExtent),
+          maxExtent,
+        );
+
+        return CustomScrollView(
+          slivers: <Widget>[
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+              sliver: SliverToBoxAdapter(
+                child: _KindSegmentedHeader(
+                  selected: _selectedKind,
+                  onSelect: _selectKind,
+                ),
+              ),
+            ),
+            SliverPersistentHeader(
+              pinned: true,
+              delegate: _PreviewStageHeaderDelegate(
+                maxExtent: maxExtent,
+                minExtent: minExtent,
+                kind: _selectedKind,
+                style: style,
+                snapshot: previewSnapshot,
+                previewNow: previewNow,
+                useSampleData: _useSampleData,
+                wallpaper: _wallpaper,
+                todayNarrow: _todayNarrow,
+                nextWide: _nextWide,
+                pinnedCounts: _pinnedCounts,
+                onToggleSampleData: (sample) =>
+                    setState(() => _useSampleData = sample),
+                onSelectWallpaper: (wp) => setState(() => _wallpaper = wp),
+                onToggleTodayNarrow: (narrow) =>
+                    setState(() => _todayNarrow = narrow),
+                onToggleNextWide: (wide) => setState(() => _nextWide = wide),
+                onRequestPin: _pinSelectedWidget,
+              ),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 36),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => switch (index) {
+                    0 => _buildHintBanner(context, scheme),
+                    1 => _buildPresetSection(style),
+                    2 => _buildAppearanceSection(
+                      style,
+                      isTransparent: isTransparent,
+                    ),
+                    3 => _buildTypographySection(
+                      style,
+                      isToday: isToday,
+                      isNext: isNext,
+                    ),
+                    4 => _buildContentSection(
+                      style,
+                      isToday: isToday,
+                      isWeek: isWeek,
+                    ),
+                    5 => _buildResetSection(),
+                    _ => null,
+                  },
+                  childCount: 6,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildHintBanner(BuildContext context, ColorScheme scheme) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(AppRadius.medium),
+      ),
+      child: Row(
+        children: <Widget>[
+          Icon(
+            Icons.picture_in_picture_alt_rounded,
+            size: 16,
+            color: scheme.primary,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '上方预览仅供参考，以桌面实际效果为准；推荐开启系统小窗或分屏对着桌面调整。',
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPresetSection(DesktopWidgetStyle style) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          const SectionTitle('精选预设'),
+          _PresetStrip(
+            currentPreset: style.preset,
+            onSelect: (preset) =>
+                unawaited(_commitStyle(style.applyPreset(preset))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAppearanceSection(
+    DesktopWidgetStyle style, {
+    required bool isTransparent,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          const SectionTitle('外观与质感'),
+          Card(
+            child: Column(
+              children: <Widget>[
+                _OptionRowTile<WidgetThemeMode>(
+                  icon: Icons.palette_outlined,
+                  title: '色彩主题',
+                  options: WidgetThemeMode.values,
+                  selected: style.themeMode,
+                  labelOf: (v) => v.label,
+                  helperText: style.themeMode == WidgetThemeMode.dynamic
+                      ? 'Android 12+ 桌面上将随系统壁纸自动取色，旧版本使用默认莫奈色板'
+                      : null,
+                  onChanged: (mode) =>
+                      unawaited(_commitStyle(style.copyWith(themeMode: mode))),
+                ),
+                const Divider(height: 0, indent: 16, endIndent: 16),
+                _LabeledSliderTile(
+                  icon: Icons.opacity_rounded,
+                  title: '背景不透明度',
+                  valueLabel: '${(style.backgroundOpacity * 100).round()}%',
+                  value: style.backgroundOpacity,
+                  min: widgetMinOpacity,
+                  max: widgetMaxOpacity,
+                  divisions: 20,
+                  defaultValue: 1.0,
+                  onChanged: (v) {
+                    final prevAtDef =
+                        (style.backgroundOpacity - 1.0).abs() < 0.01;
+                    final atDef = (v - 1.0).abs() < 0.01;
+                    _maybeHaptic(atDef, prevAtDef);
+                    setState(() => _opacityDraft = v);
+                  },
+                  onChangeEnd: (v) => unawaited(
+                    _commitStyle(
+                      widget.model
+                          .widgetStyleOf(_selectedKind)
+                          .copyWith(backgroundOpacity: v),
+                    ),
                   ),
                 ),
-              ),
-              SliverPersistentHeader(
-                pinned: true,
-                delegate: _PreviewStageHeaderDelegate(
-                  maxExtent: maxExtent,
-                  minExtent: minExtent,
-                  kind: _selectedKind,
-                  style: style,
-                  snapshot: previewSnapshot,
-                  previewNow: previewNow,
-                  useSampleData: _useSampleData,
-                  wallpaper: _wallpaper,
-                  todayNarrow: _todayNarrow,
-                  nextWide: _nextWide,
-                  pinnedCounts: _pinnedCounts,
-                  onToggleSampleData: (sample) =>
-                      setState(() => _useSampleData = sample),
-                  onSelectWallpaper: (wp) => setState(() => _wallpaper = wp),
-                  onToggleTodayNarrow: (narrow) =>
-                      setState(() => _todayNarrow = narrow),
-                  onToggleNextWide: (wide) => setState(() => _nextWide = wide),
-                  onRequestPin: _pinSelectedWidget,
+                if (!isTransparent) ...<Widget>[
+                  const Divider(height: 0, indent: 16, endIndent: 16),
+                  _LabeledSliderTile(
+                    icon: Icons.rounded_corner_rounded,
+                    title: '卡片圆角',
+                    valueLabel: '${style.cornerRadius.round()} dp',
+                    value: style.cornerRadius,
+                    min: widgetMinCornerRadius,
+                    max: widgetMaxCornerRadius,
+                    divisions: 20,
+                    defaultValue: 20.0,
+                    onChanged: (v) {
+                      final prevAtDef = (style.cornerRadius - 20.0).abs() < 0.5;
+                      final atDef = (v - 20.0).abs() < 0.5;
+                      _maybeHaptic(atDef, prevAtDef);
+                      setState(() => _radiusDraft = v);
+                    },
+                    onChangeEnd: (v) => unawaited(
+                      _commitStyle(
+                        widget.model
+                            .widgetStyleOf(_selectedKind)
+                            .copyWith(cornerRadius: v),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTypographySection(
+    DesktopWidgetStyle style, {
+    required bool isToday,
+    required bool isNext,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          const SectionTitle('排版与字号'),
+          Card(
+            child: Column(
+              children: <Widget>[
+                _LabeledSliderTile(
+                  icon: Icons.format_size_rounded,
+                  title: '文字大小',
+                  valueLabel: '${(style.fontScale * 100).round()}%',
+                  value: style.fontScale,
+                  min: widgetMinFontScale,
+                  max: widgetMaxFontScale,
+                  divisions: 9,
+                  defaultValue: 1.0,
+                  onChanged: (v) {
+                    final prevAtDef = (style.fontScale - 1.0).abs() < 0.02;
+                    final atDef = (v - 1.0).abs() < 0.02;
+                    _maybeHaptic(atDef, prevAtDef);
+                    setState(() => _fontScaleDraft = v);
+                  },
+                  onChangeEnd: (v) => unawaited(
+                    _commitStyle(
+                      widget.model
+                          .widgetStyleOf(_selectedKind)
+                          .copyWith(fontScale: v),
+                    ),
+                  ),
                 ),
-              ),
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 36),
-                sliver: SliverList(
-                  delegate: SliverChildListDelegate(<Widget>[
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: scheme.surfaceContainerHighest.withValues(
-                          alpha: 0.45,
-                        ),
-                        borderRadius: BorderRadius.circular(AppRadius.medium),
-                      ),
-                      child: Row(
-                        children: <Widget>[
-                          Icon(
-                            Icons.picture_in_picture_alt_rounded,
-                            size: 16,
-                            color: scheme.primary,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              '上方预览仅供参考，以桌面实际效果为准；推荐开启系统小窗或分屏对着桌面调整。',
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(color: scheme.onSurfaceVariant),
-                            ),
-                          ),
-                        ],
-                      ),
+                if (!isNext) ...<Widget>[
+                  const Divider(height: 0, indent: 16, endIndent: 16),
+                  _OptionRowTile<WidgetDensity>(
+                    icon: Icons.density_medium_rounded,
+                    title: '信息密度',
+                    options: WidgetDensity.values,
+                    selected: style.density,
+                    labelOf: (v) => v.label,
+                    onChanged: (v) =>
+                        unawaited(_commitStyle(style.copyWith(density: v))),
+                  ),
+                  const Divider(height: 0, indent: 16, endIndent: 16),
+                  SwitchListTile(
+                    secondary: const Icon(Icons.title_rounded, size: 20),
+                    title: const Text('显示顶部标题栏'),
+                    subtitle: Text(
+                      isToday ? '关闭后更简洁，展示明日安排时仍保留精简提示' : '显示当前周次与本周日期范围',
                     ),
-                    const SizedBox(height: 14),
-                    const SectionTitle('精选预设'),
-                    _PresetStrip(
-                      currentPreset: style.preset,
-                      onSelect: (preset) =>
-                          unawaited(_commitStyle(style.applyPreset(preset))),
-                    ),
-                    const SizedBox(height: 18),
-                    const SectionTitle('外观与质感'),
-                    Card(
-                      child: Column(
-                        children: <Widget>[
-                          _OptionRowTile<WidgetThemeMode>(
-                            icon: Icons.palette_outlined,
-                            title: '色彩主题',
-                            options: WidgetThemeMode.values,
-                            selected: style.themeMode,
-                            labelOf: (v) => v.label,
-                            helperText:
-                                style.themeMode == WidgetThemeMode.dynamic
-                                ? 'Android 12+ 桌面上将随系统壁纸自动取色，旧版本使用默认莫奈色板'
-                                : null,
-                            onChanged: (mode) => unawaited(
-                              _commitStyle(style.copyWith(themeMode: mode)),
-                            ),
-                          ),
-                          const Divider(height: 0, indent: 16, endIndent: 16),
-                          _LabeledSliderTile(
-                            icon: Icons.opacity_rounded,
-                            title: '背景不透明度',
-                            valueLabel:
-                                '${(style.backgroundOpacity * 100).round()}%',
-                            value: style.backgroundOpacity,
-                            min: widgetMinOpacity,
-                            max: widgetMaxOpacity,
-                            divisions: 20,
-                            defaultValue: 1.0,
-                            onChanged: (v) {
-                              final prevAtDef =
-                                  (style.backgroundOpacity - 1.0).abs() < 0.01;
-                              final atDef = (v - 1.0).abs() < 0.01;
-                              _maybeHaptic(atDef, prevAtDef);
-                              setState(() => _opacityDraft = v);
-                            },
-                            onChangeEnd: (v) => unawaited(
-                              _commitStyle(
-                                widget.model
-                                    .widgetStyleOf(_selectedKind)
-                                    .copyWith(backgroundOpacity: v),
-                              ),
-                            ),
-                          ),
-                          if (!isTransparent) ...<Widget>[
-                            const Divider(height: 0, indent: 16, endIndent: 16),
-                            _LabeledSliderTile(
-                              icon: Icons.rounded_corner_rounded,
-                              title: '卡片圆角',
-                              valueLabel: '${style.cornerRadius.round()} dp',
-                              value: style.cornerRadius,
-                              min: widgetMinCornerRadius,
-                              max: widgetMaxCornerRadius,
-                              divisions: 20,
-                              defaultValue: 20.0,
-                              onChanged: (v) {
-                                final prevAtDef =
-                                    (style.cornerRadius - 20.0).abs() < 0.5;
-                                final atDef = (v - 20.0).abs() < 0.5;
-                                _maybeHaptic(atDef, prevAtDef);
-                                setState(() => _radiusDraft = v);
-                              },
-                              onChangeEnd: (v) => unawaited(
-                                _commitStyle(
-                                  widget.model
-                                      .widgetStyleOf(_selectedKind)
-                                      .copyWith(cornerRadius: v),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    const SectionTitle('排版与字号'),
-                    Card(
-                      child: Column(
-                        children: <Widget>[
-                          _LabeledSliderTile(
-                            icon: Icons.format_size_rounded,
-                            title: '文字大小',
-                            valueLabel: '${(style.fontScale * 100).round()}%',
-                            value: style.fontScale,
-                            min: widgetMinFontScale,
-                            max: widgetMaxFontScale,
-                            divisions: 9,
-                            defaultValue: 1.0,
-                            onChanged: (v) {
-                              final prevAtDef =
-                                  (style.fontScale - 1.0).abs() < 0.02;
-                              final atDef = (v - 1.0).abs() < 0.02;
-                              _maybeHaptic(atDef, prevAtDef);
-                              setState(() => _fontScaleDraft = v);
-                            },
-                            onChangeEnd: (v) => unawaited(
-                              _commitStyle(
-                                widget.model
-                                    .widgetStyleOf(_selectedKind)
-                                    .copyWith(fontScale: v),
-                              ),
-                            ),
-                          ),
-                          if (!isNext) ...<Widget>[
-                            const Divider(height: 0, indent: 16, endIndent: 16),
-                            _OptionRowTile<WidgetDensity>(
-                              icon: Icons.density_medium_rounded,
-                              title: '信息密度',
-                              options: WidgetDensity.values,
-                              selected: style.density,
-                              labelOf: (v) => v.label,
-                              onChanged: (v) => unawaited(
-                                _commitStyle(style.copyWith(density: v)),
-                              ),
-                            ),
-                            const Divider(height: 0, indent: 16, endIndent: 16),
-                            SwitchListTile(
-                              secondary: const Icon(
-                                Icons.title_rounded,
-                                size: 20,
-                              ),
-                              title: const Text('显示顶部标题栏'),
-                              subtitle: Text(
-                                isToday
-                                    ? '关闭后更简洁，展示明日安排时仍保留精简提示'
-                                    : '显示当前周次与本周日期范围',
-                              ),
-                              value: style.showHeader,
-                              onChanged: (v) => unawaited(
-                                _commitStyle(style.copyWith(showHeader: v)),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    const SectionTitle('内容显示'),
-                    Card(
-                      child: Column(
-                        children: <Widget>[
-                          SwitchListTile(
-                            secondary: const Icon(
-                              Icons.place_outlined,
-                              size: 20,
-                            ),
-                            title: const Text('显示上课地点'),
-                            value: style.showLocation,
-                            onChanged: (v) => unawaited(
-                              _commitStyle(style.copyWith(showLocation: v)),
-                            ),
-                          ),
-                          const Divider(height: 0, indent: 56),
-                          SwitchListTile(
-                            secondary: const Icon(
-                              Icons.person_outline_rounded,
-                              size: 20,
-                            ),
-                            title: const Text('显示授课教师'),
-                            value: style.showTeacher,
-                            onChanged: (v) => unawaited(
-                              _commitStyle(style.copyWith(showTeacher: v)),
-                            ),
-                          ),
-                          const Divider(height: 0, indent: 56),
-                          SwitchListTile(
-                            secondary: const Icon(
-                              Icons.access_time_rounded,
-                              size: 20,
-                            ),
-                            title: Text(
-                              isWeek
-                                  ? '显示左侧节次列'
-                                  : isToday
-                                  ? '显示上课时间'
-                                  : '显示起止时间',
-                            ),
-                            value: style.showTime,
-                            onChanged: (v) => unawaited(
-                              _commitStyle(style.copyWith(showTime: v)),
-                            ),
-                          ),
-                          if (!isWeek) ...<Widget>[
-                            const Divider(height: 0, indent: 56),
-                            SwitchListTile(
-                              secondary: const Icon(
-                                Icons.event_note_outlined,
-                                size: 20,
-                              ),
-                              title: const Text('融合考试安排'),
-                              subtitle: Text(
-                                isToday
-                                    ? '当天考试按时间混排，无课期展示 7 天内倒计时'
-                                    : '优先展示当天考试，近期无课时展示 7 天内倒计时',
-                              ),
-                              value: style.showExams,
-                              onChanged: (v) => unawaited(
-                                _commitStyle(style.copyWith(showExams: v)),
-                              ),
-                            ),
-                          ],
-                          if (isToday) ...<Widget>[
-                            const Divider(height: 0, indent: 56),
-                            SwitchListTile(
-                              secondary: const Icon(
-                                Icons.auto_mode_rounded,
-                                size: 20,
-                              ),
-                              title: const Text('课后自动切明日预告'),
-                              subtitle: const Text('当天最后一节课结束后自动预览明日安排'),
-                              value: style.autoSwitchTomorrow,
-                              onChanged: (v) => unawaited(
-                                _commitStyle(
-                                  style.copyWith(autoSwitchTomorrow: v),
-                                ),
-                              ),
-                            ),
-                            const Divider(height: 0, indent: 16, endIndent: 16),
-                            _OptionRowTile<FinishedCourseMode>(
-                              icon: Icons.check_circle_outline_rounded,
-                              title: '已结束课程',
-                              options: FinishedCourseMode.values,
-                              selected: style.finishedCourseMode,
-                              labelOf: (v) => v.label,
-                              onChanged: (v) => unawaited(
-                                _commitStyle(
-                                  style.copyWith(finishedCourseMode: v),
-                                ),
-                              ),
-                            ),
-                          ],
-                          if (isWeek) ...<Widget>[
-                            const Divider(height: 0, indent: 16, endIndent: 16),
-                            _OptionRowTile<WeekendColumnMode>(
-                              icon: Icons.weekend_outlined,
-                              title: '周末列显示',
-                              options: WeekendColumnMode.values,
-                              selected: style.weekendMode,
-                              labelOf: (v) => v.label,
-                              onChanged: (v) => unawaited(
-                                _commitStyle(style.copyWith(weekendMode: v)),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    Center(
-                      child: TactileActionButton(
-                        variant: TactileActionVariant.outlined,
-                        icon: const Icon(Icons.restart_alt_rounded, size: 18),
-                        label: Text('恢复「${_selectedKind.label}」默认样式'),
-                        onPressed: () => unawaited(_resetCurrentKind()),
-                      ),
-                    ),
-                  ]),
+                    value: style.showHeader,
+                    onChanged: (v) =>
+                        unawaited(_commitStyle(style.copyWith(showHeader: v))),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContentSection(
+    DesktopWidgetStyle style, {
+    required bool isToday,
+    required bool isWeek,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          const SectionTitle('内容显示'),
+          Card(
+            child: Column(
+              children: <Widget>[
+                SwitchListTile(
+                  secondary: const Icon(Icons.place_outlined, size: 20),
+                  title: const Text('显示上课地点'),
+                  value: style.showLocation,
+                  onChanged: (v) =>
+                      unawaited(_commitStyle(style.copyWith(showLocation: v))),
                 ),
-              ),
-            ],
-          );
-        },
+                const Divider(height: 0, indent: 56),
+                SwitchListTile(
+                  secondary: const Icon(Icons.person_outline_rounded, size: 20),
+                  title: const Text('显示授课教师'),
+                  value: style.showTeacher,
+                  onChanged: (v) =>
+                      unawaited(_commitStyle(style.copyWith(showTeacher: v))),
+                ),
+                const Divider(height: 0, indent: 56),
+                SwitchListTile(
+                  secondary: const Icon(Icons.access_time_rounded, size: 20),
+                  title: Text(
+                    isWeek
+                        ? '显示左侧节次列'
+                        : isToday
+                        ? '显示上课时间'
+                        : '显示起止时间',
+                  ),
+                  value: style.showTime,
+                  onChanged: (v) =>
+                      unawaited(_commitStyle(style.copyWith(showTime: v))),
+                ),
+                if (!isWeek) ...<Widget>[
+                  const Divider(height: 0, indent: 56),
+                  SwitchListTile(
+                    secondary: const Icon(Icons.event_note_outlined, size: 20),
+                    title: const Text('融合考试安排'),
+                    subtitle: Text(
+                      isToday
+                          ? '当天考试按时间混排，无课期展示 7 天内倒计时'
+                          : '优先展示当天考试，近期无课时展示 7 天内倒计时',
+                    ),
+                    value: style.showExams,
+                    onChanged: (v) =>
+                        unawaited(_commitStyle(style.copyWith(showExams: v))),
+                  ),
+                ],
+                if (isToday) ...<Widget>[
+                  const Divider(height: 0, indent: 56),
+                  SwitchListTile(
+                    secondary: const Icon(Icons.auto_mode_rounded, size: 20),
+                    title: const Text('课后自动切明日预告'),
+                    subtitle: const Text('当天最后一节课结束后自动预览明日安排'),
+                    value: style.autoSwitchTomorrow,
+                    onChanged: (v) => unawaited(
+                      _commitStyle(style.copyWith(autoSwitchTomorrow: v)),
+                    ),
+                  ),
+                  const Divider(height: 0, indent: 16, endIndent: 16),
+                  _OptionRowTile<FinishedCourseMode>(
+                    icon: Icons.check_circle_outline_rounded,
+                    title: '已结束课程',
+                    options: FinishedCourseMode.values,
+                    selected: style.finishedCourseMode,
+                    labelOf: (v) => v.label,
+                    onChanged: (v) => unawaited(
+                      _commitStyle(style.copyWith(finishedCourseMode: v)),
+                    ),
+                  ),
+                ],
+                if (isWeek) ...<Widget>[
+                  const Divider(height: 0, indent: 16, endIndent: 16),
+                  _OptionRowTile<WeekendColumnMode>(
+                    icon: Icons.weekend_outlined,
+                    title: '周末列显示',
+                    options: WeekendColumnMode.values,
+                    selected: style.weekendMode,
+                    labelOf: (v) => v.label,
+                    onChanged: (v) =>
+                        unawaited(_commitStyle(style.copyWith(weekendMode: v))),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildResetSection() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 18),
+      child: Center(
+        child: TactileActionButton(
+          variant: TactileActionVariant.outlined,
+          icon: const Icon(Icons.restart_alt_rounded, size: 18),
+          label: Text('恢复「${_selectedKind.label}」默认样式'),
+          onPressed: () => unawaited(_resetCurrentKind()),
+        ),
       ),
     );
   }
