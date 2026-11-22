@@ -82,8 +82,12 @@ class ScheduleService {
   /// 登录遇到验证码时暂存本次凭据，待验证码提交成功后按用户意愿持久化。
   ({Credentials credentials, bool remember})? _pendingSignIn;
 
-  /// 自动登录时间戳（熔断判定用）。
-  final List<DateTime> _autoLogins = <DateTime>[];
+  /// 自动登录失败时间戳（熔断判定用；仅记录有效认证失败与重登后立即再过期）。
+  final List<DateTime> _autoLoginFailures = <DateTime>[];
+
+  /// 自动重登完成世代号（用于同轮并发请求共享重登后的即时失效去重计次）。
+  int _reloginEpoch = 0;
+  int _lastFailureRecordedReloginEpoch = -1;
 
   /// 熔断是否已打开（需要用户手动登录一次来解除）。
   bool _breakerOpen = false;
@@ -99,6 +103,15 @@ class ScheduleService {
 
   /// 当前会话的 Cookie 头。**仅供调试页解析名字**，不要写进日志或发到远端。
   String get cookieHeaderForDebug => _client?.cookieHeader ?? '';
+
+  /// 导出当前内存客户端持有的 Cookie 快照（不触碰磁盘；未建客户端或无 Cookie 时返回 null）。
+  CookieStoreSnapshot? exportCurrentCookies() {
+    final client = _client;
+    if (client == null) return null;
+    final snapshot = client.exportCookies();
+    if (snapshot.cookies.isEmpty) return null;
+    return snapshot;
+  }
 
   /// 最近若干条请求记录（调试页用）。只存元数据，不含 Cookie 值与请求体。
   final List<RequestLog> requestLog = <RequestLog>[];
@@ -138,7 +151,8 @@ class ScheduleService {
     _inFlight = null;
     _reloginFlight = null;
     _breakerOpen = false;
-    _autoLogins.clear();
+    _autoLoginFailures.clear();
+    _lastFailureRecordedReloginEpoch = -1;
     // 换了学校就不能沿用上一个学校的账号，等 app 恢复目标学校的账号。
     accountHint = null;
   }
@@ -153,45 +167,41 @@ class ScheduleService {
   // -------------------------------------------------------------------------
 
   /// 取学期列表。与取课表共用同一个客户端；失效时同样走回退登录。
-  Future<Terms> fetchTerms() async {
-    await _waitForRelogin();
-    final client = await _ensureClient();
-    try {
-      return await client.fetchTerms();
-    } on AcademicError catch (error) {
-      if (error.code != ErrorCode.sessionExpired) rethrow;
-    }
-    await _reloginWithSavedCredentials();
-    return (await _ensureClient()).fetchTerms();
-  }
+  Future<Terms> fetchTerms() =>
+      _runWithReloginRetry((client) => client.fetchTerms());
 
   /// 取考试安排。与取课表共用同一个客户端；失效时同样走回退登录。
-  Future<List<ExamItem>> fetchExams([String? termId]) async {
-    await _waitForRelogin();
-    final client = await _ensureClient();
-    try {
-      return await client.fetchExams(termId);
-    } on AcademicError catch (error) {
-      if (error.code != ErrorCode.sessionExpired) rethrow;
-    }
-    await _reloginWithSavedCredentials();
-    return (await _ensureClient()).fetchExams(termId);
-  }
+  Future<List<ExamItem>> fetchExams([String? termId]) =>
+      _runWithReloginRetry((client) => client.fetchExams(termId));
 
   /// 取成绩明细。与取课表共用同一个客户端；失效时同样走回退登录。
-  Future<List<GradeItem>> fetchGrades([String? termId]) async {
+  Future<List<GradeItem>> fetchGrades([String? termId]) =>
+      _runWithReloginRetry((client) => client.fetchGrades(termId));
+
+  Future<T> _runWithReloginRetry<T>(
+    Future<T> Function(ScheduleBackend client) run,
+  ) async {
     await _waitForRelogin();
     final client = await _ensureClient();
     try {
-      return await client.fetchGrades(termId);
+      return await run(client);
     } on AcademicError catch (error) {
       if (error.code != ErrorCode.sessionExpired) rethrow;
     }
-    await _reloginWithSavedCredentials();
-    return (await _ensureClient()).fetchGrades(termId);
+    final reloginEpoch = await _reloginWithSavedCredentials();
+    try {
+      final result = await run(await _ensureClient());
+      _onReloginRetrySucceeded();
+      return result;
+    } on AcademicError catch (error) {
+      if (error.code == ErrorCode.sessionExpired) {
+        _recordReloginPostRetryExpired(reloginEpoch);
+      }
+      rethrow;
+    }
   }
 
-  Future<void>? _reloginFlight;
+  Future<int>? _reloginFlight;
 
   Future<void>? get reloginFlight => _reloginFlight;
 
@@ -212,7 +222,7 @@ class ScheduleService {
   ///
   /// 无论是取课表、学期、考试还是成绩遇会话过期，均共用同一单 flight 登录任务。
   /// 并发请求合并为单次登录，避免多次重复并发登录与重复扣减熔断额度。
-  Future<void> _reloginWithSavedCredentials() {
+  Future<int> _reloginWithSavedCredentials() {
     final pending = _reloginFlight;
     if (pending != null) return pending;
     onStage?.call(stageRelogin);
@@ -223,7 +233,7 @@ class ScheduleService {
     });
   }
 
-  Future<void> _loginWithSavedCredentials() async {
+  Future<int> _loginWithSavedCredentials() async {
     final client = await _ensureClient();
     final accountKey = _accountKey();
     final saved = await credentials.get(accountKey);
@@ -236,7 +246,6 @@ class ScheduleService {
         '自动登录次数过多（可能是账号密码已变更），请手动登录',
       );
     }
-    _recordAutoLogin();
 
     // 回滚点：ZhengfangClient.login() 入口会作废旧 Cookie，失败时恢复它，
     // 否则一次不成功的重登会把"会话过期"恶化成"彻底掉登录"。
@@ -244,8 +253,9 @@ class ScheduleService {
     AuthState state;
     try {
       state = await client.login(saved);
-    } catch (_) {
+    } catch (error) {
       _restore(client, rollback);
+      _recordAutoLoginFailure(error);
       rethrow;
     }
 
@@ -254,17 +264,20 @@ class ScheduleService {
       final code = await captchaHandler(state);
       if (code == null) {
         _restore(client, rollback);
+        _autoLoginFailures.add(DateTime.now());
         throw AcademicError(ErrorCode.captchaRequired, '需要验证码，已取消自动登录');
       }
       try {
         state = await client.submitCaptcha(code);
-      } catch (_) {
+      } catch (error) {
         _restore(client, rollback);
+        _recordAutoLoginFailure(error);
         rethrow;
       }
     }
     if (state is WebLoginState) {
       _restore(client, rollback);
+      _autoLoginFailures.add(DateTime.now());
       throw AcademicError(
         ErrorCode.webLoginRequired,
         '教务系统要求先完成网页统一认证，暂不支持自动登录',
@@ -272,6 +285,7 @@ class ScheduleService {
     }
     if (state is! AuthenticatedState) {
       _restore(client, rollback);
+      _autoLoginFailures.add(DateTime.now());
       throw AcademicError(
         ErrorCode.sessionExpired,
         '自动登录未完成（${state.runtimeType}）',
@@ -283,7 +297,7 @@ class ScheduleService {
     }
 
     await _persist(client);
-    // 不在此重置熔断：自动登录次数必须跨轮次累计（见 _recordAutoLogin）。
+    return ++_reloginEpoch;
   }
 
   // -------------------------------------------------------------------------
@@ -339,12 +353,20 @@ class ScheduleService {
     }
     // 走到这里：Cookie 失效。回退到账密登录。
     final rollback = client.exportCookies();
-    await _reloginWithSavedCredentials();
+    final reloginEpoch = await _reloginWithSavedCredentials();
     onStage?.call(stageFetchingSchedule);
 
     // 重登后只重试一次，不循环。
     try {
-      return await (await _ensureClient()).fetchSchedule(termId);
+      final schedule = await (await _ensureClient()).fetchSchedule(termId);
+      _onReloginRetrySucceeded();
+      return schedule;
+    } on AcademicError catch (error) {
+      if (error.code == ErrorCode.sessionExpired) {
+        _recordReloginPostRetryExpired(reloginEpoch);
+      }
+      _restore(client, rollback);
+      rethrow;
     } catch (_) {
       _restore(client, rollback);
       rethrow;
@@ -382,7 +404,8 @@ class ScheduleService {
     } catch (_) {}
     final creds = Credentials(username, password);
     _pendingSignIn = null;
-    final client = await _ensureClient();
+    // 登录入口本身会作废内存 Cookie，跳过 bootstrap 避免切校试登阶段误删磁盘上原校 Cookie 快照。
+    final client = await _ensureClient(loadCookies: false);
     final state = await client.login(creds);
     if (state is AuthenticatedState) {
       await _saveAuthenticatedSignIn(client, creds, remember);
@@ -469,20 +492,20 @@ class ScheduleService {
     return '$base|$account';
   }
 
-  Future<ScheduleBackend> _ensureClient() {
+  Future<ScheduleBackend> _ensureClient({bool loadCookies = true}) {
     final existing = _client;
     if (existing != null) return Future.value(existing);
     final pending = _clientFlight;
     if (pending != null) return pending;
-    final task = _createClient();
+    final task = _createClient(loadCookies: loadCookies);
     _clientFlight = task;
     return task.whenComplete(() {
       if (_clientFlight == task) _clientFlight = null;
     });
   }
 
-  Future<ScheduleBackend> _createClient() async {
-    final snapshot = await bootstrap();
+  Future<ScheduleBackend> _createClient({bool loadCookies = true}) async {
+    final snapshot = loadCookies ? await bootstrap() : null;
     final client = backendFactory(
       ZfClientConfig(
         baseUrl: _baseUrl,
@@ -509,15 +532,52 @@ class ScheduleService {
   /// 窗口内的自动登录是否还允许。超限时打开熔断并返回 false。
   bool _autoLoginAllowed() {
     final now = DateTime.now();
-    _autoLogins.removeWhere((at) => now.difference(at) > autoLoginWindow);
-    if (_autoLogins.length >= autoLoginLimit) {
+    _autoLoginFailures.removeWhere(
+      (at) => now.difference(at) > autoLoginWindow,
+    );
+    if (_autoLoginFailures.length >= autoLoginLimit) {
       _breakerOpen = true;
       return false;
     }
     return true;
   }
 
-  void _recordAutoLogin() => _autoLogins.add(DateTime.now());
+  static bool _isTransientReloginError(AcademicError error) {
+    return const <ErrorCode>{
+      ErrorCode.networkRetryable,
+      ErrorCode.timeout,
+      ErrorCode.serverError,
+      ErrorCode.accessForbidden,
+      ErrorCode.cancelled,
+    }.contains(error.code);
+  }
+
+  /// 记录自动重登失败：网络/服务端/403 波动不计次；密码错立即熔断防锁号；其余计入窗口。
+  void _recordAutoLoginFailure(Object error) {
+    final academic = asAcademicError(error);
+    if (_isTransientReloginError(academic)) return;
+    if (academic.code == ErrorCode.invalidCredentials) {
+      _breakerOpen = true;
+      return;
+    }
+    _autoLoginFailures.add(DateTime.now());
+  }
+
+  /// 自动重登刚成功、紧接着的业务重试仍报 sessionExpired 时记 1 次（按重登世代去重）。
+  void _recordReloginPostRetryExpired(int reloginEpoch) {
+    if (reloginEpoch <= 0 || _lastFailureRecordedReloginEpoch == reloginEpoch) {
+      return;
+    }
+    _lastFailureRecordedReloginEpoch = reloginEpoch;
+    _autoLoginFailures.add(DateTime.now());
+  }
+
+  /// 自动重登且紧接着的业务请求成功拿到数据，清空窗口内历史失败计数。
+  void _onReloginRetrySucceeded() {
+    if (!_breakerOpen) {
+      _autoLoginFailures.clear();
+    }
+  }
 
   void _recordRequest(RequestLog info) {
     requestLog.add(info);
@@ -529,6 +589,7 @@ class ScheduleService {
   /// 手动登录成功后解除熔断。
   void resetBreaker() {
     _breakerOpen = false;
-    _autoLogins.clear();
+    _autoLoginFailures.clear();
+    _lastFailureRecordedReloginEpoch = -1;
   }
 }

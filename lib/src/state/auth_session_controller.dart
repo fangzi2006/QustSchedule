@@ -185,12 +185,27 @@ class AuthSessionController {
     }
   }
 
-  void rollbackSchool(String baseUrl) {
-    if (sameSchool(_schoolBaseUrl, baseUrl)) return;
-    _schoolBaseUrl = baseUrl;
-    service.switchSchool(baseUrl);
-    unawaited(_prefs.raw.setCurrentSchool(baseUrl));
-    _prefs.notifyPrefs();
+  void rollbackSchool(
+    String baseUrl, {
+    String? account,
+    CookieStoreSnapshot? cookies,
+  }) {
+    if (!sameSchool(_schoolBaseUrl, baseUrl)) {
+      _schoolBaseUrl = baseUrl;
+      service.switchSchool(baseUrl);
+      unawaited(_prefs.raw.setCurrentSchool(baseUrl));
+      _prefs.notifyPrefs();
+    }
+    final restoredAccount = (account ?? _username).trim();
+    if (restoredAccount.isNotEmpty) {
+      _username = restoredAccount;
+      service.accountHint = restoredAccount;
+    }
+    if (cookies != null &&
+        cookies.cookies.isNotEmpty &&
+        sameSchool(cookies.baseUrl, baseUrl)) {
+      unawaited(service.cookieStorage.save(cookies));
+    }
   }
 
   /// 自动回登遇到验证码时挂起等待用户输入。

@@ -197,6 +197,13 @@ class HintNoticeController extends ChangeNotifier {
       case ErrorCode.invalidCredentials:
         return '账号或密码错误，请核对后重试。';
       case ErrorCode.sessionExpired:
+        if (error.message.contains('自动登录次数过多') ||
+            error.message.contains('已暂停')) {
+          return '自动登录已暂停（多次失败或密码已变更），请重新登录。';
+        }
+        if (error.message.contains('没有保存账号密码')) {
+          return '登录凭证已失效且未保存密码，请重新登录。';
+        }
         return '登录凭证已失效，请重新登录。';
       case ErrorCode.captchaRequired:
         return '需要输入验证码，请在验证码页输入后重试。';

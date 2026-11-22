@@ -2021,6 +2021,422 @@ void main() {
       },
     );
   });
+
+  group('网络失败重试与切校事务性回滚', () {
+    test('断网切校失败后：持续断网重试再入 failed，恢复网络后 retry 成功切到目标教务并提示已更新', () async {
+      const targetUrl = 'https://jw-target.example.edu.cn/jwglxt';
+      final backend = FakeBackend();
+      final prefs = Preferences.inMemory();
+      final rig = buildRig(preferences: prefs, backend: backend);
+      final model = rig.model;
+      addTearDown(model.dispose);
+
+      await model.signIn('20240001', 'pw');
+      expect(model.status, AppStatus.ready);
+
+      // 1. 断网切校失败 → 回滚原线路并记录待重试目标
+      var online = false;
+      backend.loginBehavior = (call, creds) async {
+        if (!online) {
+          throw const AcademicError(ErrorCode.networkRetryable, '网络不可达');
+        }
+        backend.cookies = snapshotOf(targetUrl, value: 'target-cookie');
+        return const AuthenticatedState(
+          studentId: '20240001',
+          studentName: '测试学生',
+        );
+      };
+
+      await model.changeSchool(targetUrl);
+      expect(model.status, AppStatus.failed);
+      expect(model.schoolBaseUrl, _baseUrl);
+      expect(model.hasPendingSchoolSwitch, isTrue);
+      expect(model.canRetryError, isTrue);
+
+      // 2. 持续断网时点重试：先进入 loading 再回到 failed，仍保留待重试目标
+      final offlineStatuses = <AppStatus>[];
+      void recordOffline() => offlineStatuses.add(model.status);
+      model.addListener(recordOffline);
+      await model.retry();
+      model.removeListener(recordOffline);
+      expect(offlineStatuses, contains(AppStatus.loading));
+      expect(model.status, AppStatus.failed);
+      expect(model.schoolBaseUrl, _baseUrl);
+      expect(model.hasPendingSchoolSwitch, isTrue);
+
+      // 3. 恢复网络后点重试：切到目标教务并进入 ready，显示短暂已更新提示
+      online = true;
+      final onlineStatuses = <AppStatus>[];
+      void recordOnline() => onlineStatuses.add(model.status);
+      model.addListener(recordOnline);
+      await model.retry();
+      model.removeListener(recordOnline);
+      expect(onlineStatuses, contains(AppStatus.loading));
+      expect(model.status, AppStatus.ready);
+      expect(model.schoolBaseUrl, targetUrl);
+      expect(prefs.currentSchool, targetUrl);
+      expect(model.hasPendingSchoolSwitch, isFalse);
+      expect(model.scheduleHint, '已更新');
+    });
+
+    test(
+      '冷启动仅加载本地缓存时断网切校失败：不误删磁盘 Cookie 与课表缓存，恢复 accountHint，关闭后原校可正常刷新',
+      () async {
+        const targetUrl = 'https://jw-target.example.edu.cn/jwglxt';
+        final backend = FakeBackend();
+        final repo = FakeSessionRepository(
+          snapshotOf(_baseUrl, value: 'disk-cookie'),
+        );
+        final cache = FakeScheduleCache(
+          CachedSchedule(
+            baseUrl: _baseUrl,
+            schedule: sampleSchedule('2026-2027-1'),
+            fetchedAt: DateTime.now(),
+          ),
+        );
+        final prefs = Preferences.inMemory(
+          lastAccounts: <String, String>{_baseUrl: '20240001'},
+          lastStudentNames: <String, String>{_baseUrl: '张三'},
+        );
+        final credentials = InMemoryCredentialStore();
+        await credentials.save(
+          '${_baseUrl.toLowerCase()}|20240001',
+          const Credentials('20240001', 'pw'),
+        );
+
+        final model = AppModel(
+          service: ScheduleService(
+            credentials: credentials,
+            cookieStorage: repo,
+            backendFactory: (_) => backend,
+            baseUrl: _baseUrl,
+          ),
+          repository: repo,
+          preferences: prefs,
+          scheduleCache: cache,
+          examCache: InMemoryExamCache(),
+          gradesCache: InMemoryGradesCache(),
+          schoolBaseUrl: _baseUrl,
+        );
+        addTearDown(model.dispose);
+
+        await model.boot();
+        expect(model.status, AppStatus.ready);
+        expect(model.service.exportCurrentCookies(), isNull);
+        expect(repo.clearCount, 0);
+
+        backend.loginBehavior = (call, creds) async =>
+            throw const AcademicError(ErrorCode.networkRetryable, '断网');
+        await model.changeSchool(targetUrl);
+
+        expect(model.status, AppStatus.failed);
+        expect(model.schoolBaseUrl, _baseUrl);
+        expect(repo.clearCount, 0, reason: '切校试登不得调用 bootstrap 误删原校磁盘 Cookie');
+        expect(repo.saveCount, 0, reason: '内存无旧客户端时不覆盖磁盘 Cookie');
+        expect((await repo.load())?.cookies.first.value, 'disk-cookie');
+        expect(cache.clearCount, 0, reason: '切校失败不得提前清空原校课表缓存');
+        expect(model.service.accountHint, '20240001');
+
+        // 点关闭回到原校 ready，原校刷新可继续使用完好的 Cookie/凭据
+        model.dismissError();
+        expect(model.status, AppStatus.ready);
+        expect(model.hasPendingSchoolSwitch, isFalse);
+
+        backend.loginBehavior = null;
+        await model.refresh();
+        expect(model.status, AppStatus.ready);
+        expect(model.scheduleHint, '已更新');
+      },
+    );
+
+    test('同校手动重登不清空本地课表缓存，热会话切校失败回滚会回写内存 Cookie', () async {
+      const targetUrl = 'https://jw-target.example.edu.cn/jwglxt';
+      final backend = FakeBackend();
+      final repo = FakeSessionRepository();
+      final cache = FakeScheduleCache();
+      final credentials = InMemoryCredentialStore();
+      final model = AppModel(
+        service: ScheduleService(
+          credentials: credentials,
+          cookieStorage: repo,
+          backendFactory: (_) => backend,
+          baseUrl: _baseUrl,
+        ),
+        repository: repo,
+        preferences: Preferences.inMemory(),
+        scheduleCache: cache,
+        examCache: InMemoryExamCache(),
+        gradesCache: InMemoryGradesCache(),
+        schoolBaseUrl: _baseUrl,
+      );
+      addTearDown(model.dispose);
+
+      await model.signIn('20240001', 'pw');
+      expect(cache.clearCount, 0);
+      expect(cache.saveCount, 1);
+
+      // 同校再次登录不应清空 scheduleCache
+      await model.signIn('20240001', 'pw');
+      expect(cache.clearCount, 0);
+
+      // 热会话（内存持有 Cookie）切校失败，回滚写回内存 Cookie
+      final saveBeforeSwitch = repo.saveCount;
+      backend.loginBehavior = (call, creds) async =>
+          throw const AcademicError(ErrorCode.networkRetryable, '断网');
+      await model.changeSchool(targetUrl);
+      expect(model.status, AppStatus.failed);
+      expect(repo.clearCount, 0);
+      expect(repo.saveCount, saveBeforeSwitch + 1);
+      expect(model.service.accountHint, '20240001');
+    });
+
+    test(
+      '切校遇 WebLoginState 回滚原校、保留学业与缓存且不保留待重试目标；遇 CaptchaState 延迟清学业且取消可无损回滚',
+      () async {
+        const targetUrl = 'https://jw-target.example.edu.cn/jwglxt';
+        final backend = FakeBackend();
+        final cache = FakeScheduleCache();
+        final credentials = InMemoryCredentialStore();
+        final model = AppModel(
+          service: ScheduleService(
+            credentials: credentials,
+            cookieStorage: FakeSessionRepository(),
+            backendFactory: (_) => backend,
+            baseUrl: _baseUrl,
+          ),
+          preferences: Preferences.inMemory(),
+          scheduleCache: cache,
+          examCache: InMemoryExamCache(),
+          gradesCache: InMemoryGradesCache(),
+          schoolBaseUrl: _baseUrl,
+        );
+        addTearDown(model.dispose);
+
+        await credentials.save(
+          '${_baseUrl.toLowerCase()}|20240001',
+          const Credentials('20240001', 'pw'),
+        );
+        model.session.username = '20240001';
+        model.service.accountHint = '20240001';
+        model.hydrateForTest(
+          schedule: sampleSchedule('2026-2027-1'),
+          exams: sampleExams('2026-2027-1'),
+          grades: sampleGrades('2026-2027-1'),
+        );
+
+        // 1. WebLoginState → 回滚原校、保留学业数据、清除待重试目标、不提供重试
+        backend.loginBehavior = (call, creds) async => const WebLoginState(
+          continuationId: 'web-1',
+          url: 'https://sso.example.edu.cn',
+          completionUrl: targetUrl,
+        );
+        await model.changeSchool(targetUrl);
+        expect(model.status, AppStatus.failed);
+        expect(model.errorCode, ErrorCode.webLoginRequired.wire);
+        expect(model.schoolBaseUrl, _baseUrl);
+        expect(model.hasPendingSchoolSwitch, isFalse);
+        expect(model.canRetryError, isFalse);
+        expect(model.exams, isNotEmpty);
+        expect(model.grades, isNotEmpty);
+        expect(cache.clearCount, 0);
+
+        final loginsBeforeNoopRetry = backend.loginCount;
+        await model.retry();
+        expect(backend.loginCount, loginsBeforeNoopRetry);
+        model.dismissError();
+        expect(model.status, AppStatus.ready);
+
+        // 2. CaptchaState → 尚未通过验证码时不清空旧学业与缓存；取消验证码无损回滚到原校 ready
+        backend.loginBehavior = (call, creds) async => const CaptchaState(
+          continuationId: 'cap-switch',
+          imageBase64: '',
+          mimeType: 'image/png',
+        );
+        await model.changeSchool(targetUrl);
+        expect(model.status, AppStatus.needCaptcha);
+        expect(model.exams, isNotEmpty);
+        expect(model.grades, isNotEmpty);
+        expect(cache.clearCount, 0);
+
+        model.cancelCaptcha();
+        expect(model.status, AppStatus.ready);
+        expect(model.schoolBaseUrl, _baseUrl);
+        expect(model.exams, isNotEmpty);
+        expect(model.grades, isNotEmpty);
+        expect(model.service.accountHint, '20240001');
+
+        // 3. CaptchaState 提交成功后，再清理旧学业与旧课表缓存并完成切校
+        await model.changeSchool(targetUrl);
+        expect(model.status, AppStatus.needCaptcha);
+        backend.submitBehavior = (call, code) async => const AuthenticatedState(
+          studentId: '20240001',
+          studentName: '测试学生',
+        );
+        await model.submitCaptcha('1234');
+        expect(model.status, AppStatus.ready);
+        expect(model.schoolBaseUrl, targetUrl);
+        expect(model.exams, isEmpty);
+        expect(model.grades, isEmpty);
+        expect(cache.clearCount, 1);
+        expect(model.scheduleHint, '已更新');
+      },
+    );
+
+    test('切校读取安全存储密码异步窗口内连点 retry / changeSchool 不会重入发起两次切校', () async {
+      const targetUrl = 'https://jw-target.example.edu.cn/jwglxt';
+      final backend = FakeBackend();
+      final credGate = Completer<Credentials?>();
+      final credStore = _DelayedCredentialStore(
+        initial: <String, Credentials>{
+          '${_baseUrl.toLowerCase()}|20240001': const Credentials(
+            '20240001',
+            'pw',
+          ),
+        },
+        getGate: () => credGate.future,
+      );
+      final model = AppModel(
+        service: ScheduleService(
+          credentials: credStore,
+          cookieStorage: FakeSessionRepository(),
+          backendFactory: (_) => backend,
+          baseUrl: _baseUrl,
+        ),
+        preferences: Preferences.inMemory(),
+        examCache: InMemoryExamCache(),
+        gradesCache: InMemoryGradesCache(),
+        schoolBaseUrl: _baseUrl,
+      );
+      addTearDown(model.dispose);
+
+      model.session.username = '20240001';
+      model.service.accountHint = '20240001';
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+      final first = model.changeSchool(targetUrl);
+      final second = model.changeSchool(targetUrl);
+      final third = model.retry();
+
+      credGate.complete(const Credentials('20240001', 'pw'));
+      await Future.wait<void>(<Future<void>>[first, second, third]);
+
+      expect(credStore.getCount, 1);
+      expect(backend.loginCount, 1);
+      expect(model.status, AppStatus.ready);
+      expect(model.schoolBaseUrl, targetUrl);
+    });
+
+    test('普通 failed 前台重试与切校登录后拉课表失败：不卡 loading，失败留 failed，成功提示已更新', () async {
+      const targetUrl = 'https://jw-target.example.edu.cn/jwglxt';
+      final backend = FakeBackend();
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
+      addTearDown(model.dispose);
+
+      await model.signIn('20240001', 'pw');
+
+      // 1. 普通 failed（有课表）点击重试：失败时更新为 failed，成功后进入 ready 且展示「已更新」
+      model.setStatusForTest(
+        AppStatus.failed,
+        message: '网络不稳定',
+        code: ErrorCode.networkRetryable.wire,
+      );
+      backend.fetchBehavior = (call, termId) async => throw const AcademicError(
+        ErrorCode.serverError,
+        '维护中',
+        httpStatus: 503,
+      );
+      final failStatuses = <AppStatus>[];
+      void rec1() => failStatuses.add(model.status);
+      model.addListener(rec1);
+      await model.retry();
+      model.removeListener(rec1);
+      expect(failStatuses, contains(AppStatus.loading));
+      expect(model.status, AppStatus.failed);
+      expect(model.errorCode, ErrorCode.serverError.wire);
+
+      backend.fetchBehavior = (call, termId) async =>
+          sampleSchedule('2026-2027-2');
+      await model.retry();
+      expect(model.status, AppStatus.ready);
+      expect(model.termId, '2026-2027-2');
+      expect(model.scheduleHint, '已更新');
+
+      // 2. 切校 signIn 成功但拉取新课表失败：不卡在 loading，进入 failed，再次 retry 拉取新校课表成功
+      backend.fetchBehavior = (call, termId) async =>
+          throw const AcademicError(ErrorCode.networkRetryable, '拉课表超时');
+      await model.changeSchool(targetUrl);
+      expect(model.schoolBaseUrl, targetUrl);
+      expect(model.status, AppStatus.failed);
+      expect(model.hasPendingSchoolSwitch, isFalse);
+
+      backend.fetchBehavior = (call, termId) async =>
+          sampleSchedule('2026-2027-2');
+      await model.retry();
+      expect(model.status, AppStatus.ready);
+      expect(model.schoolBaseUrl, targetUrl);
+      expect(model.scheduleHint, '已更新');
+    });
+
+    test('熔断/密码错时课表页与学业页文案完全一致，留在当前页保留离线课表并提供重新登录入口', () async {
+      final backend = FakeBackend();
+      final rig = buildRig(backend: backend);
+      final model = rig.model;
+      addTearDown(model.dispose);
+
+      await model.signIn('20240001', 'pw');
+      expect(model.status, AppStatus.ready);
+
+      // 模拟密码已变更：自动重登返回 INVALID_CREDENTIALS 并立刻熔断
+      backend.examsBehavior = (call, termId) async => throw expired();
+      backend.gradesBehavior = (call, termId) async => throw expired();
+      backend.fetchBehavior = (call, termId) async => throw expired();
+      backend.loginBehavior = (call, creds) async => throw badCredentials();
+
+      // 1. 学业页首次刷新：收到密码错误 → 展示与 humanizeError 一致的文案且标记需要重新登录
+      await model.refreshAcademicData();
+      expect(
+        model.academicError,
+        HintNoticeController.humanizeError(badCredentials()),
+      );
+      expect(model.academicNeedsRelogin, isTrue);
+      expect(model.service.breakerOpen, isTrue);
+
+      // 2. 熔断已打开后，再次在学业页与课表页分别刷新：两页文案完全一致（均为熔断暂停提示）
+      await model.refreshAcademicData();
+      const expectedBreakerText = '自动登录已暂停（多次失败或密码已变更），请重新登录。';
+      expect(model.academicError, expectedBreakerText);
+      expect(model.academicNeedsRelogin, isTrue);
+
+      await model.refresh();
+      expect(model.status, AppStatus.failed);
+      expect(model.schedule, isNotNull, reason: '离线课表保留不丢失');
+      expect(model.message, expectedBreakerText);
+      expect(model.message, model.academicError);
+      expect(model.needsReloginError, isTrue);
+
+      // 3. 点击重新登录（retry → retryAfterSessionLoss）：进入登录页但仍保留离线课表引用
+      await model.retry();
+      expect(model.status, AppStatus.needLogin);
+      expect(model.message, expectedBreakerText);
+      expect(model.schedule, isNotNull);
+    });
+  });
+}
+
+class _DelayedCredentialStore extends InMemoryCredentialStore {
+  _DelayedCredentialStore({required this.initial, required this.getGate});
+
+  final Map<String, Credentials> initial;
+  final Future<Credentials?> Function() getGate;
+  int getCount = 0;
+
+  @override
+  Future<Credentials?> get(String key) async {
+    getCount++;
+    final gated = await getGate();
+    return gated ?? initial[key];
+  }
 }
 
 class _CountingExamCache extends InMemoryExamCache {

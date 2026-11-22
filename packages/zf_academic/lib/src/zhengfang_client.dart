@@ -169,10 +169,6 @@ class ZhengfangClient {
   String? _cachedCasLoginUrl;
   bool _casDiscoveryDone = false;
 
-  /// RSA 公钥缓存（正方系统服务端公钥静态稳定，同实例登录可复用）
-  String? _cachedModulus;
-  String? _cachedExponent;
-
   ZhengfangClient._(
     this._config,
     this._endpoints,
@@ -949,47 +945,44 @@ class ZhengfangClient {
     final fields = <String, String>{...hidden, ...extra};
     var mm = password;
     if (fields['mmsfjm'] == '1') {
-      var modulus = _cachedModulus ?? '';
-      var exponent = _cachedExponent ?? '';
-      if (modulus.isEmpty || exponent.isEmpty) {
-        final keyUrl =
-            _app('${_endpoints.publicKeyPath}?time=${_nowMs()}&_=${_nowMs()}');
-        final response = await _http.get(
-            keyUrl, const HttpRequestOptions(purpose: RequestPurpose.auth));
-        if (response.status < 200 || response.status >= 300) {
-          throw AcademicError(
-            ErrorCode.networkRetryable,
-            '学校公钥获取失败（HTTP ${response.status}）',
-            httpStatus: response.status,
-          );
-        }
-        Map<String, dynamic> key;
-        try {
-          final decoded = jsonDecode(response.body);
-          if (decoded is! Map<String, dynamic>) {
-            throw const FormatException('公钥不是 JSON 对象');
-          }
-          key = decoded;
-        } catch (error) {
-          throw AcademicError(ErrorCode.pageChanged, '学校公钥格式无效', cause: error);
-        }
-        modulus = str(key['modulus']);
-        exponent = str(key['exponent']);
-        if (modulus.isEmpty || exponent.isEmpty) {
-          throw AcademicError(ErrorCode.pageChanged, '学校公钥格式无效');
-        }
-        _cachedModulus = modulus;
-        _cachedExponent = exponent;
-        _debug('auth:public-key', <String, Object?>{
-          'url': response.url,
-          'modulusLength': modulus.length,
-          'modulusPreview': modulus.substring(0, min(24, modulus.length)),
-          'exponent': exponent,
-          'looksHex':
-              RegExp(r'^[0-9a-f]+$', caseSensitive: false).hasMatch(modulus),
-          'looksBase64': RegExp(r'^[A-Za-z0-9+/]+=*$').hasMatch(modulus),
-        });
+      // 正方教务 RSA 密钥对与服务端当前 JSESSIONID 会话绑定（或按会话轮换），
+      // 每次登录必须针对当前新会话实时取公钥，绝不可跨登录复缓存旧公钥，
+      // 否则二次重登会因解密失败误报「用户名或密码不正确」并消耗锁号额度。
+      final keyUrl =
+          _app('${_endpoints.publicKeyPath}?time=${_nowMs()}&_=${_nowMs()}');
+      final response = await _http.get(
+          keyUrl, const HttpRequestOptions(purpose: RequestPurpose.auth));
+      if (response.status < 200 || response.status >= 300) {
+        throw AcademicError(
+          ErrorCode.networkRetryable,
+          '学校公钥获取失败（HTTP ${response.status}）',
+          httpStatus: response.status,
+        );
       }
+      Map<String, dynamic> key;
+      try {
+        final decoded = jsonDecode(response.body);
+        if (decoded is! Map<String, dynamic>) {
+          throw const FormatException('公钥不是 JSON 对象');
+        }
+        key = decoded;
+      } catch (error) {
+        throw AcademicError(ErrorCode.pageChanged, '学校公钥格式无效', cause: error);
+      }
+      final modulus = str(key['modulus']);
+      final exponent = str(key['exponent']);
+      if (modulus.isEmpty || exponent.isEmpty) {
+        throw AcademicError(ErrorCode.pageChanged, '学校公钥格式无效');
+      }
+      _debug('auth:public-key', <String, Object?>{
+        'url': response.url,
+        'modulusLength': modulus.length,
+        'modulusPreview': modulus.substring(0, min(24, modulus.length)),
+        'exponent': exponent,
+        'looksHex':
+            RegExp(r'^[0-9a-f]+$', caseSensitive: false).hasMatch(modulus),
+        'looksBase64': RegExp(r'^[A-Za-z0-9+/]+=*$').hasMatch(modulus),
+      });
       mm = zfFormEncryptPassword(modulus, exponent, password);
     }
     fields['yhm'] = username;
@@ -1045,8 +1038,6 @@ class ZhengfangClient {
     // 学校真的拒绝了这次登录时，先报它的原因，再去试着读身份信息——否则错误会被后续
     // 的"登录页重定向"覆盖成一句含糊的提示。
     if (isLoginPage(result.body)) {
-      _cachedModulus = null;
-      _cachedExponent = null;
       final failure = _classifyLoginFailure(result.body);
       if (failure != null && failure.code == ErrorCode.invalidCredentials) {
         _pending = null;

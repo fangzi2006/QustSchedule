@@ -425,6 +425,97 @@ void main() {
       expect(find.widgetWithText(TextButton, '关闭'), findsOneWidget);
       expect(find.text('期初课'), findsOneWidget, reason: '课表还在，没被错误页顶掉');
     });
+
+    testWidgets('切校断网失败弹窗点击「重试」：立刻切到加载转圈，恢复网络后成功切换并提示已更新', (tester) async {
+      const targetUrl = 'https://jw-target.example.edu.cn/jwglxt';
+      final backend = FakeBackend();
+      final model = buildModel(backend: backend);
+      addTearDown(model.dispose);
+
+      await model.signIn('20240001', 'pw');
+      expect(model.status, AppStatus.ready);
+
+      var online = false;
+      final loginGate = Completer<void>();
+      backend.loginBehavior = (call, creds) async {
+        if (!online) {
+          throw const AcademicError(ErrorCode.networkRetryable, '网络不可达');
+        }
+        await loginGate.future;
+        backend.cookies = snapshotOf(targetUrl, value: 'retry-ok');
+        return const AuthenticatedState(
+          studentId: '20240001',
+          studentName: '测试学生',
+        );
+      };
+
+      await model.changeSchool(targetUrl);
+      expect(model.status, AppStatus.failed);
+
+      await tester.pumpWidget(wrap(HomeShell(model: model)));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('切换失败'), findsOneWidget);
+      final retryButton = find.widgetWithText(FilledButton, '重试');
+      expect(retryButton, findsOneWidget);
+
+      // 恢复网络并点击「重试」，应立刻离开红框进入加载转圈态
+      online = true;
+      await tester.tap(retryButton);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(model.status, AppStatus.loading);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+      // 完成登录与课表拉取：切到目标教务，错误弹窗消失并短暂展示「已更新」
+      loginGate.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(model.status, AppStatus.ready);
+      expect(model.schoolBaseUrl, targetUrl);
+      expect(find.textContaining('切换失败'), findsNothing);
+      expect(find.text('已更新'), findsOneWidget);
+
+      // 推进 1.5s 定时器让「已更新」自动消失，避免测试退出时残留 pending timer
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('有离线课表且触发熔断/会话失效时留在 HomeShell 展示「重新登录」弹窗，点击后才跳登录页', (
+      tester,
+    ) async {
+      final model = buildModel();
+      addTearDown(model.dispose);
+      model.hydrateForTest(schedule: sparseSchedule(), week: 1);
+      model.setStatusForTest(
+        AppStatus.failed,
+        message: '自动登录已暂停（多次失败或密码已变更），请重新登录。',
+        code: 'SESSION_EXPIRED',
+      );
+
+      await tester.pumpWidget(
+        wrap(
+          ListenableBuilder(
+            listenable: model.routeNotifier,
+            builder: (context, _) => pageForStatus(model),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(HomeShell), findsOneWidget, reason: '有离线课表时不强踢回登录页');
+      expect(find.text('期初课'), findsOneWidget);
+      expect(find.text('自动登录已暂停（多次失败或密码已变更），请重新登录。'), findsOneWidget);
+      final reloginBtn = find.widgetWithText(FilledButton, '重新登录');
+      expect(reloginBtn, findsOneWidget);
+
+      await tester.tap(reloginBtn);
+      await tester.pumpAndSettle();
+      expect(model.status, AppStatus.needLogin);
+      expect(find.byType(LoginPage), findsOneWidget);
+    });
   });
 
   group('课表翻页（一次滑动一页）', () {

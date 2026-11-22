@@ -1107,4 +1107,37 @@ void main() {
       expect(model.academicHint, isEmpty);
     });
   });
+
+  testWidgets('学业页遇自动登录熔断时横幅展示统一提示与「重新登录」按钮，点击进入登录页', (tester) async {
+    tester.view.physicalSize = const Size(800, 1800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final backend = FakeBackend();
+    final model = _buildTestModel(backend: backend);
+    addTearDown(model.dispose);
+    await model.signIn('20240001', 'pw');
+
+    backend.examsBehavior = (_, _) async => throw expired();
+    backend.gradesBehavior = (_, _) async => throw expired();
+    backend.loginBehavior = (_, _) async => throw badCredentials();
+
+    // 首次失败触发密码错并立刻熔断
+    await model.refreshAcademicData(showHint: false);
+    // 二次刷新命中熔断
+    await model.refreshAcademicData(showHint: false);
+
+    await tester.pumpWidget(_wrap(AcademicPage(model: model)));
+    await tester.pumpAndSettle();
+
+    expect(find.text('自动登录已暂停（多次失败或密码已变更），请重新登录。'), findsOneWidget);
+    final reloginBtn = find.widgetWithText(TextButton, '重新登录');
+    expect(reloginBtn, findsOneWidget);
+    expect(find.widgetWithText(TextButton, '重试'), findsNothing);
+
+    await tester.tap(reloginBtn);
+    await tester.pump();
+    expect(model.status, AppStatus.needLogin);
+  });
 }

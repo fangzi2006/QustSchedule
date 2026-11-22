@@ -104,6 +104,9 @@ class AcademicController extends ChangeNotifier {
   String? _academicError;
   String? get academicError => _academicError;
 
+  bool _academicNeedsRelogin = false;
+  bool get academicNeedsRelogin => _academicNeedsRelogin;
+
   bool _academicDataClearedForDebug = false;
   Future<void>? _academicSync;
   bool _disposed = false;
@@ -157,6 +160,7 @@ class AcademicController extends ChangeNotifier {
         _isNotEvaluated = cachedGrades?.isNotEvaluated ?? false;
         _loadedAcademicTerm = termId;
         _academicError = null;
+        _academicNeedsRelogin = false;
         notifyListeners();
       } else if (_loadedAcademicTerm.isNotEmpty &&
           _loadedAcademicTerm != termId &&
@@ -166,6 +170,7 @@ class AcademicController extends ChangeNotifier {
         _isNotEvaluated = false;
         _loadedAcademicTerm = termId;
         _academicError = null;
+        _academicNeedsRelogin = false;
         notifyListeners();
       }
     } catch (_) {}
@@ -223,6 +228,7 @@ class AcademicController extends ChangeNotifier {
         _isNotEvaluated = existingGrades?.isNotEvaluated ?? false;
         _loadedAcademicTerm = target;
         _academicError = null;
+        _academicNeedsRelogin = false;
         _academicLoading = false;
         _loadingAcademicTerm = null;
         notifyListeners();
@@ -243,6 +249,7 @@ class AcademicController extends ChangeNotifier {
       _loadingAcademicTerm = target;
       _academicLoading = true;
       _academicError = null;
+      _academicNeedsRelogin = false;
       touchedNetwork = true;
       notifyListeners();
       if (showHint) {
@@ -277,6 +284,9 @@ class AcademicController extends ChangeNotifier {
             examRes.code == ErrorCode.notOpen) {
           // 考试安排未开放属于正常学期周期状态，保持静默，不提示错误
         } else if (examRes != null) {
+          if (_isReloginRequiredError(examRes)) {
+            _academicNeedsRelogin = true;
+          }
           _academicError ??= _describeAcademicError(examRes);
         }
 
@@ -290,6 +300,9 @@ class AcademicController extends ChangeNotifier {
             _grades = existingGrades.items;
           }
         } else if (gradeRes != null) {
+          if (_isReloginRequiredError(gradeRes)) {
+            _academicNeedsRelogin = true;
+          }
           _academicError ??= _describeAcademicError(gradeRes);
         }
 
@@ -304,6 +317,9 @@ class AcademicController extends ChangeNotifier {
         );
       } catch (e) {
         if (!_disposed && seq == _academicLoadSeq) {
+          if (_isReloginRequiredError(e)) {
+            _academicNeedsRelogin = true;
+          }
           _academicError ??= _describeAcademicError(e);
         }
       } finally {
@@ -445,6 +461,7 @@ class AcademicController extends ChangeNotifier {
     _grades = const <GradeItem>[];
     _isNotEvaluated = false;
     _academicError = null;
+    _academicNeedsRelogin = false;
     _academicSync = null;
     _suppressStageHintsSetter(false);
     _hints.clearAcademicHint();
@@ -497,10 +514,15 @@ class AcademicController extends ChangeNotifier {
     return null;
   }
 
-  /// 归一化学业数据加载错误，为用户呈现友好且具备指导性的提示文案。
+  static bool _isReloginRequiredError(dynamic err) =>
+      err is AcademicError &&
+      (err.code == ErrorCode.sessionExpired ||
+          err.code == ErrorCode.invalidCredentials);
+
+  /// 归一化学业数据加载错误，与课表页共享 [HintNoticeController.humanizeError] 口径。
   static String _describeAcademicError(dynamic err) {
     if (err is AcademicError) {
-      return err.message;
+      return HintNoticeController.humanizeError(err);
     }
     if (err is TimeoutException) {
       return '网络请求超时，请检查网络后重试';

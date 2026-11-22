@@ -470,13 +470,23 @@ void main() {
   });
 
   group('状态码映射与重试', () {
-    test('401/403 → SESSION_EXPIRED', () async {
-      final fake = FakeTransport(<RawHttpResponse>[_response(401)]);
-      final client = _client(fake);
+    test('401 → SESSION_EXPIRED，403（即使无特定拦截正文）→ ACCESS_FORBIDDEN', () async {
+      final fake401 = FakeTransport(<RawHttpResponse>[_response(401)]);
+      final client401 = _client(fake401);
       await expectLater(
-        client.get('$_root/kbcx/xskbcx_cxXsKb.html'),
+        client401.get('$_root/kbcx/xskbcx_cxXsKb.html'),
         throwsA(isA<AcademicError>()
             .having((error) => error.code, 'code', ErrorCode.sessionExpired)),
+      );
+
+      final fake403 =
+          FakeTransport(<RawHttpResponse>[_response(403, body: '')]);
+      final client403 = _client(fake403);
+      await expectLater(
+        client403.get('$_root/kbcx/xskbcx_cxXsKb.html'),
+        throwsA(isA<AcademicError>()
+            .having((error) => error.code, 'code', ErrorCode.accessForbidden)
+            .having((error) => error.httpStatus, 'httpStatus', 403)),
       );
     });
 

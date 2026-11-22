@@ -683,4 +683,150 @@ void main() {
       expect(await signInFuture, isA<AuthenticatedState>());
     });
   });
+
+  group('精细化熔断保护（网络波动不计次、密码错立刻熔断、健康重登清零、并发去重）', () {
+    test('自动重登遇到网络/超时/5xx/403 波动不消耗熔断额度，网络恢复后仍可正常自动重登', () async {
+      final h = _Harness(autoLoginLimit: 1);
+      await h.credentials.save(
+        _Harness.accountKey,
+        const Credentials('20240001', 'pw'),
+      );
+
+      final transientErrors = <AcademicError>[
+        const AcademicError(ErrorCode.networkRetryable, '网络不可达'),
+        const AcademicError(ErrorCode.timeout, '请求超时'),
+        const AcademicError(ErrorCode.serverError, '服务端异常', httpStatus: 503),
+        const AcademicError(
+          ErrorCode.accessForbidden,
+          '禁止外网访问',
+          httpStatus: 403,
+        ),
+      ];
+
+      h.backend.fetchBehavior = (call, termId) async => throw expired();
+      for (final err in transientErrors) {
+        h.backend.loginBehavior = (call, credentials) async => throw err;
+        await expectLater(
+          h.service.getSchedule(),
+          throwsA(isA<AcademicError>().having((e) => e.code, 'code', err.code)),
+        );
+        expect(h.service.breakerOpen, isFalse);
+      }
+
+      // 网络恢复：仍允许自动重登且成功
+      var fetchStep = 0;
+      h.backend.fetchBehavior = (call, termId) async {
+        if (++fetchStep == 1) throw expired();
+        return sampleSchedule();
+      };
+      h.backend.loginBehavior = (call, credentials) async {
+        h.backend.cookies = snapshotOf(_baseUrl, value: 'recovered');
+        return const AuthenticatedState(studentId: '1', studentName: 'n');
+      };
+
+      final schedule = await h.service.getSchedule();
+      expect(schedule.entries, isNotEmpty);
+      expect(h.service.breakerOpen, isFalse);
+    });
+
+    test('自动重登遇到 INVALID_CREDENTIALS（密码错误）立即打开熔断，绝不再自动试错防锁号', () async {
+      final h = _Harness(autoLoginLimit: 2);
+      await h.credentials.save(
+        _Harness.accountKey,
+        const Credentials('20240001', 'wrong-pw'),
+      );
+      h.backend.fetchBehavior = (call, termId) async => throw expired();
+      h.backend.loginBehavior = (call, credentials) async =>
+          throw badCredentials();
+
+      await expectLater(
+        h.service.getSchedule(),
+        throwsA(
+          isA<AcademicError>().having(
+            (e) => e.code,
+            'code',
+            ErrorCode.invalidCredentials,
+          ),
+        ),
+      );
+      expect(h.backend.loginCount, 1);
+      expect(h.service.breakerOpen, isTrue);
+
+      // 再次触发：直接被熔断拦截，不再请求 login
+      await expectLater(
+        h.service.getSchedule(),
+        throwsA(
+          isA<AcademicError>()
+              .having((e) => e.code, 'code', ErrorCode.sessionExpired)
+              .having((e) => e.message, 'message', contains('自动登录次数过多')),
+        ),
+      );
+      expect(h.backend.loginCount, 1);
+    });
+
+    test('单次自动重登且紧接着业务请求成功会清空失败计数，不误伤后续正常重登', () async {
+      final h = _Harness(autoLoginLimit: 1);
+      await h.credentials.save(
+        _Harness.accountKey,
+        const Credentials('20240001', 'pw'),
+      );
+
+      // 连续 3 轮：每轮都是会话过期 → 自动重登成功 → 紧接着查课表成功
+      for (var round = 1; round <= 3; round++) {
+        var step = 0;
+        h.backend.fetchBehavior = (call, termId) async {
+          if (++step == 1) throw expired();
+          return sampleSchedule('2026-2027-$round');
+        };
+        h.backend.loginBehavior = (call, credentials) async {
+          h.backend.cookies = snapshotOf(_baseUrl, value: 'ok-$round');
+          return const AuthenticatedState(studentId: '1', studentName: 'n');
+        };
+        final schedule = await h.service.getSchedule();
+        expect(schedule.termId, '2026-2027-$round');
+        expect(h.service.breakerOpen, isFalse);
+      }
+      expect(h.backend.loginCount, 3);
+    });
+
+    test('并发考试与成绩共享同一次重登后若均立即再过期，按重登世代去重仅计 1 次失败', () async {
+      final h = _Harness(autoLoginLimit: 2);
+      await h.credentials.save(
+        _Harness.accountKey,
+        const Credentials('20240001', 'pw'),
+      );
+      h.backend.examsBehavior = (call, termId) async => throw expired();
+      h.backend.gradesBehavior = (call, termId) async => throw expired();
+      h.backend.loginBehavior = (call, credentials) async {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        h.backend.cookies = snapshotOf(_baseUrl, value: 'loop-$call');
+        return const AuthenticatedState(studentId: '1', studentName: 'n');
+      };
+
+      // 第 1 轮：考试与成绩并发都撞过期、共享 1 次重登、重登后仍均报过期 → 去重只计 1 次
+      await Future.wait<void>(<Future<void>>[
+        expectLater(h.service.fetchExams(), throwsA(isA<AcademicError>())),
+        expectLater(h.service.fetchGrades(), throwsA(isA<AcademicError>())),
+      ]);
+      expect(h.backend.loginCount, 1);
+      expect(h.service.breakerOpen, isFalse);
+
+      // 第 2 轮：仍允许尝试第 2 次重登（未因并发被错误算成 2 次而提前熔断）
+      await expectLater(h.service.fetchExams(), throwsA(isA<AcademicError>()));
+      expect(h.backend.loginCount, 2);
+      expect(h.service.breakerOpen, isFalse);
+
+      // 第 3 轮：达到 2 次上限，正式熔断拦截
+      await expectLater(
+        h.service.fetchExams(),
+        throwsA(
+          isA<AcademicError>()
+              .having((e) => e.code, 'code', ErrorCode.sessionExpired)
+              .having((e) => e.message, 'message', contains('自动登录次数过多')),
+        ),
+      );
+      expect(h.backend.loginCount, 2);
+      expect(h.service.breakerOpen, isTrue);
+    });
+  });
 }

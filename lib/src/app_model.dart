@@ -152,6 +152,35 @@ class AppModel extends ChangeNotifier {
   int _authEpoch = 0;
   bool _disposed = false;
 
+  /// 最近一次失败且可重试的切校目标地址（点击全局「重试」时优先重走切校）。
+  String? _pendingSchoolSwitchUrl;
+  bool get hasPendingSchoolSwitch => _pendingSchoolSwitchUrl != null;
+
+  /// 全局错误弹窗是否提供「重试 / 重新登录」动作（无课表或网页统一认证不支持重试）。
+  bool get canRetryError =>
+      scheduleState.schedule != null &&
+      _errorCode != ErrorCode.webLoginRequired.wire;
+
+  /// 当前全局错误是否属于无法自动恢复的认证失败（熔断 / 会话失效 / 密码错误），
+  /// 应引导用户点击「重新登录」跳转登录页，而非无意义重复请求。
+  bool get needsReloginError =>
+      !hasPendingSchoolSwitch &&
+      (_errorCode == ErrorCode.sessionExpired.wire ||
+          _errorCode == ErrorCode.invalidCredentials.wire);
+
+  /// 切校登录遇到验证码时暂存的回滚上下文，待验证成功再清旧缓存，取消或失败时完整回滚。
+  ({
+    String previousBase,
+    String targetBase,
+    String account,
+    CookieStoreSnapshot? previousCookies,
+  })?
+  _captchaSchoolSwitch;
+
+  /// 切校异步重入保护（覆盖读取安全存储密码到完成登录的整个窗口）。
+  bool _schoolSwitchInFlight = false;
+  int _schoolSwitchSeq = 0;
+
   AppStatus _status = AppStatus.booting;
   AppStatus get status => _status;
 
@@ -187,6 +216,7 @@ class AppModel extends ChangeNotifier {
   bool get isNotEvaluated => academic.isNotEvaluated;
   bool get academicLoading => academic.academicLoading;
   String? get academicError => academic.academicError;
+  bool get academicNeedsRelogin => academic.academicNeedsRelogin;
   ChangeNotifier get academicNotifier => academic;
 
   int get storageNoticeEvent => hints.storageNoticeEvent;
@@ -544,16 +574,26 @@ class AppModel extends ChangeNotifier {
     String? termId,
     bool background = false,
     bool triggerAcademic = false,
+    bool forceForeground = false,
   }) async {
     final hasData = scheduleState.schedule != null;
-    final silent = background || hasData;
+    final bool foreground =
+        forceForeground ||
+        (!background &&
+            (!hasData ||
+                _status == AppStatus.loading ||
+                _status == AppStatus.failed ||
+                _status == AppStatus.signingIn ||
+                _status == AppStatus.needCaptcha));
+    final silent = !foreground;
 
     scheduleState.setRefreshing(true);
     if (silent) {
       hints.showHint('更新中…', scope: HintScope.schedule);
     } else {
-      _setStatus(AppStatus.loading);
-      hints.showHint('获取中…', scope: HintScope.schedule);
+      final loadingText = hasData ? '更新中…' : '获取中…';
+      _setStatus(AppStatus.loading, message: loadingText);
+      hints.showHint(loadingText, scope: HintScope.schedule);
     }
 
     final loadFuture = session.service.getSchedule(termId: termId);
@@ -572,7 +612,7 @@ class AppModel extends ChangeNotifier {
       scheduleState.setRefreshing(false);
       _setStatus(AppStatus.ready);
       hints.clearGlobalHint();
-      if (silent) {
+      if (silent || hasData) {
         hints.showHint(
           '已更新',
           clearAfter: const Duration(milliseconds: 1500),
@@ -596,9 +636,13 @@ class AppModel extends ChangeNotifier {
         hints.clearScheduleHint();
         return;
       }
+      final bool isAuthRecoveryFailure =
+          error.code == ErrorCode.sessionExpired ||
+          error.code == ErrorCode.invalidCredentials;
       if (!silent ||
           _status == AppStatus.signingIn ||
-          _status == AppStatus.needCaptcha) {
+          _status == AppStatus.needCaptcha ||
+          (isAuthRecoveryFailure && !triggerAcademic)) {
         _fail(error);
       } else {
         hints.showHint(
@@ -690,17 +734,24 @@ class AppModel extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   /// 中断当前进行中的登录、验证码与课表刷新上下文，防止新旧会话回调互串。
-  void _resetAuthFlight() {
+  void _resetAuthFlight({bool resetSchoolSwitch = true}) {
     _authEpoch++;
     scheduleState.scheduleLoad = null;
     scheduleState.setRefreshing(false);
     _reloginStageActive = false;
     session.setCaptcha(null);
+    if (resetSchoolSwitch) {
+      _schoolSwitchSeq++;
+      _schoolSwitchInFlight = false;
+      _pendingSchoolSwitchUrl = null;
+      _captchaSchoolSwitch = null;
+    }
   }
 
   Future<void> signIn(String username, String password) async {
     _cancelIdleAcademicRestore();
     _resetAuthFlight();
+    final epoch = _authEpoch;
     session.username = username;
     _setStatus(AppStatus.signingIn);
     hints.showHint('登录中…');
@@ -710,11 +761,13 @@ class AppModel extends ChangeNotifier {
         password,
         remember: true,
       );
-      if (_disposed) return;
+      if (_disposed || epoch != _authEpoch) return;
       await _afterAuth(state);
     } on AcademicError catch (error) {
+      if (_disposed || epoch != _authEpoch) return;
       _fail(error);
     } catch (error) {
+      if (_disposed || epoch != _authEpoch) return;
       _fail(error);
     }
   }
@@ -796,22 +849,60 @@ class AppModel extends ChangeNotifier {
       return;
     }
 
+    final switchedSchool = _captchaSchoolSwitch != null;
+    final epoch = _authEpoch;
     _setStatus(AppStatus.signingIn);
     try {
       final state = await session.service.submitCaptcha(code);
-      if (_disposed) return;
-      await _afterAuth(state);
+      if (_disposed || epoch != _authEpoch) return;
+      await _afterAuth(state, switchedSchool: switchedSchool);
     } on AcademicError catch (error) {
-      _fail(error);
+      if (_disposed || epoch != _authEpoch) return;
+      _handleManualCaptchaError(error);
     } catch (error) {
-      _fail(error);
+      if (_disposed || epoch != _authEpoch) return;
+      _handleManualCaptchaError(error);
     }
   }
 
-  Future<void> _afterAuth(AuthState state) async {
+  void _handleManualCaptchaError(Object error) {
+    final captchaSwitch = _captchaSchoolSwitch;
+    if (captchaSwitch != null) {
+      _captchaSchoolSwitch = null;
+      session.setCaptcha(null);
+      session.rollbackSchool(
+        captchaSwitch.previousBase,
+        account: captchaSwitch.account,
+        cookies: captchaSwitch.previousCookies,
+      );
+      _pendingSchoolSwitchUrl = captchaSwitch.targetBase;
+      if (error is AcademicError) {
+        _setStatus(
+          AppStatus.failed,
+          message: '切换失败：${HintNoticeController.humanizeError(error)}（仍停留在原线路）',
+          code: error.code.wire,
+        );
+        return;
+      }
+      _fail(error, keepPendingSchoolSwitch: true);
+      return;
+    }
+    _fail(error);
+  }
+
+  Future<void> _afterAuth(
+    AuthState state, {
+    bool switchedSchool = false,
+  }) async {
     switch (state) {
       case AuthenticatedState():
+        _pendingSchoolSwitchUrl = null;
+        _captchaSchoolSwitch = null;
         session.setCaptcha(null);
+        if (switchedSchool) {
+          academic.resetOnSignOut();
+          unawaited(scheduleState.scheduleCache.clear());
+        }
         if (state.studentName.isNotEmpty) {
           session.setIdentity(studentName: state.studentName);
         }
@@ -823,16 +914,32 @@ class AppModel extends ChangeNotifier {
           studentId: studentId.isNotEmpty ? studentId : username,
           studentName: studentName,
         );
-        await _loadSchedule();
+        await _loadSchedule(forceForeground: true);
       case CaptchaState():
         session.setCaptcha(state);
         _setStatus(AppStatus.needCaptcha, message: '请输入验证码');
       case WebLoginState():
-        _setStatus(
-          AppStatus.failed,
-          message: '教务系统要求先完成网页统一认证，暂不支持自动登录',
-          code: ErrorCode.webLoginRequired.wire,
-        );
+        _pendingSchoolSwitchUrl = null;
+        final captchaSwitch = _captchaSchoolSwitch;
+        _captchaSchoolSwitch = null;
+        if (captchaSwitch != null) {
+          session.rollbackSchool(
+            captchaSwitch.previousBase,
+            account: captchaSwitch.account,
+            cookies: captchaSwitch.previousCookies,
+          );
+          _setStatus(
+            AppStatus.failed,
+            message: '切换失败：教务系统要求先完成网页统一认证，暂不支持自动登录（仍停留在原线路）',
+            code: ErrorCode.webLoginRequired.wire,
+          );
+        } else {
+          _setStatus(
+            AppStatus.failed,
+            message: '教务系统要求先完成网页统一认证，暂不支持自动登录',
+            code: ErrorCode.webLoginRequired.wire,
+          );
+        }
     }
   }
 
@@ -845,12 +952,25 @@ class AppModel extends ChangeNotifier {
   }
 
   void cancelCaptcha() {
+    final captchaSwitch = _captchaSchoolSwitch;
+    _captchaSchoolSwitch = null;
     session.cancelCaptcha(
       onCanceled: () {
         _reloginStageActive = false;
         hints.clearGlobalHint();
         hints.clearScheduleHint();
         scheduleState.setRefreshing(false);
+        if (captchaSwitch != null) {
+          session.rollbackSchool(
+            captchaSwitch.previousBase,
+            account: captchaSwitch.account,
+            cookies: captchaSwitch.previousCookies,
+          );
+          if (scheduleState.schedule != null) {
+            _setStatus(AppStatus.ready);
+            return;
+          }
+        }
         _setStatus(AppStatus.needLogin, message: '已取消登录');
       },
     );
@@ -858,6 +978,7 @@ class AppModel extends ChangeNotifier {
 
   Future<void> changeSchool(String baseUrl, {bool relogin = true}) async {
     if (sameSchool(schoolBaseUrl, baseUrl)) return;
+    if (relogin && _schoolSwitchInFlight) return;
     _cancelIdleAcademicRestore();
 
     final String account = username;
@@ -877,47 +998,93 @@ class AppModel extends ChangeNotifier {
       return;
     }
 
-    final Credentials? saved = account.isEmpty
-        ? null
-        : await session.service.credentials.get(session.accountKey());
-    if (_disposed) return;
-    if (saved == null || saved.password.isEmpty || saved.username.isEmpty) {
-      hints.showHint('切换失败：本机没有找到已保存的密码。请在「设置 → 账号」重新登录一次再切换', error: true);
-      return;
-    }
-
+    _schoolSwitchInFlight = true;
+    final int switchToken = ++_schoolSwitchSeq;
     final String previousBase = schoolBaseUrl;
-    _resetAuthFlight();
-    hints.clearGlobalHint();
-    hints.clearScheduleHint();
-    _setStatus(AppStatus.loading, message: '正在切换到「${schoolLabel(baseUrl)}」…');
-    session.switchSchoolTarget(baseUrl);
-    session.username = account;
-    prefs.notifyPrefs();
-    unawaited(prefs.raw.setCurrentSchool(baseUrl));
-    unawaited(scheduleState.scheduleCache.clear());
+    final CookieStoreSnapshot? previousCookies = session.service
+        .exportCurrentCookies();
 
     try {
-      final AuthState state = await session.service.signIn(
-        account,
-        saved.password,
-        remember: true,
-      );
-      if (_disposed) return;
-      academic.resetOnSignOut();
-      await _afterAuth(state);
-    } on AcademicError catch (error) {
-      if (_disposed) return;
-      session.rollbackSchool(previousBase);
-      _setStatus(
-        AppStatus.failed,
-        message: '切换失败：${HintNoticeController.humanizeError(error)}（仍停留在原线路）',
-        code: error.code.wire,
-      );
-    } catch (error) {
-      if (_disposed) return;
-      session.rollbackSchool(previousBase);
-      _fail(error);
+      final Credentials? saved = account.isEmpty
+          ? null
+          : await session.service.credentials.get(session.accountKey());
+      if (_disposed || switchToken != _schoolSwitchSeq) return;
+      if (saved == null || saved.password.isEmpty || saved.username.isEmpty) {
+        _pendingSchoolSwitchUrl = null;
+        hints.showHint('切换失败：本机没有找到已保存的密码。请在「设置 → 账号」重新登录一次再切换', error: true);
+        return;
+      }
+
+      _pendingSchoolSwitchUrl = null;
+      _captchaSchoolSwitch = null;
+      _resetAuthFlight(resetSchoolSwitch: false);
+      final int epoch = _authEpoch;
+      hints.clearGlobalHint();
+      hints.clearScheduleHint();
+      _setStatus(AppStatus.loading, message: '正在切换到「${schoolLabel(baseUrl)}」…');
+      session.switchSchoolTarget(baseUrl);
+      session.username = account;
+      prefs.notifyPrefs();
+
+      try {
+        final AuthState state = await session.service.signIn(
+          account,
+          saved.password,
+          remember: true,
+        );
+        if (_disposed || epoch != _authEpoch) return;
+        if (state is WebLoginState) {
+          session.rollbackSchool(
+            previousBase,
+            account: account,
+            cookies: previousCookies,
+          );
+          _pendingSchoolSwitchUrl = null;
+          _setStatus(
+            AppStatus.failed,
+            message: '切换失败：教务系统要求先完成网页统一认证，暂不支持自动登录（仍停留在原线路）',
+            code: ErrorCode.webLoginRequired.wire,
+          );
+          return;
+        }
+        if (state is CaptchaState) {
+          _captchaSchoolSwitch = (
+            previousBase: previousBase,
+            targetBase: baseUrl,
+            account: account,
+            previousCookies: previousCookies,
+          );
+          await _afterAuth(state);
+          return;
+        }
+        await _afterAuth(state, switchedSchool: true);
+      } on AcademicError catch (error) {
+        if (_disposed || epoch != _authEpoch) return;
+        session.rollbackSchool(
+          previousBase,
+          account: account,
+          cookies: previousCookies,
+        );
+        _pendingSchoolSwitchUrl = baseUrl;
+        _setStatus(
+          AppStatus.failed,
+          message: '切换失败：${HintNoticeController.humanizeError(error)}（仍停留在原线路）',
+          code: error.code.wire,
+        );
+      } catch (error) {
+        if (_disposed || epoch != _authEpoch) return;
+        session.rollbackSchool(
+          previousBase,
+          account: account,
+          cookies: previousCookies,
+        );
+        _pendingSchoolSwitchUrl = baseUrl;
+        _fail(error, keepPendingSchoolSwitch: true);
+      }
+    } finally {
+      if (switchToken == _schoolSwitchSeq) {
+        _schoolSwitchInFlight = false;
+      }
     }
   }
 
@@ -981,9 +1148,35 @@ class AppModel extends ChangeNotifier {
     await _loadSchedule(background: true);
   }
 
+  /// 重试当前失败的全局操作：优先重试失败的切校，其次不可恢复认证失败跳转登录，其余前台重拉课表。
+  Future<void> retry() async {
+    if (_disposed || _schoolSwitchInFlight || _status == AppStatus.loading) {
+      return;
+    }
+    final pendingSchool = _pendingSchoolSwitchUrl;
+    if (pendingSchool != null) {
+      await changeSchool(pendingSchool, relogin: true);
+      return;
+    }
+    if (needsReloginError) {
+      retryAfterSessionLoss();
+      return;
+    }
+    if (_errorCode == ErrorCode.webLoginRequired.wire) {
+      return;
+    }
+    await _loadSchedule(background: false, forceForeground: true);
+  }
+
   void retryAfterSessionLoss() {
+    final prompt = _message.isNotEmpty && needsReloginError
+        ? _message
+        : '会话已过期，请重新登录';
+    _pendingSchoolSwitchUrl = null;
+    _captchaSchoolSwitch = null;
     session.setCaptcha(null);
-    _setStatus(AppStatus.needLogin, message: '会话已过期，请重新登录');
+    hints.clearHint();
+    _setStatus(AppStatus.needLogin, message: prompt);
   }
 
   Future<void> signOut() async {
@@ -1125,10 +1318,13 @@ class AppModel extends ChangeNotifier {
     _notifyStateChanged();
   }
 
-  void _fail(Object error) {
+  void _fail(Object error, {bool keepPendingSchoolSwitch = false}) {
     if (_disposed) return;
     final academic = asAcademicError(error);
     _reloginStageActive = false;
+    if (!keepPendingSchoolSwitch) {
+      _pendingSchoolSwitchUrl = null;
+    }
     scheduleState.setRefreshing(false);
     hints.clearHint();
     _setStatus(
@@ -1140,6 +1336,7 @@ class AppModel extends ChangeNotifier {
 
   void dismissError() {
     if (_disposed || _status != AppStatus.failed) return;
+    _pendingSchoolSwitchUrl = null;
     if (scheduleState.schedule != null) {
       _setStatus(AppStatus.ready);
     } else {

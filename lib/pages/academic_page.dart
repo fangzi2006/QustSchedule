@@ -197,7 +197,12 @@ class _AcademicPageState extends State<AcademicPage> {
                             SliverToBoxAdapter(
                               child: _ErrorBanner(
                                 message: model.academicError!,
-                                onRetry: () => model.refreshAcademicData(),
+                                actionLabel: model.academicNeedsRelogin
+                                    ? '重新登录'
+                                    : '重试',
+                                onAction: model.academicNeedsRelogin
+                                    ? model.retryAfterSessionLoss
+                                    : () => model.refreshAcademicData(),
                               ),
                             ),
                             const SliverToBoxAdapter(
@@ -1463,10 +1468,15 @@ class _EvaluationWarningBanner extends StatelessWidget {
 }
 
 class _ErrorBanner extends StatelessWidget {
-  const _ErrorBanner({required this.message, required this.onRetry});
+  const _ErrorBanner({
+    required this.message,
+    required this.onAction,
+    this.actionLabel = '重试',
+  });
 
   final String message;
-  final VoidCallback onRetry;
+  final VoidCallback onAction;
+  final String actionLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -1494,10 +1504,10 @@ class _ErrorBanner extends StatelessWidget {
           ),
           TactileActionButton(
             variant: TactileActionVariant.text,
-            onPressed: onRetry,
+            onPressed: onAction,
             visualDensity: VisualDensity.compact,
             foregroundColor: scheme.error,
-            label: const Text('重试'),
+            label: Text(actionLabel),
           ),
         ],
       ),

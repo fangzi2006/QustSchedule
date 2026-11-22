@@ -60,7 +60,7 @@ class StatusPopup extends StatelessWidget {
               data: data,
               canRetry: scope == HintScope.academic
                   ? true
-                  : (model.schedule != null),
+                  : model.canRetryError,
               onDismiss: () {
                 switch (scope) {
                   case HintScope.global:
@@ -85,13 +85,11 @@ class StatusPopup extends StatelessWidget {
               onRetry: () {
                 if (scope == HintScope.academic) {
                   model.refreshAcademicData();
-                } else if (model.errorCode == 'SESSION_EXPIRED') {
-                  model.retryAfterSessionLoss();
                 } else {
-                  model.refresh();
+                  model.retry();
                 }
               },
-              retryLabel: model.errorCode == 'SESSION_EXPIRED' ? '重新登录' : '重试',
+              retryLabel: model.needsReloginError ? '重新登录' : '重试',
               onOpenDebug: onOpenDebug,
             ),
     );

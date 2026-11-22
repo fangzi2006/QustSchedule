@@ -419,16 +419,15 @@ class AcademicHttpClient {
           body: snippet,
           isAuth: options.purpose == RequestPurpose.auth,
         );
-        if (diag.isAccessForbidden || options.purpose == RequestPurpose.auth) {
-          throw AcademicError(
-            ErrorCode.accessForbidden,
-            '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
-            httpStatus: 403,
-            cause: diag.detail,
-          );
-        }
+        // HTTP 403 一律按访问受限处理，绝不误判为 sessionExpired 驱动无谓自动重登。
+        throw AcademicError(
+          ErrorCode.accessForbidden,
+          '访问被拒绝（403）：访问策略禁止外网访问，请连接校园网后重试',
+          httpStatus: 403,
+          cause: diag.detail,
+        );
       }
-      if (raw.status == 401 || raw.status == 403) {
+      if (raw.status == 401) {
         throw AcademicError(ErrorCode.sessionExpired, '登录已失效，请重新登录',
             httpStatus: raw.status);
       }

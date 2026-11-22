@@ -191,9 +191,10 @@ Widget pageForStatus(
           ? CaptchaPage(model: model)
           : LoginPage(model: model);
     case AppStatus.failed:
-      // 会话过期、或者压根没拿到过课表 → 回登录页（错误以弹窗显示）；
-      // 有课表就留在课表页，错误弹窗浮在上面。
-      if (model.errorCode == 'SESSION_EXPIRED' || model.schedule == null) {
+      // 压根没拿到过课表 → 回登录页（错误以弹窗显示）；
+      // 有课表就留在课表页，错误弹窗浮在上面提供「重试 / 重新登录」，
+      // 仅在用户主动点「重新登录」进入 needLogin 后才跳转登录页。
+      if (model.schedule == null) {
         return LoginPage(model: model);
       }
       return HomeShell(

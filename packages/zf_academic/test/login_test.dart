@@ -97,7 +97,7 @@ void main() {
       });
     });
 
-    test('二次重登复用 CAS 探测与 RSA 公钥，不重复发起多余请求', () async {
+    test('二次重登复用 CAS 探测，但每次登录都重新获取当前会话的 RSA 公钥', () async {
       await withServer((server) async {
         final client =
             vmZhengfangClient(ZfClientConfig(baseUrl: server.baseUrl));
@@ -111,7 +111,7 @@ void main() {
         expect(firstKeyCount, 1);
         expect(firstCasCount, 1);
 
-        // 二次登录（模拟 Cookie 过期后同一实例重新登录）
+        // 二次登录（模拟 Cookie 过期后同一实例重新登录，会建立新 JSESSIONID）
         await client.login(Credentials(server.username, server.password));
         final secondKeyCount = server
             .paths()
@@ -119,7 +119,7 @@ void main() {
             .length;
         final secondCasCount =
             server.paths().where((p) => p.endsWith('/sso/zfiotlogin')).length;
-        expect(secondKeyCount, 1, reason: '公钥应从客户端缓存复用，不重复发起网络请求');
+        expect(secondKeyCount, 2, reason: '正方 RSA 公钥与会话绑定，每次登录必须重新获取');
         expect(secondCasCount, 1, reason: 'CAS 探测结果应复用，不重复探测');
         client.dispose();
       });

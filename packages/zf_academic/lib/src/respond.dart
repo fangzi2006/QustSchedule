@@ -265,7 +265,8 @@ bool hasSuccess(String body) {
 /// 把响应归到一个状态码。顺序与原实现一致，因为学校的不同失败形态会同时命中多个关键词，
 /// 先判定的才是"更具体的原因"。
 ErrorCode statusOf(String body, {int httpStatus = 200}) {
-  if (httpStatus == 401 || httpStatus == 403) return ErrorCode.sessionExpired;
+  if (httpStatus == 401) return ErrorCode.sessionExpired;
+  if (httpStatus == 403) return ErrorCode.accessForbidden;
   if (httpStatus == 429) return ErrorCode.networkRetryable;
   if (httpStatus >= 500) return ErrorCode.resultUnknown;
   if (isLoginPage(body)) return ErrorCode.sessionExpired;
@@ -472,8 +473,10 @@ void requireQueryPage(String body, int httpStatus) {
     final ErrorCode status;
     if (httpStatus >= 500 || httpStatus == 429) {
       status = ErrorCode.networkRetryable;
-    } else if (httpStatus == 401 || httpStatus == 403) {
+    } else if (httpStatus == 401) {
       status = ErrorCode.sessionExpired;
+    } else if (httpStatus == 403) {
+      status = ErrorCode.accessForbidden;
     } else {
       status = ErrorCode.pageChanged;
     }
