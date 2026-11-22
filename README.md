@@ -125,7 +125,7 @@ qustschedule/
 │   │   ├── course_text.dart           卡片文字自适应缩放与截断排版
 │   │   ├── formatted_text_span.dart   轻量更新日志行内富文本解析
 │   │   ├── route_settled.dart         二级页转场落稳后的延迟任务调度工具
-│   │   ├── preferences_repository.dart 用户偏好持久化（Schema 14，向下兼容）
+│   │   ├── preferences_repository.dart 用户偏好持久化（Schema 15，覆盖式地址模型与向下兼容）
 │   │   ├── credentials_repository.dart 凭据安全存储（Keystore / DPAPI）
 │   │   ├── session_repository.dart    Cookie 容器快照持久化
 │   │   ├── reminder_planner.dart      提醒规划纯函数：事件生成、指纹、14 天窗口

@@ -77,7 +77,11 @@ class SchoolAddressPage extends StatelessWidget {
                             ),
                           )
                         : null,
-                    trailing: sameSchool(address, model.schoolBaseUrl)
+                    trailing:
+                        sameSchool(address, model.schoolBaseUrl) ||
+                            presetSchoolUrls.any(
+                              (preset) => sameSchool(preset, address),
+                            )
                         ? null
                         : TactileIconButton(
                             icon: const Icon(Icons.delete_outline_rounded),

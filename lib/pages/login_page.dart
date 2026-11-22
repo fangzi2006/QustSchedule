@@ -37,7 +37,7 @@ class _LoginPageState extends State<LoginPage> {
   @override
   void initState() {
     super.initState();
-    _usernameController.text = model.username;
+    _usernameController.text = model.loginPrefillUsername;
     _addressController.text = model.schoolBaseUrl;
   }
 

@@ -10,6 +10,7 @@ import 'package:qustschedule/src/app_model.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
 import 'package:qustschedule/src/schedule_cache.dart';
 import 'package:qustschedule/src/schedule_service.dart';
+import 'package:qustschedule/src/school.dart';
 import 'package:qustschedule/src/term_calendar.dart';
 import 'package:qustschedule/src/timetable.dart';
 import 'package:qustschedule/src/updater/update_models.dart';
@@ -577,6 +578,84 @@ void main() {
       await model.removeSchool('https://jw2.example.edu.cn/jwglxt');
       expect(model.schools.any((item) => item.contains('jw2')), isFalse);
       expect(prefs.currentSchool, beforeCurrent);
+    });
+
+    test('loginPrefillUsername 优先级与退出登录清空语义', () async {
+      final prefs = Preferences.inMemory(
+        lastAccounts: <String, String>{
+          'https://old.example.edu.cn/jwglxt': '20230001',
+        },
+      );
+      final model = buildModel(preferences: prefs);
+      addTearDown(model.dispose);
+
+      // 当前线路未登录过时，登录页预填回退到最近一次历史账号，但不污染 studentId
+      expect(model.username, isEmpty);
+      expect(model.studentId, isEmpty);
+      expect(model.loginPrefillUsername, '20230001');
+
+      // 当前线路有已记账号时优先于其他线路
+      await prefs.setIdentityOf(_baseUrl, studentId: '20240002');
+      expect(model.loginPrefillUsername, '20240002');
+
+      // 内存中已输入/恢复的 username 优先级最高
+      model.username = '20250003';
+      expect(model.loginPrefillUsername, '20250003');
+
+      // 单校退出登录后清掉该校记录，预填回空（不留残留学号）
+      final singlePrefs = Preferences.inMemory();
+      final singleModel = buildModel(preferences: singlePrefs);
+      addTearDown(singleModel.dispose);
+      await singleModel.signIn('20240001', 'pw');
+      expect(singleModel.loginPrefillUsername, '20240001');
+      await singleModel.signOut();
+      expect(singleModel.username, isEmpty);
+      expect(singleModel.loginPrefillUsername, isEmpty);
+    });
+
+    test('旧版 schema 14 升级冷启动：自动切回内置默认地址、作废旧缓存并预填历史学号', () async {
+      const legacyUrl = 'https://jwglxt1.qust.edu.cn/jwglxt';
+      final legacyPrefs = Preferences.decode(
+        jsonEncode(<String, Object?>{
+          'schema': 14,
+          'schools': <String>[legacyUrl],
+          'currentSchool': legacyUrl,
+          'lastAccounts': <String, String>{legacyUrl: '20240001'},
+          'lastStudentNames': <String, String>{legacyUrl: '张三'},
+        }),
+      );
+      final repo = FakeSessionRepository()
+        ..snapshot = snapshotOf(legacyUrl, value: 'old-sid');
+      final cache = FakeScheduleCache(
+        CachedSchedule(
+          baseUrl: legacyUrl,
+          schedule: sampleSchedule(),
+          fetchedAt: DateTime.now(),
+        ),
+      );
+      final model = AppModel(
+        service: ScheduleService(
+          credentials: InMemoryCredentialStore(),
+          cookieStorage: repo,
+          backendFactory: (_) => FakeBackend(),
+        ),
+        repository: repo,
+        preferences: legacyPrefs,
+        scheduleCache: cache,
+        examCache: InMemoryExamCache(),
+        gradesCache: InMemoryGradesCache(),
+      );
+      addTearDown(model.dispose);
+
+      await model.boot();
+
+      expect(model.schoolBaseUrl, defaultSchool.baseUrl);
+      expect(model.status, AppStatus.needLogin);
+      expect(model.schedule, isNull);
+      expect(repo.snapshot, isNull);
+      expect(model.studentId, isEmpty);
+      expect(model.username, isEmpty);
+      expect(model.loginPrefillUsername, '20240001');
     });
 
     test('切换线路沿用当前账号原地加载登录（不经过 needLogin/signingIn），并将账号落到新地址下', () async {

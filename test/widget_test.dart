@@ -2780,6 +2780,34 @@ void main() {
       expect(find.text('https://jw2.example.edu.cn/jwglxt'), findsOneWidget);
     });
 
+    testWidgets('登录页在当前线路无账号时预填历史登录学号', (tester) async {
+      final prefs = Preferences.inMemory(
+        lastAccounts: <String, String>{
+          'https://legacy.example.edu.cn/jwglxt': '20240999',
+        },
+      );
+      final model = AppModel(
+        service: ScheduleService(
+          credentials: InMemoryCredentialStore(),
+          cookieStorage: FakeSessionRepository(),
+          backendFactory: (_) => FakeBackend(),
+          baseUrl: 'https://jw.example.edu.cn/jwglxt',
+        ),
+        preferences: prefs,
+        schoolBaseUrl: 'https://jw.example.edu.cn/jwglxt',
+      );
+      addTearDown(model.dispose);
+      model.setStatusForTest(AppStatus.needLogin);
+
+      await tester.pumpWidget(wrap(LoginPage(model: model)));
+      await tester.pumpAndSettle();
+
+      final usernameField = tester.widget<TextFormField>(
+        find.byType(TextFormField).first,
+      );
+      expect(usernameField.controller?.text, '20240999');
+    });
+
     testWidgets('切换线路时不会闪回登录页：全程停在课表页', (tester) async {
       final model = buildModel();
       model.hydrateForTest(schedule: sparseSchedule(), week: 1);
@@ -4183,8 +4211,9 @@ void main() {
         expect(rescheduleModel.reschedules, isEmpty);
         expect(find.byType(BottomSheet), findsNothing);
 
-        // 3. 教务地址页右侧删除按钮只弹「删除教务地址」，不触发「切换教务地址」。
+        // 3. 教务地址页内置默认地址无删除按钮；自定义地址右侧删除按钮只弹「删除教务地址」，不触发「切换教务地址」。
         final schoolModel = buildModel();
+        await schoolModel.addSchool('https://jw2.example.edu.cn/jwglxt');
         await tester.pumpWidget(
           MaterialApp(
             theme: buildLightTheme(),
@@ -4193,6 +4222,7 @@ void main() {
         );
         await tester.pumpAndSettle();
 
+        expect(find.byIcon(Icons.delete_outline_rounded), findsOneWidget);
         await tester.tap(find.byIcon(Icons.delete_outline_rounded).first);
         await tester.pumpAndSettle();
         expect(find.text('删除教务地址'), findsOneWidget);

@@ -232,6 +232,17 @@ class AppModel extends ChangeNotifier {
   String get username => session.username;
   set username(String value) => session.username = value;
 
+  /// 登录页学号输入框预填值：优先当前账号 → 当前线路已记账号 → 本机最近一次登录账号。
+  ///
+  /// 仅用于登录表单初始预填，不代表当前线路已恢复登录身份，也不影响 `studentId` / 凭据键。
+  String get loginPrefillUsername {
+    final current = username.trim();
+    if (current.isNotEmpty) return current;
+    final schoolAccount = prefs.raw.accountOf(schoolBaseUrl).trim();
+    if (schoolAccount.isNotEmpty) return schoolAccount;
+    return prefs.raw.latestAccount;
+  }
+
   String get schoolBaseUrl => session.schoolBaseUrl;
 
   int get week => scheduleState.week;

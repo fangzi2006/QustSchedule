@@ -12,8 +12,10 @@
 /// 为什么不复用 Cookie 快照文件：那个是会话资产（可清可重建），
 /// 这里是用户资产（清 Cookie 不该丢），分开存。
 ///
-/// 版本迁移（当前 schema 14）：读到旧版的单个 `sectionCount` 整数时按 4/4/其余
-/// 拆成三段，避免升级后节数被重置；任何缺失字段一律回落到默认值。
+/// 版本迁移（当前 schema 15）：读到旧版的单个 `sectionCount` 整数时按 4/4/其余
+/// 拆成三段，避免升级后节数被重置；教务地址采用覆盖式模型（仅持久化
+/// `customSchools` / `customSchool`，空值动态跟随 `defaultSchool.baseUrl`）；
+/// 任何缺失字段一律回落到默认值。
 library;
 
 // 命名参数不允许以下划线开头，所以构造函数里只能显式赋值给私有字段。
@@ -31,7 +33,7 @@ import 'school.dart';
 import 'timetable.dart';
 import 'widget_style.dart';
 
-const int preferencesSchema = 14;
+const int preferencesSchema = 15;
 
 /// 检查更新与安装包下载的默认加速代理。
 const String defaultUpdateProxyUrl = 'https://gh-proxy.org';
@@ -84,8 +86,8 @@ class Preferences {
     required List<Timetable> timetables,
     QuickSetup? quickSetup,
     Map<PeriodGroup, int>? sectionCounts,
-    List<String>? schools,
-    String currentSchool = '',
+    List<String>? customSchools,
+    String customSchool = '',
     Map<String, String>? lastAccounts,
     Map<String, String>? lastStudentNames,
     bool showTeacher = true,
@@ -110,14 +112,13 @@ class Preferences {
        _timetables = timetables,
        _quickSetup = quickSetup,
        _sectionCounts = clampCounts(sectionCounts ?? defaultSectionCounts),
-       _schools = schools ?? <String>[...presetSchoolUrls],
+       _customSchool = _normalizeCustomSchool(customSchool),
+       _customSchools = _normalizeCustomSchools(
+         customSchools ?? const <String>[],
+         extra: _normalizeCustomSchool(customSchool),
+       ),
        _lastAccounts = lastAccounts ?? <String, String>{},
        _lastStudentNames = lastStudentNames ?? <String, String>{},
-       _currentSchool = currentSchool.isEmpty
-           ? (schools == null || schools.isEmpty
-                 ? defaultSchool.baseUrl
-                 : schools.first)
-           : currentSchool,
        _showTeacher = showTeacher,
        _showLocation = showLocation,
        _cellHeight = clampCellHeight(cellHeight),
@@ -158,9 +159,9 @@ class Preferences {
   /// 每张表只是"这些节分别几点上"，节数由这里统一决定。
   Map<PeriodGroup, int> _sectionCounts;
 
-  /// 已添加的教务地址，以及当前使用的那一个。
-  List<String> _schools;
-  String _currentSchool;
+  /// 用户自定义的教务地址列表与当前显式覆盖地址（为空表示动态跟随 `defaultSchool.baseUrl`）。
+  List<String> _customSchools;
+  String _customSchool;
 
   /// 每个学校上次登录用的账号（`baseUrl → 账号`）。
   ///
@@ -220,8 +221,8 @@ class Preferences {
     List<Timetable>? timetables,
     QuickSetup? quickSetup,
     Map<PeriodGroup, int>? sectionCounts,
-    List<String>? schools,
-    String currentSchool = '',
+    List<String>? customSchools,
+    String customSchool = '',
     Map<String, String>? lastAccounts,
     Map<String, String>? lastStudentNames,
     bool showTeacher = true,
@@ -245,8 +246,8 @@ class Preferences {
     timetables: timetables ?? <Timetable>[defaultTimetable()],
     quickSetup: quickSetup,
     sectionCounts: sectionCounts,
-    schools: schools,
-    currentSchool: currentSchool,
+    customSchools: customSchools,
+    customSchool: customSchool,
     lastAccounts: lastAccounts,
     lastStudentNames: lastStudentNames,
     showTeacher: showTeacher,
@@ -291,24 +292,39 @@ class Preferences {
     );
   }
 
+  static bool _isPresetSchool(String url) =>
+      presetSchoolUrls.any((String preset) => sameSchool(preset, url));
+
+  static String _normalizeCustomSchool(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty || sameSchool(text, defaultSchool.baseUrl)) return '';
+    return text;
+  }
+
+  static List<String> _normalizeCustomSchools(
+    Iterable<String> raw, {
+    String extra = '',
+  }) {
+    final result = <String>[];
+    void addIfCustom(String url) {
+      final text = url.trim();
+      if (text.isEmpty || _isPresetSchool(text)) return;
+      if (result.any((String item) => sameSchool(item, text))) return;
+      result.add(text);
+    }
+
+    for (final String url in raw) {
+      addIfCustom(url);
+    }
+    if (extra.isNotEmpty) addIfCustom(extra);
+    return result;
+  }
+
   /// 从 JSON 文本恢复设置（[open] 的核心逻辑）。
   ///
   /// 单独抽出来是为了能测迁移：schema 1 只有 `termStarts`，
   /// 读到没有 `timetables` 的旧文件时必须自动补一张默认表，
   /// 否则用户升级后课表没有作息可读。
-  /// 把出厂预设线路补进地址簿：已有的跳过，缺的按顺序追加在后面。
-  ///
-  /// 只用于**从旧 schema 升级**这一次；之后用户删掉的线路不会被反复补回来。
-  static List<String> withPresetSchools(List<String> current) {
-    final merged = <String>[...current];
-    for (final String url in presetSchoolUrls) {
-      if (!merged.any((String item) => sameSchool(item, url))) {
-        merged.add(url);
-      }
-    }
-    return merged;
-  }
-
   static Preferences decode(String text, {File? file}) {
     if (text.trim().isEmpty) {
       return _fromDecodedMap(const <String, dynamic>{}, file: file);
@@ -341,8 +357,8 @@ class Preferences {
     var timetables = <Timetable>[];
     QuickSetup? quickSetup;
     var sectionCounts = <PeriodGroup, int>{...defaultSectionCounts};
-    var schools = <String>[...presetSchoolUrls];
-    var currentSchool = defaultSchool.baseUrl;
+    var customSchools = <String>[];
+    var customSchool = '';
     var lastAccounts = <String, String>{};
     var lastStudentNames = <String, String>{};
     var showTeacher = true;
@@ -399,24 +415,24 @@ class Preferences {
           sectionCounts = clampCounts(splitCounts(legacy));
         }
       }
-      final rawSchools = decoded['schools'];
-      if (rawSchools is List<dynamic>) {
-        final parsed = rawSchools
-            .whereType<String>()
-            .map((item) => item.trim())
-            .where((item) => item.isNotEmpty)
-            .toList();
-        if (parsed.isNotEmpty) schools = parsed;
+      // schema 15：教务地址改用覆盖式模型，仅读取用户显式添加/覆盖的
+      // `customSchools` / `customSchool`；旧版的 `schools` / `currentSchool`
+      // 不作为覆盖项读取，升级后自动跟随当前版本内置默认地址。
+      final rawCustomSchool = decoded['customSchool'];
+      if (rawCustomSchool is String) {
+        customSchool = _normalizeCustomSchool(rawCustomSchool);
       }
-      // schema 8：历史升级补齐出厂预设线路（当前预设仅保留默认线路）。
-      // 老文件里只有当初那一条（或用户自己加的几条），这里把缺的补上；
-      // 用户删过的线路在 schema 8 之后不会再被补回来（迁移只跑一次）。
-      final int rawSchema = (decoded['schema'] as num?)?.toInt() ?? 1;
-      if (rawSchema < 8) schools = withPresetSchools(schools);
-
-      final rawCurrent = (decoded['currentSchool'] as String?)?.trim();
-      if (rawCurrent != null && rawCurrent.isNotEmpty) {
-        currentSchool = rawCurrent;
+      final rawCustomSchools = decoded['customSchools'];
+      if (rawCustomSchools is List<dynamic>) {
+        customSchools = _normalizeCustomSchools(
+          rawCustomSchools.whereType<String>(),
+          extra: customSchool,
+        );
+      } else if (customSchool.isNotEmpty) {
+        customSchools = _normalizeCustomSchools(
+          const <String>[],
+          extra: customSchool,
+        );
       }
       // schema 7：每个学校上次登录的账号（用于拼凭据的 key）。
       final rawAccounts = decoded['lastAccounts'];
@@ -508,8 +524,8 @@ class Preferences {
       timetables: _withBuiltinSummerTable(timetables),
       quickSetup: quickSetup,
       sectionCounts: sectionCounts,
-      schools: schools,
-      currentSchool: currentSchool,
+      customSchools: customSchools,
+      customSchool: customSchool,
       lastAccounts: lastAccounts,
       lastStudentNames: lastStudentNames,
       showTeacher: showTeacher,
@@ -574,39 +590,60 @@ class Preferences {
   }
 
   // ---------------------------------------------------------------------------
-  // 教务地址簿
+  // 教务地址簿（覆盖式：内置默认随版本更新，仅持久化用户自定义项与覆盖项）
   // ---------------------------------------------------------------------------
 
-  /// 已添加的教务地址（按添加顺序）。
-  List<String> get schools => List<String>.unmodifiable(_schools);
+  /// 用户自定义添加的教务地址（不含内置预设）。
+  List<String> get customSchools => List<String>.unmodifiable(_customSchools);
 
-  /// 当前使用的地址。
-  String get currentSchool => _currentSchool;
+  /// 用户显式覆盖的教务地址；空串表示动态跟随 `defaultSchool.baseUrl`。
+  String get customSchool => _customSchool;
+
+  /// 地址簿完整展示列表：内置预设在前，用户自定义项在后。
+  List<String> get schools => List<String>.unmodifiable(<String>[
+    ...presetSchoolUrls,
+    ..._customSchools,
+  ]);
+
+  /// 当前生效的教务地址：有自定义覆盖时返回覆盖值，否则动态返回 `defaultSchool.baseUrl`。
+  String get currentSchool =>
+      _customSchool.isNotEmpty ? _customSchool : defaultSchool.baseUrl;
 
   Future<void> addSchool(String url) async {
     final text = url.trim();
-    if (text.isEmpty) return;
-    if (_schools.any((item) => sameSchool(item, text))) return;
-    _schools = <String>[..._schools, text];
+    if (text.isEmpty || _isPresetSchool(text)) return;
+    if (_customSchools.any((item) => sameSchool(item, text))) return;
+    _customSchools = <String>[..._customSchools, text];
     await _flush();
   }
 
   Future<void> removeSchool(String url) async {
-    final rest = _schools.where((item) => !sameSchool(item, url)).toList();
-    if (rest.isEmpty || rest.length == _schools.length) return;
-    _schools = rest;
-    if (sameSchool(_currentSchool, url)) _currentSchool = rest.first;
+    if (_isPresetSchool(url)) return;
+    final rest = _customSchools
+        .where((item) => !sameSchool(item, url))
+        .toList();
+    final removedActive =
+        _customSchool.isNotEmpty && sameSchool(_customSchool, url);
+    if (rest.length == _customSchools.length && !removedActive) return;
+    _customSchools = rest;
+    if (removedActive) _customSchool = '';
     await _flush();
   }
 
   Future<void> setCurrentSchool(String url) async {
     final text = url.trim();
     if (text.isEmpty) return;
-    if (!_schools.any((item) => sameSchool(item, text))) {
-      _schools = <String>[..._schools, text];
-    }
-    if (sameSchool(_currentSchool, text)) return;
-    _currentSchool = text;
+    final nextCustom = _normalizeCustomSchool(text);
+    final nextCustomSchools = nextCustom.isEmpty
+        ? _customSchools
+        : _normalizeCustomSchools(_customSchools, extra: nextCustom);
+    final listChanged = nextCustomSchools.length != _customSchools.length;
+    final currentChanged = nextCustom.isEmpty
+        ? _customSchool.isNotEmpty
+        : (_customSchool.isEmpty || !sameSchool(_customSchool, nextCustom));
+    if (!listChanged && !currentChanged) return;
+    _customSchools = nextCustomSchools;
+    _customSchool = nextCustom;
     await _flush();
   }
 
@@ -623,6 +660,16 @@ class Preferences {
       if (sameSchool(entry.key, url)) return entry.value;
     }
     return '';
+  }
+
+  /// 最近一次记录的非空登录账号（跨线路通用回退，供登录页预填）；无记录返回空串。
+  String get latestAccount {
+    var latest = '';
+    for (final value in _lastAccounts.values) {
+      final trimmed = value.trim();
+      if (trimmed.isNotEmpty) latest = trimmed;
+    }
+    return latest;
   }
 
   /// 某个学校上次登录记录的学生姓名；没记录返回空串。
@@ -647,9 +694,15 @@ class Preferences {
     if (text.isEmpty) return;
 
     var changed = false;
-    if (id.isNotEmpty && accountOf(text) != id) {
-      _lastAccounts = _mapExcept(_lastAccounts, text)..[text] = id;
-      changed = true;
+    if (id.isNotEmpty) {
+      final alreadyLatest =
+          _lastAccounts.isNotEmpty &&
+          sameSchool(_lastAccounts.keys.last, text) &&
+          _lastAccounts.values.last == id;
+      if (!alreadyLatest) {
+        _lastAccounts = _mapExcept(_lastAccounts, text)..[text] = id;
+        changed = true;
+      }
     }
     if (name.isNotEmpty && studentNameOf(text) != name) {
       _lastStudentNames = _mapExcept(_lastStudentNames, text)..[text] = name;
@@ -953,8 +1006,8 @@ class Preferences {
     'sectionCounts': <String, int>{
       for (final entry in _sectionCounts.entries) entry.key.name: entry.value,
     },
-    'schools': _schools,
-    'currentSchool': _currentSchool,
+    'customSchools': _customSchools,
+    'customSchool': _customSchool,
     'lastAccounts': _lastAccounts,
     'lastStudentNames': _lastStudentNames,
     'showTeacher': _showTeacher,

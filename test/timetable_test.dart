@@ -10,6 +10,7 @@ import 'dart:io';
 import 'package:qustschedule/src/course_text.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
 import 'package:qustschedule/src/reminder_planner.dart';
+import 'package:qustschedule/src/school.dart';
 import 'package:qustschedule/src/timetable.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -262,23 +263,112 @@ void main() {
       expect(renamed.timetables.single.name, '我的作息');
     });
 
-    test('出厂默认线路及 schema 7 补齐、schema 8 删除保留', () {
+    test('schema 15 覆盖式教务地址：忽略旧版 schools/currentSchool，仅持久化自定义项与覆盖项', () async {
       final fresh = Preferences.inMemory();
-      expect(fresh.schools, <String>['https://jwglxt.qust.edu.cn/jwglxt']);
-      expect(fresh.currentSchool, 'https://jwglxt.qust.edu.cn/jwglxt');
+      expect(fresh.schools, presetSchoolUrls);
+      expect(fresh.customSchools, isEmpty);
+      expect(fresh.customSchool, isEmpty);
+      expect(fresh.currentSchool, defaultSchool.baseUrl);
 
-      final s7 = Preferences.decode(
-        '{"schema":7,"schools":["https://custom.example.edu.cn/jwglxt"]}',
+      // 升级场景：旧版 schema 14 存了旧线路列表与 currentSchool，
+      // 升级后不读旧字段，直接动态跟随当前版本默认地址，同时保留历史账号映射。
+      final legacy = Preferences.decode(
+        jsonEncode(<String, Object?>{
+          'schema': 14,
+          'schools': <String>[
+            'https://jwglxt1.qust.edu.cn/jwglxt',
+            'https://jwglxt2.qust.edu.cn/jwglxt',
+          ],
+          'currentSchool': 'https://jwglxt1.qust.edu.cn/jwglxt',
+          'lastAccounts': <String, String>{
+            'https://jwglxt1.qust.edu.cn/jwglxt': '20240001',
+          },
+        }),
       );
-      expect(s7.schools, <String>[
-        'https://custom.example.edu.cn/jwglxt',
-        'https://jwglxt.qust.edu.cn/jwglxt',
-      ]);
+      expect(legacy.currentSchool, defaultSchool.baseUrl);
+      expect(legacy.customSchool, isEmpty);
+      expect(legacy.customSchools, isEmpty);
+      expect(legacy.schools, presetSchoolUrls);
+      expect(legacy.latestAccount, '20240001');
 
-      final s8 = Preferences.decode(
-        '{"schema":8,"schools":["https://custom.example.edu.cn/jwglxt"]}',
+      // 覆盖式读写与落盘往返
+      final dir = await Directory.systemTemp.createTemp('prefs_school_v15_');
+      addTearDown(() => dir.delete(recursive: true));
+      final file = File('${dir.path}/app_prefs.json');
+
+      final prefs = await Preferences.openFile(file);
+      await prefs.addSchool(defaultSchool.baseUrl);
+      expect(prefs.customSchools, isEmpty);
+
+      const customA = 'https://custom-a.example.edu.cn/jwglxt';
+      const customB = 'https://custom-b.example.edu.cn/jwglxt';
+      await prefs.addSchool(customA);
+      await prefs.addSchool('$customA/');
+      expect(prefs.customSchools, <String>[customA]);
+      expect(prefs.schools, <String>[...presetSchoolUrls, customA]);
+
+      await prefs.setCurrentSchool(customB);
+      expect(prefs.currentSchool, customB);
+      expect(prefs.customSchool, customB);
+      expect(prefs.customSchools, <String>[customA, customB]);
+
+      final rawJson =
+          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      expect(rawJson['schema'], preferencesSchema);
+      expect(rawJson.containsKey('schools'), isFalse);
+      expect(rawJson.containsKey('currentSchool'), isFalse);
+      expect(rawJson['customSchool'], customB);
+      expect(rawJson['customSchools'], <String>[customA, customB]);
+
+      final reopened = await Preferences.openFile(file);
+      expect(reopened.currentSchool, customB);
+      expect(reopened.customSchool, customB);
+      expect(reopened.customSchools, <String>[customA, customB]);
+
+      // 内置默认地址不可删除；删除当前生效的自定义地址后自动回落到默认地址
+      await reopened.removeSchool(defaultSchool.baseUrl);
+      expect(reopened.schools, contains(defaultSchool.baseUrl));
+      await reopened.removeSchool(customB);
+      expect(reopened.currentSchool, defaultSchool.baseUrl);
+      expect(reopened.customSchool, isEmpty);
+      expect(reopened.customSchools, <String>[customA]);
+
+      // 切到自定义后再切回默认地址，会清除 customSchool 覆盖项
+      await reopened.setCurrentSchool(customA);
+      expect(reopened.customSchool, customA);
+      await reopened.setCurrentSchool('${defaultSchool.baseUrl}/');
+      expect(reopened.customSchool, isEmpty);
+      expect(reopened.currentSchool, defaultSchool.baseUrl);
+    });
+
+    test('latestAccount 按最近登录顺序返回，清除全部账号后返回空串', () async {
+      final prefs = Preferences.inMemory();
+      expect(prefs.latestAccount, isEmpty);
+
+      await prefs.setIdentityOf(
+        'https://a.example.edu.cn/jwglxt',
+        studentId: '20240001',
       );
-      expect(s8.schools, <String>['https://custom.example.edu.cn/jwglxt']);
+      expect(prefs.latestAccount, '20240001');
+
+      await prefs.setIdentityOf(
+        'https://b.example.edu.cn/jwglxt',
+        studentId: '20240002',
+      );
+      expect(prefs.latestAccount, '20240002');
+
+      // 重新登录较早的学校（即使学号不变）也会把该记录移到最新位置
+      await prefs.setIdentityOf(
+        'https://a.example.edu.cn/jwglxt',
+        studentId: '20240001',
+      );
+      expect(prefs.latestAccount, '20240001');
+
+      await prefs.clearIdentityOf('https://a.example.edu.cn/jwglxt');
+      expect(prefs.latestAccount, '20240002');
+
+      await prefs.clearIdentityOf('https://b.example.edu.cn/jwglxt');
+      expect(prefs.latestAccount, isEmpty);
     });
 
     test('schema 4/5/6：静默更新、调课规则与课表备注开关读回及旧版默认值', () {
