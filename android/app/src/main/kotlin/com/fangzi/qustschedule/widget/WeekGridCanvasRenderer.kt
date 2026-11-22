@@ -1,5 +1,6 @@
 package com.fangzi.qustschedule.widget
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -7,6 +8,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.text.LineBreaker
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
@@ -491,6 +493,9 @@ internal object WeekGridCanvasRenderer {
         )
     }
 
+    // LineBreaker.BREAK_STRATEGY_SIMPLE 为编译期内联常量 0，在 API 24+ 与
+    // Layout.BREAK_STRATEGY_SIMPLE 等价，同时满足 @BreakStrategy Lint 校验。
+    @SuppressLint("InlinedApi")
     private fun buildBlockLayout(
         text: String,
         paint: TextPaint,
@@ -503,7 +508,7 @@ internal object WeekGridCanvasRenderer {
             .setAlignment(Layout.Alignment.ALIGN_CENTER)
             .setLineSpacing(0f, lineMult)
             .setIncludePad(false)
-            .setBreakStrategy(Layout.BREAK_STRATEGY_SIMPLE)
+            .setBreakStrategy(LineBreaker.BREAK_STRATEGY_SIMPLE)
             .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
         if (maxLines != null) {
             builder.setMaxLines(maxLines)
