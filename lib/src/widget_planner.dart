@@ -366,8 +366,7 @@ WidgetSnapshot buildWidgetSnapshot({
         final startMinutes = _minutesOf(sections, entry.startPeriod);
         if (startMinutes == null) continue;
         final rawEndMinutes = _endMinutesOf(sections, entry.endPeriod);
-        final endMinutes =
-            rawEndMinutes == null || rawEndMinutes < startMinutes
+        final endMinutes = rawEndMinutes == null || rawEndMinutes < startMinutes
             ? startMinutes
             : rawEndMinutes;
         final startAt = _at(date, startMinutes);

@@ -3238,9 +3238,7 @@ void main() {
         );
         await tester.ensureVisible(tile);
         await tester.pumpAndSettle();
-        await tester.tap(
-          find.descendant(of: tile, matching: find.text('去设置')),
-        );
+        await tester.tap(find.descendant(of: tile, matching: find.text('去设置')));
         await tester.pumpAndSettle();
         await tester.pump(const Duration(seconds: 3));
       }
