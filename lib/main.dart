@@ -80,7 +80,9 @@ class _AppShellState extends State<_AppShell> {
   /// 前后台切换监听。只订阅 onShow（`hidden → inactive` 时触发）：
   /// 手机切回前台、桌面端最小化后还原都会走到这里。
   late final AppLifecycleListener _lifecycle;
-  Timer? _foregroundWidgetSyncTimer;
+  Timer? _foregroundSyncTimer;
+  DateTime? _lastForegroundForceSyncAt;
+  static const Duration _foregroundForceSyncCooldown = Duration(seconds: 60);
   int _lastStorageNoticeEvent = 0;
   bool _storageNoticeScheduled = false;
 
@@ -138,24 +140,41 @@ class _AppShellState extends State<_AppShell> {
   /// 清空闹钟，而指纹没变——不 force 就会漏排。
   Future<void> _onShown() async {
     await _model.onAppShown();
-    if (_reminders != null) {
-      unawaited(_reminders.syncNow(force: true));
+    if (!mounted) return;
+    if (_reminders == null && _desktopWidgets == null) return;
+
+    // 短时间内在桌面小组件与应用之间频繁来回切换时，进程未被系统杀掉，
+    // 真正的数据/样式变更已由监听者自动同步，无需每次切回都在动画期间强刷提醒与小组件。
+    final now = DateTime.now();
+    final last = _lastForegroundForceSyncAt;
+    final sameDay =
+        last != null &&
+        last.year == now.year &&
+        last.month == now.month &&
+        last.day == now.day;
+    if (sameDay && now.difference(last) < _foregroundForceSyncCooldown) {
+      return;
     }
-    // 桌面小组件兜底刷新延后到进场缩放动画落稳后再触发，避免刚点击小组件打开应用时
-    // 在动画途中向桌面下发 updateAppWidget 引起小组件视图重绘闪烁。
-    if (_desktopWidgets != null) {
-      _foregroundWidgetSyncTimer?.cancel();
-      _foregroundWidgetSyncTimer = Timer(const Duration(milliseconds: 600), () {
-        if (!mounted) return;
+
+    // 提醒与桌面小组件的回前台兜底刷新统一延后至进场缩放动画落稳后再执行，
+    // 避免第 0 帧在 UI 线程同步规划 14 天日程/JSON 序列化与 Binder 通信引发掉帧。
+    _foregroundSyncTimer?.cancel();
+    _foregroundSyncTimer = Timer(const Duration(milliseconds: 600), () {
+      if (!mounted) return;
+      _lastForegroundForceSyncAt = DateTime.now();
+      if (_reminders != null) {
+        unawaited(_reminders.syncNow(force: true));
+      }
+      if (_desktopWidgets != null) {
         unawaited(_desktopWidgets.syncNow(force: true));
-      });
-    }
+      }
+    });
   }
 
   @override
   void dispose() {
-    _foregroundWidgetSyncTimer?.cancel();
-    _foregroundWidgetSyncTimer = null;
+    _foregroundSyncTimer?.cancel();
+    _foregroundSyncTimer = null;
     _lifecycle.dispose();
     _model.hints.removeListener(_onModelChanged);
     _model.routeNotifier.removeListener(_onModelChanged);

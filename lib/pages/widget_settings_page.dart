@@ -131,16 +131,30 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
     super.onRouteSettled();
   }
 
+  DateTime? _lastRealSnapshotAt;
+  static const Duration _resumeSnapshotCooldown = Duration(seconds: 60);
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       if (_snapshotsInitialized) {
-        if (!isRouteSettled) {
-          _pendingRealSnapshotRefresh = true;
-          _pendingForceRealSnapshotRefresh = true;
-        } else {
-          _refreshRealSnapshotCache(force: true);
-          if (mounted) setState(() {});
+        final now = DateTime.now();
+        final last = _lastRealSnapshotAt;
+        final dataChanged = _computeSourceDataKey() != _lastDataKey;
+        final cooldownExpired =
+            last == null ||
+            last.year != now.year ||
+            last.month != now.month ||
+            last.day != now.day ||
+            now.difference(last) >= _resumeSnapshotCooldown;
+        if (dataChanged || cooldownExpired) {
+          if (!isRouteSettled) {
+            _pendingRealSnapshotRefresh = true;
+            _pendingForceRealSnapshotRefresh = true;
+          } else {
+            _refreshRealSnapshotCache(force: true);
+            if (mounted) setState(() {});
+          }
         }
       }
       unawaited(_refreshPinnedCounts());
@@ -198,6 +212,7 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
       if (_computeSourceDataKey() == sourceKey) {
         _lastDataKey = sourceKey;
         _cachedRealSnapshot = result.real;
+        _lastRealSnapshotAt = DateTime.now();
         _applyInitialSampleToggle();
       } else if (isRouteSettled) {
         // 后台计算期间源数据发生变化且路由已落稳，按最新状态刷新真实快照。
@@ -247,6 +262,7 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
     if (!force && key == _lastDataKey) return;
     _lastDataKey = key;
     _cachedRealSnapshot = widget.widgetService.buildSnapshot();
+    _lastRealSnapshotAt = DateTime.now();
   }
 
   void _onSourceDataChanged() {

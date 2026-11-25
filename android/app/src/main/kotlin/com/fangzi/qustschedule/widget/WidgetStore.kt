@@ -338,13 +338,26 @@ internal object WidgetStore {
     private const val KEY_TODAY_REV = "today_list_rev"
     private const val KEY_LAST_WEEK_RENDER_DATE = "last_week_render_date_iso"
 
+    @Volatile
+    private var cachedRawJson: String? = null
+
+    @Volatile
+    private var cachedModel: WidgetSnapshotModel? = null
+
     fun saveSnapshot(context: Context, payloadJson: String): WidgetSnapshotModel? {
+        if (payloadJson == cachedRawJson && cachedModel != null) {
+            return cachedModel
+        }
         val parsed = WidgetSnapshotModel.parse(payloadJson) ?: return null
-        context.applicationContext
+        val prefs = context.applicationContext
             .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putString(KEY_SNAPSHOT, payloadJson)
-            .commit()
+        if (prefs.getString(KEY_SNAPSHOT, null) != payloadJson) {
+            prefs.edit()
+                .putString(KEY_SNAPSHOT, payloadJson)
+                .commit()
+        }
+        cachedRawJson = payloadJson
+        cachedModel = parsed
         return parsed
     }
 
@@ -352,7 +365,13 @@ internal object WidgetStore {
         val raw = context.applicationContext
             .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .getString(KEY_SNAPSHOT, null) ?: return null
-        return WidgetSnapshotModel.parse(raw)
+        if (raw == cachedRawJson && cachedModel != null) {
+            return cachedModel
+        }
+        val parsed = WidgetSnapshotModel.parse(raw) ?: return null
+        cachedRawJson = raw
+        cachedModel = parsed
+        return parsed
     }
 
     fun saveTodayHeaderSig(context: Context, appWidgetId: Int, sig: String) {
@@ -404,9 +423,10 @@ internal object WidgetStore {
     }
 
     fun saveLastWeekRenderDateIso(context: Context, dateIso: String) {
-        context.applicationContext
+        val prefs = context.applicationContext
             .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-            .edit()
+        if (prefs.getString(KEY_LAST_WEEK_RENDER_DATE, null) == dateIso) return
+        prefs.edit()
             .putString(KEY_LAST_WEEK_RENDER_DATE, dateIso)
             .commit()
     }
@@ -417,6 +437,8 @@ internal object WidgetStore {
             .getString(KEY_LAST_WEEK_RENDER_DATE, null)
 
     fun clear(context: Context) {
+        cachedRawJson = null
+        cachedModel = null
         context.applicationContext
             .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .edit()

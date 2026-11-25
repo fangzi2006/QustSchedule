@@ -27,8 +27,10 @@ import kotlin.math.sqrt
  */
 internal object WeekGridCanvasRenderer {
 
-    private const val MIN_PIXELS_CEILING = 800_000f
-    private const val MAX_PIXELS_CEILING = 2_400_000f
+    private const val MIN_PIXELS_CEILING = 640_000f
+    // 控制 4×4 周课表位图在 ~1024×1024（约 4MB ARGB_8888）以内：
+    // 手机桌面小组件尺寸下仍有 300+ PPI 清晰度，同时将桌面缩放动画与 Ashmem 传输的显存/带宽减半。
+    private const val MAX_PIXELS_CEILING = 1_050_000f
 
     fun render(
         context: Context,
@@ -44,7 +46,7 @@ internal object WeekGridCanvasRenderer {
         val rawH = (heightDp.coerceAtLeast(140) * density)
         val screenPixels = (dm.widthPixels.toFloat() * dm.heightPixels.toFloat())
             .coerceAtLeast(MIN_PIXELS_CEILING)
-        val maxPixels = min(screenPixels * 0.90f, MAX_PIXELS_CEILING)
+        val maxPixels = min(screenPixels * 0.55f, MAX_PIXELS_CEILING)
             .coerceAtLeast(MIN_PIXELS_CEILING)
         val rawPixels = rawW * rawH
         val pixelScale = if (rawPixels > maxPixels) {
