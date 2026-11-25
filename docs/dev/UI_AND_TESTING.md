@@ -1,7 +1,7 @@
 # UI、自定义物理动效与测试矩阵速查手册（UI & Testing Reference）
 
-> **AI 检索说明**：本文档覆盖 `qustschedule/lib/main.dart`、`lib/theme/*`、`lib/pages/*`、`lib/widgets/*`、`test/*`、`packages/zf_academic/test/*` 及 `.github/workflows/build-release.yml` 的完整技术契约。所有类名、方法签名、常量令牌、弹簧参数、`Listenable` 订阅边界与测试矩阵均与最新源码 1:1 对齐，供后续 AI 会话直接定点检索，无需重复通读 UI 与测试源码。
-> **版本铁律**：严禁在任何文档或代码中硬编码应用版本号，唯一版本事实源为 `qustschedule/pubspec.yaml`（运行时通过 `lib/src/app_version.dart` 的 `loadAppVersion()` 异步读取 `appVersion` / `appVersionFull`）。
+> **AI 检索说明**：本文档覆盖 `lib/main.dart`、`lib/theme/*`、`lib/pages/*`、`lib/widgets/*`、`test/*`、`packages/zf_academic/test/*` 及 `.github/workflows/build-release.yml` 的完整技术契约。所有类名、方法签名、常量令牌、弹簧参数、`Listenable` 订阅边界与测试矩阵均与最新源码 1:1 对齐，供后续 AI 会话直接定点检索，无需重复通读 UI 与测试源码。
+> **版本铁律**：严禁在任何文档或代码中硬编码应用版本号，唯一版本事实源为 `pubspec.yaml`（运行时通过 `lib/src/app_version.dart` 的 `loadAppVersion()` 异步读取 `appVersion` / `appVersionFull`）。
 
 ---
 
@@ -27,7 +27,7 @@
    - 5.2 [各页面状态交互、核心方法与弹窗/抽屉明细](#52-各页面状态交互核心方法与弹窗抽屉明细)
 6. [测试矩阵、测试替身与 CI 门禁（`test/*` & `packages/zf_academic/test/*`）](#6-测试矩阵测试替身与-ci-门禁test--packageszf_academictest)
    - 6.1 [L0–L3 测试分层架构与执行铁律](#61-l0l3-测试分层架构与执行铁律)
-   - 6.2 [主工程测试套件全表（`qustschedule/test/*.dart`，23 个测试文件）](#62-主工程测试套件全表qustscheduletestdart23-个测试文件)
+   - 6.2 [主工程测试套件全表（`test/*.dart`，23 个测试文件）](#62-主工程测试套件全表testdart23-个测试文件)
    - 6.3 [协议包测试套件全表（`packages/zf_academic/test/*.dart`，9 个测试文件）](#63-协议包测试套件全表packageszf_academictestdart9-个测试文件)
    - 6.4 [测试替身与辅助夹具（`FakeBackend` / `FakeReminderGateway` 等）](#64-测试替身与辅助夹具fakebackend--fakeremindergateway-等)
    - 6.5 [GitHub Actions CI/CD 流水线契约（`.github/workflows/build-release.yml`）](#65-github-actions-cicd-流水线契约githubworkflowsbuild-releaseyml)
@@ -515,13 +515,13 @@
 | **L3** | 界面、物理动效与重建隔离测试（Widget & Physics） | `widget_test.dart`、`dock_transition_test.dart`、`page_transition_test.dart`、`rebuild_scope_test.dart`、`boost_idle_optimization_test.dart`、`academic_page_test.dart`、`widget_settings_page_test.dart`、`formatted_text_span_test.dart`、`app_version_test.dart` | `flutter_test` 虚拟时钟帧进（`tester.pump(Duration)`），精确断言弹簧单调性、图层 `RepaintBoundary` 零重绘、组件 `debugOnRebuildDirtyWidget` 重建集合与跨屏无溢出 |
 
 > **测试执行与去重铁律**：
-> 1. 所有命令必须在内层仓库 **`D:\directory\Desktop\my_work\ke_biao\qustschedule\`** 下执行。
+> 1. 所有命令均在仓库根目录下执行。
 > 2. **合并单次进程运行**：运行全量主工程测试时使用 `flutter test`（或 CI 中的 `find test -path test/custom -prune -o -type f -name '*_test.dart' -print | sort` 传入 `flutter test`），使所有测试文件在单次编译与测试进程中并发执行，禁止写循环逐个文件串行启动 `flutter test`。
 > 3. **新增测试去重原则**：优先在现有的 23 个主题测试文件中补充用例，避免创建碎片化重复测试文件；临时专项验收可放入 `test/custom/*_test.dart`（CI 会自动检测并单独执行）。
 
 ---
 
-### 6.2 主工程测试套件全表（`qustschedule/test/*.dart`，23 个测试文件）
+### 6.2 主工程测试套件全表（`test/*.dart`，23 个测试文件）
 
 | 测试文件 | 分层 | 核心覆盖模块与守护契约 |
 | :--- | :---: | :--- |
@@ -529,7 +529,7 @@
 | `test/academic_page_test.dart` | L3 | `AcademicPage` 空态/刷新/未评教横幅/网络错误横幅、定性及免修成绩渲染、学期选择器人性化标签（「大三 上学期」）与未来/入学前学期过滤、`sortAcademicExams` 三级排序与 `isExamPast` 判定、`NextExamHeroCard` 倒计时徽章、`formatExamTimeLabel` 周次追加与历史学期隔离、后台学业差异比对触发全局更新气泡 |
 | `test/academic_service_test.dart` | L2 | `GradeStats.calculate` 加权 GPA 与扩展及格词表（通过/优秀/免修/P 等）、`AcademicService` 拉取与写缓存、`notEvaluated` 保留已有缓存条目、`syncCurrentTermAsync` 后台静默同步及并发会话失效共享单次重登 |
 | `test/app_model_test.dart` | L2 | 冷启动本地账号/姓名恢复、登录/退登全链路清理、周次/校历校准/分段节数动态托底（`gridSectionCount`）、后台刷新与重登提示流转、修改密码（含 `sessionInfo.username` 为空回退本地账号）、线路切换原地加载与失败回滚、静默更新间隔与串联学业同步、调课 overlay 合并、`_authEpoch` 与 `_academicLoadSeq` 竞态防写脏回归 |
-| `test/app_version_test.dart` | L1 | 验证 `loadAppVersion()` 读出的 `appVersionFull` 与 `appVersion` 严格等于 `qustschedule/pubspec.yaml` 中的 `version` 字段，严禁硬编码 |
+| `test/app_version_test.dart` | L1 | 验证 `loadAppVersion()` 读出的 `appVersionFull` 与 `appVersion` 严格等于 `pubspec.yaml` 中的 `version` 字段，严禁硬编码 |
 | `test/boost_idle_optimization_test.dart` | L2/L3 | `scheduleAfterRouteSettled` 转场门控（含 `forward -> reverse -> forward` 取消返回恢复）、`SecureCredentialStore.get` 双 Key 并发读取、`SafeJsonFile` `>16KB` 走 Isolate 解码与 `.bak` 自愈、`AppModel.boot` 单次支持目录查询与空闲帧恢复学业缓存、`ScheduleController` / `AcademicController` 记忆化、课表邻近周空闲帧切片预热（`CourseBlock.debugBlockPlanSolveCountForTest` 零新增求解）、`HomeShell` 按需懒建、`CaptchaPage` Base64 解码缓存、`DebugPage` 折叠态懒格式化 JSON、`ReminderPage` / `WidgetSettingsPage` 入场并行查询与骨架门控 |
 | `test/dock_transition_test.dart` | L3 | `HomeShell` + `FloatingDock` 打断与抢跑交互：滑行中途点击目标页开关/滚动列表/推入二级页、零时长不透明路由瞬间遮挡后台静默收敛、离场页立即锁死、按住 Dock 预览期间锁死内容区、跨页直达（`0 <-> 2`）单调不误停学业页、反向折返零反冲、同向续速无跳变、`AppMenuScope` 翻页中途开菜单随页面滑入落位、切页时菜单随原页划走收起、长按 190ms 期间切页绝不跨页误弹菜单 |
 | `test/formatted_text_span_test.dart` | L1/L3 | `buildFormattedTextSpan` 行内 `**加粗**` 与 `` `代码` `` 分词及未闭合标记容错、`parseChangelogBytes` 真实后台 Isolate 解析、`ChangelogPage` 首帧零延迟渲染、当前版本卡片主色描边与 `ListView.separated` 视口懒构建 |

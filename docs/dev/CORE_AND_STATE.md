@@ -1,7 +1,7 @@
 # 核心状态、服务编排、持久化、更新系统与正方协议层 AI 速查手册 (`CORE_AND_STATE.md`)
 
 > **定位**：本文档面向 AI 开发会话，提供 `qustschedule/` 核心状态协调器（`AppModel` 与 5 大子控制器）、业务编排服务、安全 JSON 持久化、应用内更新状态机、Windows 桌面原生壳以及 `packages/zf_academic/` 纯 Dart 协议基座的**零源码重读级（Zero-Re-Read）**精确技术契约。
-> **铁律**：应用版本号的唯一事实源为 `qustschedule/pubspec.yaml` 的 `version:` 字段（运行时通过 `lib/src/app_version.dart` 读取 `rootBundle`），严禁在任何代码或文档中硬编码应用版本号。
+> **铁律**：应用版本号的唯一事实源为 `pubspec.yaml` 的 `version:` 字段（运行时通过 `lib/src/app_version.dart` 读取 `rootBundle`），严禁在任何代码或文档中硬编码应用版本号。
 
 ---
 

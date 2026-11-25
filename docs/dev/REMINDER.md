@@ -417,9 +417,9 @@ AppModel 变更 (_onModelChanged)
 
 ## 13. 自动化测试矩阵与真机实测手册
 
-### 13.1 自动化测试覆盖矩阵（`qustschedule/test/`）
+### 13.1 自动化测试覆盖矩阵（`test/`）
 
-> 执行命令（必须在 `qustschedule/` 内层仓库目录下执行）：
+> 执行命令（在仓库根目录下执行）：
 > `flutter test test/reminder_planner_test.dart test/reminder_service_test.dart test/timetable_test.dart test/widget_test.dart`
 
 | 测试文件 | 核心被测对象 | 覆盖的不变量与边界用例 |
@@ -433,16 +433,15 @@ AppModel 变更 (_onModelChanged)
 ### 13.2 真机实测与 Logcat / Dumpsys 诊断命令（PLG110 / ColorOS / Android 17 基准）
 
 ```powershell
-$adb = 'D:\sdks\android-sdk\platform-tools\adb.exe'
-# 1. 实时监控提醒全链路日志
-& $adb logcat -s ReminderWorker:V ReminderBridge:V ReminderScheduler:V ReminderReceiver:V ReminderFluid:V ReminderDailyResync:V ReminderRestore:V
+# 1. 实时监控提醒全链路日志（假设 adb 已在 PATH 中，或替换为本机 platform-tools/adb 路径）
+adb logcat -s ReminderWorker:V ReminderBridge:V ReminderScheduler:V ReminderReceiver:V ReminderFluid:V ReminderDailyResync:V ReminderRestore:V
 
 # 2. 核查系统 AlarmManager 中本应用的闹钟槽位、触发时刻与精确标志
-& $adb shell dumpsys alarm | Select-String -Pattern "com.fangzi.qustschedule|FLUID_STOP|DAILY_RESYNC|TEST_REMIND" -Context 2,4
+adb shell dumpsys alarm | Select-String -Pattern "com.fangzi.qustschedule|FLUID_STOP|DAILY_RESYNC|TEST_REMIND" -Context 2,4
 
 # 3. 模拟进入/退出深度 Doze 模式验证 setAlarmClock 穿透能力
-& $adb shell dumpsys deviceidle force-idle
-& $adb shell dumpsys deviceidle unforce
+adb shell dumpsys deviceidle force-idle
+adb shell dumpsys deviceidle unforce
 ```
 
 **真机验收关键指标**：
