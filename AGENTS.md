@@ -32,15 +32,18 @@
 
 ---
 
-## 二、工程硬性铁律（不可逾越）
+## 二、工程硬性约束（违背会导致编译失败、崩溃、安全漏洞或数据损坏）
 
-1. **版本号唯一真源**：严禁在文档、Dart、Kotlin、C++ 或测试断言中硬编码具体版本号；唯一真源为 [`pubspec.yaml`](pubspec.yaml) 的 `version:`（运行时由 [`lib/src/app_version.dart`](lib/src/app_version.dart) 异步读取）。
-2. **代码格式与仓库洁净**：Dart 代码严格遵循 `dart format`（单行 ≤ 80 列）；任务结束前确认 `git status` 无遗留临时文件。
-3. **青岛科技大学专属边界**：默认仅内置 1 条青科大外网教务线路 `https://jwglxt.qust.edu.cn/jwglxt`（仍支持自定义地址）；严格**两学期制**（秋 `3` / 春 `12`，历史 `'16'` 自动收敛不外显）；GPA 文案固定为**「学期平均学分绩点 (GPA)」**；10 位学号按 `2000 + YY` 推导入学年（超 5 年回退学年学期标签）。
-4. **单向分层依赖**：`lib/pages/ & lib/widgets/ → AppModel (及 5 大 State Controller) → ScheduleService / AcademicService / ReminderService / DesktopWidgetService → packages/zf_academic & Repositories`。UI 层严禁直调 Service/Cache/Repository/`ZhengfangClient`；[`packages/zf_academic`](packages/zf_academic/) 为**零 Flutter 依赖**纯 Dart 包。
-5. **平台红线**：
-   - **Windows**：[`windows/runner/`](windows/runner/) 下 `.cpp`/`.h` **严禁出现中文注释或中文字符字面量**（MSVC CP936 报 `C4819`，UI 文案用 `\uXXXX` 转义）；`Runner.rc` 保持 `UTF-16LE + BOM`；产物名恒为 `qustschedule.exe`（绑定 DPAPI、AppData 与互斥锁 `Local\com.fangzi.qustschedule.SingleInstance`）。
-   - **Android**：Flutter 3.29+ 已合并 UI 与 Platform 主线程，MethodChannel 与 `BroadcastReceiver` **严禁在主线程读盘、设闹钟或画 Bitmap**（一律走 `ReminderWorker` / `WidgetWorker` 单线程 + `goAsync()`）；`minSdk = 24`（`widget/` 禁 `java.time.*`，用 `Calendar`）；`debug`/`release` 签名分离；`useLegacyPackaging = true`；`android:allowBackup="false"`；`android/keystore/` 与 `android/key.properties` 严禁入库。
+1. **版本号唯一真源**：不在源码、文档或测试断言中硬编码版本号；唯一真源为 [`pubspec.yaml`](pubspec.yaml) 的 `version:`（运行时由 [`lib/src/app_version.dart`](lib/src/app_version.dart) 异步读取）。
+2. **代码格式与仓库洁净**：Dart 代码遵循 `dart format`（单行 ≤ 80 列）；任务结束前确认 `git status` 无遗留临时文件。
+3. **单向分层依赖**：`lib/pages/ & lib/widgets/ → AppModel (及 5 大 State Controller) → ScheduleService / AcademicService / ReminderService / DesktopWidgetService → packages/zf_academic & Repositories`。UI 层不直调 Service/Cache/Repository/`ZhengfangClient`；[`packages/zf_academic`](packages/zf_academic/) 为**零 Flutter 依赖**纯 Dart 包。
+4. **平台与安全红线**：
+   - **Windows**：[`windows/runner/`](windows/runner/) 下 `.cpp`/`.h` **严禁出现中文注释或中文字符字面量**（MSVC CP936 会报 `C4819` 编译错误，UI 文案用 `\uXXXX` 转义）；`Runner.rc` 保持 `UTF-16LE + BOM`；产物名保持 `qustschedule.exe`（绑定 DPAPI、AppData 与单实例互斥锁 `Local\com.fangzi.qustschedule.SingleInstance`）。
+   - **Android**：Flutter 3.29+ 已合并 UI 与 Platform 主线程，MethodChannel 与 `BroadcastReceiver` **严禁在主线程读盘、设闹钟或画 Bitmap**（一律走 `ReminderWorker` / `WidgetWorker` 单线程 + `goAsync()`）；`minSdk = 24`（`widget/` 禁用 `java.time.*`，用 `Calendar`）；`debug`/`release` 签名分离；`useLegacyPackaging = true`；`android:allowBackup="false"`（防换机恢复无法解密的 Keystore 密文）；`android/keystore/` 与 `android/key.properties` 严禁入库。
+
+> **当前产品与业务现状说明（非硬性限制，后续需求变更时可按需修改并同步文档与测试）**：
+> - 当前主要面向青岛科技大学：默认内置 1 条青科大外网教务线路 `https://jwglxt.qust.edu.cn/jwglxt`（仍支持自定义地址）；当前采用两学期制（秋 `3` / 春 `12`，历史 `'16'` 收敛不外显）；GPA 卡片当前文案为「学期平均学分绩点 (GPA)」；10 位学号当前按 `2000 + YY` 推导入学年（超 5 年回退学年学期标签）。
+> - 当前有意保留的协议与防锁号常量（RFC 6265 属性、PNG 魔数、10 分钟 2 次重登熔断、10s 超时、默认 18 周保底等）属于正常设计常量，日常清理代码时勿误删，确有需求时可按需调整。
 
 ---
 
@@ -55,9 +58,7 @@
 | **Cookie 免登空串陷阱** | `sessionInfo?.username ?? accountHint`（`''` 不会被 `??` 跳过） | 按 `isNotEmpty` 顺序回退：`username` → `accountHint` → `studentId` → `prefs.accountOf` | `test/schedule_service_test.dart` |
 | **跨学期考试隔离** | 切看其他学期考试时仍拼接当前学期周次，或混入桌面小组件 | 仅 `loadedAcademicTerm == model.termId` 时追加周次标签与注入小组件快照 | `test/academic_page_test.dart`, `test/widget_service_test.dart` |
 | **异步按钮与定时器** | 按钮 `onPressed` 置 `null` 引起闪烁；滑块 `onChanged` 每帧写盘；裸写不可取消 `Future.delayed` | 用非 State `bool _running` 防重入；滑块 `onChanged` 改草稿、`onChangeEnd` 落盘；所有延时用可取消 `Timer` 并在 `dispose()` 清理 | `test/widget_settings_page_test.dart` |
-| **测试用例去重** | 仅因场景相似就删减已有固定测试 | 删除固定测试必须同时满足：同被测对象 + 同断言集 + 同 L1/L2/L3 层级 + 不独占任何失败模式 | 全量 `test/*_test.dart` |
-
-> **已登记确认不改动项（防过度审计）**：① 协议与防锁号常数（RFC 6265 属性、PNG 魔数、10 分钟 2 次重登熔断、10s 超时、青科大默认线路、18 周保底等）属合规架构常数，严禁清理；② 正方教务无学制字段，10 位学号超 5 年已平稳回退学年学期标签。
+| **测试用例去重** | 仅因场景相似就删减已有固定测试 | 删除固定测试前建议确认：同被测对象 + 同断言集 + 同 L1/L2/L3 层级 + 不独占任何失败模式 | 全量 `test/*_test.dart` |
 
 ---
 

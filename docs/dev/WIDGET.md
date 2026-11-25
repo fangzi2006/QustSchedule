@@ -69,7 +69,7 @@
 | **调整透明度/圆角/字号范围或步进** | 1. [`lib/src/widget_style.dart`](../../lib/src/widget_style.dart) → `widgetMin*` / `widgetMax*` 及 `clampWidget*()`<br>2. [`WidgetStore.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetStore.kt) → `WidgetStyleData.fromJson` 中的 `optFiniteFloat(..., minValue, maxValue)`<br>3. [`lib/pages/widget_settings_page.dart`](../../lib/pages/widget_settings_page.dart) → `_LabeledSliderTile` 的 `divisions` / `defaultValue` | Dart 与 Kotlin 的 clamp 上下限必须完全一致（当前：透明度 `0.0..1.0` 20 档，圆角 `8..28dp` 20 档，字号 `0.75..1.20` 9 档） |
 | **新增单个外观/内容开关字段** | 1. [`lib/src/widget_style.dart`](../../lib/src/widget_style.dart) → `DesktopWidgetStyle`（构造、默认值、`applyPreset`、`copyWith`、`toJson`、`fromJson`、`==`、`hashCode`）<br>2. [`WidgetStore.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetStore.kt) → `WidgetStyleData`（属性与 `fromJson` 向后兼容默认值）<br>3. [`lib/pages/widget_settings_page.dart`](../../lib/pages/widget_settings_page.dart) → 按小组件形态条件展示开关<br>4. [`lib/widgets/desktop_widget_preview.dart`](../../lib/widgets/desktop_widget_preview.dart) & 原生 `WidgetContentResolver.kt` / 对应 Provider 或 Renderer | 新增字段在 `fromJson` 缺失时必须回退 `base.<field>`，无需递增 `Preferences` schema 版本（当前为 schema 15）；若为视觉属性需评估是否触发 `visualChanged -> WidgetStylePreset.custom` |
 | **修改课程卡片色板（浅色/深色 9 色）** | 1. [`lib/theme/course_palette.dart`](../../lib/theme/course_palette.dart) → `CoursePalette.colors` / `CoursePalette.darkColors`<br>2. [`WidgetThemeResolver.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetThemeResolver.kt) → `LIGHT_COURSE_COLORS` / `DARK_COURSE_COLORS` | 两端 9 组 `background` / `foreground` ARGB 十六进制值及顺序必须 **100% 像素级一致** |
-| **修改语义胶囊/文字/背景/边框对比度** | 1. [`WidgetThemeResolver.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetThemeResolver.kt) → `WidgetThemeResolver.resolve()`<br>2. [`lib/widgets/desktop_widget_preview.dart`](../../lib/widgets/desktop_widget_preview.dart) → `_PreviewColors.resolve()`<br>3. 若涉及 API 24–30 静态回退色，同步检查 `android/app/src/main/res/drawable/widget_pill_*.xml` 与 `widget_row_highlight_*.xml` | 严禁在 `0%` 透明或低透明度下给文字加阴影；修改后确保 `_PreviewColors` 与 `WidgetThemeResolver` 完全同构 |
+| **修改语义胶囊/文字/背景/边框对比度** | 1. [`WidgetThemeResolver.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetThemeResolver.kt) → `WidgetThemeResolver.resolve()`<br>2. [`lib/widgets/desktop_widget_preview.dart`](../../lib/widgets/desktop_widget_preview.dart) → `_PreviewColors.resolve()`<br>3. 若涉及 API 24–30 静态回退色，同步检查 `android/app/src/main/res/drawable/widget_pill_*.xml` 与 `widget_row_highlight_*.xml` | 当前采用纯色提对比、不加文字阴影方案；修改后确保 `_PreviewColors` 与 `WidgetThemeResolver` 保持视觉同构 |
 | **修改今日/下一节/本周的展示文案或筛选逻辑** | 1. [`WidgetContentResolver.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetContentResolver.kt) → `resolveToday()` / `resolveNext()` / `resolveWeek()`<br>2. [`lib/widgets/desktop_widget_preview.dart`](../../lib/widgets/desktop_widget_preview.dart) → `_resolveTodayForPreview()` / `_resolveNextForPreview()` / `_resolveWeekForPreview()` | Kotlin 原生解析器与 Dart 预览解析器必须保持 **100% 逻辑与文案同构** |
 | **修改周课表网格格子内课名/教师/地点行数分配** | 1. [`WeekGridCanvasRenderer.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WeekGridCanvasRenderer.kt) → `solveCourseBlockPlan()`<br>2. [`lib/widgets/desktop_widget_preview.dart`](../../lib/widgets/desktop_widget_preview.dart) → `_solvePreviewBlockPlan()` | 必须与主课表页 `CourseBlock._BlockPlan` 的降级/回填优先级保持一致 |
 | **新增第 4 种小组件形态** | 1. [`lib/src/widget_style.dart`](../../lib/src/widget_style.dart) → `DesktopWidgetKind` 增加枚举项<br>2. `android/.../widget/` → 新增 `*WidgetProvider.kt` + `res/xml/widget_*_info.xml` + `res/layout/widget_*.xml` + `AndroidManifest.xml` `<receiver>`<br>3. [`WidgetStore.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetStore.kt) → 增加 `KIND_*` 常量、`styles` 解析与 `kindSignature()` 分支<br>4. [`WidgetCoordinator.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetCoordinator.kt) → 纳入 `ActiveWidgetFlags`、`refreshChangedWidgets`、`getPinnedCounts`、`componentForKind` | 确保 `WidgetContentResolver.computeNextRefreshPlan` 按新增形态是否依赖上下课节点决定闹钟唤醒策略 |
@@ -138,7 +138,7 @@ flowchart TD
 
 ### 4.2 内置 5 套精选预设注册表 (`widgetStylePresets`)
 
-> **解耦铁律**：调用 `style.applyPreset(target)` **仅更新** `preset`、`themeMode`、`backgroundOpacity`、`cornerRadius` 四个视觉字段，**原样保留**用户的 `fontScale`、`density` 及所有布尔/枚举内容开关。
+> **当前预设解耦约定**：调用 `style.applyPreset(target)` **仅更新** `preset`、`themeMode`、`backgroundOpacity`、`cornerRadius` 四个视觉字段，**原样保留**用户的 `fontScale`、`density` 及所有布尔/枚举内容开关。
 
 | 预设枚举 (`wireName`) | 名称 (`label`) | 副标题 (`subtitle`) | `themeMode` | `backgroundOpacity` | `cornerRadius` |
 |---|---|---|---|---|---|
@@ -473,9 +473,9 @@ flowchart TD
 - **边框线性淡出 (`borderColor`)**：
   - `opacity <= 0.01f` → `Color.TRANSPARENT`；
   - `opacity > 0.01f` → `maxBorderAlpha = isDark ? 34f : 20f`，`borderAlpha = (maxBorderAlpha * opacity).roundToInt()`，浅色取黑色 `#000000`、深色取白色 `#FFFFFF` 叠加 `borderAlpha`，彻底消除 `0% → 5%` 边框突兀跳变。
-- **低不透明度（`< 35%`）纯色提对比与零阴影铁律**：
+- **低不透明度（`< 35%`）纯色提对比方案（当前视觉规范）**：
   - 定义 `lowOpacityFactor = ((0.35f - opacity) / 0.35f).coerceIn(0f, 1f)`；
-  - 当背景不透明度低于 `35%` 时，主文字、次文字、三级文字、胶囊底色、行高亮底色与网格线按 `lowOpacityFactor` 向更高对比度端线性插值（**严禁在任何透明度下给文字添加阴影 `Shadow`**）：
+  - 当背景不透明度低于 `35%` 时，主文字、次文字、三级文字、胶囊底色、行高亮底色与网格线按 `lowOpacityFactor` 向更高对比度端线性插值（当前方案不依赖文字阴影 `Shadow`，如需调整样式须同步更新 Flutter 预览侧 `_PreviewColors`）：
     - `primaryTextColor`：浅色 `#FF1A1D24 → #FF101218`；深色 `#FFF3F5F8 → #FFFFFFFF`
     - `secondaryTextColor`：浅色 `#FF5F6775 → #FF3A4150`；深色 `#FFB4BCC8 → #FFDDE3EC`
     - `tertiaryTextColor`：浅色 `#FF868E9C → #FF505868`；深色 `#FF8A93A2 → #FFC2CBD8`
@@ -715,7 +715,7 @@ flowchart TD
 |---|---|---|
 | **Android 线程与时间 API** | 在 `AppWidgetProvider.onUpdate` 主线程直接读 `SharedPreferences` 或画 `Bitmap`；在 `widget/*.kt` 引入 `java.time.LocalDate` | 一律通过 `WidgetWorker.runBroadcastAsync` / `WidgetWorker.execute` 在 `qust-widget-worker` 单线程执行；日期计算统一用 `java.util.Calendar`（兼容 `minSdk 24`） |
 | **字体单位与系统超大字体** | RemoteViews 使用 `COMPLEX_UNIT_SP` 或 Canvas 使用 `scaledDensity`；Flutter 预览未隔离外部 `textScaler` | RemoteViews 统一用 `TypedValue.COMPLEX_UNIT_DIP`（XML 默认亦用 `dp`）；Canvas 统一用 `displayMetrics.density * style.fontScale`；`DesktopWidgetPreview` 包裹 `TextScaler.noScaling` |
-| **0% 透明与低透明度可读性** | 在 `0%` 透明或半透明下给文字加 `Shadow`；`0%` 透明下仍保留圆角 `clipPath` 或圆角安全内缩 | **严禁添加任何文字阴影**；`< 35%` 不透明度通过 `lowOpacityFactor` 纯色插值提对比；`0%` 透明隐藏背景 `ImageView`、跳过圆角裁切与 `cornerClearanceDp` |
+| **0% 透明与低透明度可读性** | 仅改原生端或预览端单侧透明度样式导致两端不一致；`0%` 透明下仍保留圆角 `clipPath` 或圆角安全内缩 | 当前采用 `< 35%` `lowOpacityFactor` 纯色插值提对比（无文字阴影）；`0%` 透明隐藏背景 `ImageView`、跳过圆角裁切与 `cornerClearanceDp`，改样式时两端保持同构 |
 | **API 24–30 圆角与竖条着色** | 在 API < 31 调用 `setBackgroundColor`（抹平圆角）或直接把半透明 ARGB 传给竖条 `setColorFilter`（叠白底泛白） | API < 31 走 `applyRoundedBackground` 切换预置圆角 drawable（含 `*_dim`）；竖条走 `applyVerticalBar` 传不透明 RGB `color or 0xFF000000` + `setImageAlpha` |
 | **周课表位图内存与刷新频率** | 在上下课节点闹钟里重绘周课表位图；直接把可变大 Bitmap 传给 `RemoteViews` | `computeNextRefreshPlan` 上下课节点设 `includeWeek = false`；`WeekGridCanvasRenderer` 限制像素上限 `min(screenPixels * 0.55, 1_050_000)` 并转为不可变 Bitmap 走 Ashmem |
 | **配置页滑块与预设交互** | 滑块 `onChanged` 每帧写盘并调用 `buildSnapshot()`；套用预设时重置用户的 `density` 或 `fontScale` | `onChanged` 仅更新 `_opacityDraft` / `_radiusDraft` / `_fontScaleDraft`，`onChangeEnd` 才持久化并 `syncNow()`；预设与密度/字号/内容开关彻底解耦 |

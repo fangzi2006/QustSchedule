@@ -428,7 +428,7 @@
   - 外层强制包裹 `MediaQuery(data: MediaQuery.of(context).copyWith(textScaler: TextScaler.noScaling))`，与 Android 原生 `COMPLEX_UNIT_DIP` 保持一致，免疫系统 2.0× 超大字体二次放大。
   - `_PreviewColors.resolve` 与 Android `WidgetThemeResolver.kt` 像素级同构：
     - 边框随 `backgroundOpacity` 平滑淡出（`opacity <= 0.01` 时完全透明无边框，圆角避让 `_cornerClearance` 归零）。
-    - 低不透明度（`< 0.35`）通过 `lowOpacityFactor = ((0.35 - opacity) / 0.35).clamp(0.0, 1.0)` 提高文字纯色对比度，**严禁使用文字阴影**。
+    - 低不透明度（`< 0.35`）通过 `lowOpacityFactor = ((0.35 - opacity) / 0.35).clamp(0.0, 1.0)` 提高文字纯色对比度（当前视觉方案不使用文字阴影，与 Android 原生 `WidgetThemeResolver` 保持同构）。
   - 预览卡片标准逻辑尺寸：
     - 今日课表 `_TodayPreviewCard`：4×2 宽卡 `336×176`，2×2 窄卡 `176×176`（1:1 正方形），底部内边距为 `0`（直抵 1dp 描边内缘）。
     - 本周课表 `_WeekPreviewCard`：4×4 正方形 `316×316`。
@@ -514,7 +514,7 @@
 | **L2** | 服务编排与状态机测试（Service & State Machine） | `schedule_service_test.dart`、`academic_service_test.dart`、`reminder_service_test.dart`、`widget_service_test.dart`、`app_model_test.dart`、`updater_test.dart`（纯逻辑部分） | 注入 `FakeBackend` / `FakeReminderGateway` / `FakeDesktopWidgetGateway`，验证单 flight 重登、熔断、世代锁 `_authEpoch`、防抖与指纹去重 |
 | **L3** | 界面、物理动效与重建隔离测试（Widget & Physics） | `widget_test.dart`、`dock_transition_test.dart`、`page_transition_test.dart`、`rebuild_scope_test.dart`、`boost_idle_optimization_test.dart`、`academic_page_test.dart`、`widget_settings_page_test.dart`、`formatted_text_span_test.dart`、`app_version_test.dart` | `flutter_test` 虚拟时钟帧进（`tester.pump(Duration)`），精确断言弹簧单调性、图层 `RepaintBoundary` 零重绘、组件 `debugOnRebuildDirtyWidget` 重建集合与跨屏无溢出 |
 
-> **测试执行与去重铁律**：
+> **测试执行与维护建议**：
 > 1. 所有命令均在仓库根目录下执行。
 > 2. **合并单次进程运行**：运行全量主工程测试时使用 `flutter test`（或 CI 中的 `find test -path test/custom -prune -o -type f -name '*_test.dart' -print | sort` 传入 `flutter test`），使所有测试文件在单次编译与测试进程中并发执行，禁止写循环逐个文件串行启动 `flutter test`。
 > 3. **新增测试去重原则**：优先在现有的 23 个主题测试文件中补充用例，避免创建碎片化重复测试文件；临时专项验收可放入 `test/custom/*_test.dart`（CI 会自动检测并单独执行）。
