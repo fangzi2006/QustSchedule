@@ -39,10 +39,10 @@
 | `lib/pages/reminder_page.dart` | `ReminderPage`, `_ReminderSettingsCard`, `_PermissionsCard`, `_DiagnosticsCard`, `_LeadOptionPill` | 课程提醒子页面：三卡子树重建隔离、`RouteSettledStateMixin` 并行状态查询、滑块本地草稿 `_leadDraft` 与 `_queuedLeadMinutes` 串行合并 | `_statusNotifier`, `_statusEpoch`, `_pendingStatus`, `_toggleReminder()`, `_commitLead()`, `_toggleFluid()`, `_stopFluid()`, `_resync()`, `_preview()`, `_testIn5s()`, `_testInOneMinute()` |
 | `lib/pages/settings_page.dart` | `SettingsPage`, `_ReminderAndWidgetCard` | 设置页「提醒与小组件」分区：托管课程提醒入口、桌面小组件入口，以及**忽略电池优化、精确闹钟、自启动**三项系统级可靠性权限 | `_openBattery()`, `_openExactAlarm()`, `_openAutostart()`, `_confirmSignOut()`（退出时调用 `reminders?.cancelAll()`） |
 | `lib/widgets/reminder_permission_tile.dart` | `ReminderPermissionTile`, `showReminderGuideToast` | 权限状态行组件（`ok: true/false/null` 三态着色）与跨进程系统级 Toast 引导辅助函数 | `ReminderPermissionTile(icon, title, value, ok, actionLabel, onAction)`, `showReminderGuideToast()` |
-| `lib/src/preferences_repository.dart` | `Preferences` | 偏好持久化（当前 `preferencesSchema = 14`）：存储提醒开关、提前量、形态与兼容字段 | `reminderEnabled`（默认 `false`）、`reminderLeadMinutes`（默认 `10`，夹取 `1..60`）、`reminderStyle`（默认 `banner`）、`reminderFluidUntilEnd`（默认 `false`） |
-| `lib/main.dart` | `_AppShellState` | Android 宿主生命周期接线：`boot()` 前挂载 `ReminderService`，`AppLifecycleListener(onShow)` 回到前台调用 `syncNow(force: true)` | `_reminders`, `_onShown()` |
+| `lib/src/preferences_repository.dart` | `Preferences` | 偏好持久化（当前 `preferencesSchema = 15`）：存储提醒开关、提前量、形态与兼容字段 | `reminderEnabled`（默认 `false`）、`reminderLeadMinutes`（默认 `10`，夹取 `1..60`）、`reminderStyle`（默认 `banner`）、`reminderFluidUntilEnd`（默认 `false`） |
+| `lib/main.dart` | `_AppShellState` | Android 宿主生命周期接线：`boot()` 前挂载 `ReminderService`，`AppLifecycleListener(onShow)` 带 60s 同日冷却 + 600ms 进场延迟后调用 `syncNow(force: true)` | `_reminders`, `_foregroundSyncTimer`, `_onShown()` |
 
-### 1.2 Android 原生侧文件索引（`qustschedule/android/app/src/main/`）
+### 1.2 Android 原生侧文件索引（`android/app/src/main/`）
 
 | 文件路径 | 核心类 / 单例 | 核心职责 | 关键方法 / 常量 |
 | --- | --- | --- | --- |
@@ -315,7 +315,7 @@ SettingsPage（_ReminderAndWidgetCard：入口 + 电池优化/精确闹钟/自�
 | **授予/变更精确闹钟权限** | `ReminderRestoreReceiver` | `AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED` | `rescheduleFromStore()`（将此前降级为 `setAndAllowWhileIdle` 的闹钟整体原地升级为 `setAlarmClock`） |
 | **每日凌晨 00:05 自愈** | `ReminderDailyResyncReceiver` | `com.fangzi.qustschedule.action.DAILY_RESYNC` (`RC_DAILY_RESYNC = 2001`) | `rescheduleFromStore()` 幂等重排 + 续挂次日 00:05 一次性闹钟 + 滚动推进 10 天挂钟窗口 |
 | **每次课程提醒响铃后** | `ReminderReceiver` | `com.fangzi.qustschedule.action.REMIND` | 从账本移除已响 `code`，并调用 `scheduler.topUpWindowFromStore()` 增量补齐新进入 10 天窗口的事件 |
-| **App 回到前台** | `lib/main.dart` (`_AppShellState`) | `AppLifecycleListener(onShow: _onShown)` | 调用 `_reminders.syncNow(force: true)`，忽略 Dart 内存指纹强制下发最新 payload 并清除原生 `dirty` 标记 |
+| **App 回到前台** | `lib/main.dart` (`_AppShellState`) | `AppLifecycleListener(onShow: _onShown)` | 满足 60s 同日冷却（或跨天）后延迟 600ms 待进场动画落稳，再调用 `_reminders.syncNow(force: true)` 忽略 Dart 内存指纹强制下发最新 payload 并清除原生 `dirty` 标记 |
 | **系统强制停止 (`force-stop`) / 一键清理** | 系统限制（无广播） | 所有闹钟与前台服务被系统内核强行清空，但 `SharedPreferences` 文件仍在 | 无法后台自愈；用户下次打开 App 时由冷启动或 `_onShown` 触发 `syncNow` 恢复 |
 | **连续超过 14 天不打开 App** | 规划窗口自然耗尽 | 原生无校历与调课引擎，不能自行生成第 15 天以后的事件 | 第 11~14 天靠 00:05 自愈与触发补齐续命；第 15 天起无提醒，打开一次 App 即可重算未来 14 天 |
 

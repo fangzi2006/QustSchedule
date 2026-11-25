@@ -363,9 +363,10 @@ flowchart TD
   - 所有 `AppWidgetProvider`（`onUpdate` / `onAppWidgetOptionsChanged` / `onDeleted` / `onDisabled`）与 `WidgetRefreshReceiver.onReceive` 一律调用 `WidgetWorker.runBroadcastAsync(this, TAG) { ... }`（内部调用 `receiver.goAsync()` 并在 `finally` 中 `pending.finish()`）。
 - **API 兼容性铁律**：`minSdk = 24`，原生 `widget/` 目录下**严禁使用 `java.time.*`**，所有日期/星期/午夜计算统一使用 `java.util.Calendar`。
 
-### 8.2 SharedPreferences 存储结构 (`WidgetStore.kt`)
+### 8.2 SharedPreferences 存储结构与内存缓存 (`WidgetStore.kt`)
 
 - 文件名：`PREF_NAME = "qust_desktop_widget_v1"`（全部写操作使用同步 `.commit()` 确保单线程内立即可见）。
+- **单线程内存缓存与零冗余写盘**：维护 `@Volatile cachedRawJson` / `cachedModel`，`loadSnapshot()` 命中内存缓存时直接 O(1) 返回（跳过重复 `JSONObject` 全量解析）；`saveSnapshot()` 与 `saveLastWeekRenderDateIso()` 在内容未变化时直接跳过 `.commit()` 磁盘同步落盘；`clear()` 同步清空内存缓存。
 
 | Key 名称 / 前缀 | 类型 | 用途与生命周期 |
 |---|---|---|
@@ -636,8 +637,8 @@ flowchart TD
 
 ### 13.2 滑块草稿隔离与快照缓存防重建
 
-- **源数据哈希缓存 (`_computeSourceDataKey`)**：
-  - 真实快照 `_cachedRealSnapshot` 仅在 `(preferencesLoaded, schedule, termStart, maxWeek, loadedAcademicTerm, reschedules, timetables, exams, sectionCounts)` 发生变化或应用从后台切回前台 (`AppLifecycleState.resumed`) 时重建；
+- **源数据哈希缓存 (`_computeSourceDataKey`) 与回前台 60s 冷却**：
+  - 真实快照 `_cachedRealSnapshot` 仅在 `(preferencesLoaded, schedule, termStart, maxWeek, loadedAcademicTerm, reschedules, timetables, exams, sectionCounts)` 发生变化，或应用从后台切回前台 (`AppLifecycleState.resumed`) 且跨天 / 距上次快照刷新已满 **60 秒冷却期** (`_resumeSnapshotCooldown`) 时才重建；短时间在应用与桌面小组件间来回切换时直接跳过同步重建与 `setState`；
   - **切换小组件类型 Tab、切换预览尺寸、切换示例/实时课表、滚动页面或拖动滑块期间，`buildSnapshot()` 调用次数严格为 0**（由 `test/widget_settings_page_test.dart` 中的 `_CountingWidgetService` 守护）。
 - **滑块拖动草稿 (`onChanged`) vs 抬手持久化 (`onChangeEnd`)**：
   - 拖动「背景不透明度」「卡片圆角」「文字大小」滑块时，`onChanged` **仅更新局部 State 草稿** (`_opacityDraft` / `_radiusDraft` / `_fontScaleDraft`) 驱动顶部预览舞台 60fps 实时响应，并在滑过默认值靶点时触发 `HapticFeedback.selectionClick()`；
