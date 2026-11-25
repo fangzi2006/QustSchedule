@@ -299,19 +299,7 @@
 
 ### 10.2 9 组课程色板 (`course_palette.dart` ⇄ `WidgetThemeResolver.kt`)
 
-索引：`CoursePalette.indexOf(name)` 对 `codeUnits` 做 31 位 FNV（初值 `2166136261`，乘数 `16777619`，`& 0x7fffffff`）`% 9`。
-
-| # | 色相 | 浅 bg / fg | 深 bg / fg |
-|---|---|---|---|
-| `0` | 蓝 | `#FFE6F1FB` / `#FF0C447C` | `#FF15293E` / `#FF9ECAFF` |
-| `1` | 青 | `#FFE1F5EE` / `#FF085041` | `#FF122C26` / `#FF8BE2CC` |
-| `2` | 绿 | `#FFEAF3DE` / `#FF27500A` | `#FF1B2E17` / `#FFA9DF9A` |
-| `3` | 琥珀 | `#FFFAEEDA` / `#FF633806` | `#FF332613` / `#FFF3C87D` |
-| `4` | 珊瑚 | `#FFFAECE7` / `#FF712B13` | `#FF352019` / `#FFF5B7A3` |
-| `5` | 粉 | `#FFFBEAF0` / `#FF72243E` | `#FF361D29` / `#FFF6B2CE` |
-| `6` | 紫 | `#FFEEEDFE` / `#FF3C3489` | `#FF25203E` / `#FFC5BFFF` |
-| `7` | 红 | `#FFFCEBEB` / `#FF791F1F` | `#FF381C1E` / `#FFF6B0B0` |
-| `8` | 灰 | `#FFF1EFE8` / `#FF444441` | `#FF272624` / `#FFD0CEC6` |
+- `WidgetThemeResolver.LIGHT_COURSE_COLORS` / `DARK_COURSE_COLORS` 与 `CoursePalette.colors` / `darkColors`（含 FNV-1a 哈希算法）保持 1:1 同步；完整 9 组色值与公式见唯一真源 [`UI_AND_TESTING.md`](UI_AND_TESTING.md) §3.3。
 
 ### 10.3 API 24–30 兼容与背景位图 (`WidgetBackgroundRenderer.kt`)
 

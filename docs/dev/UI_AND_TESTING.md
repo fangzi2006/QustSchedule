@@ -1,6 +1,6 @@
-# UI、物理动效与测试矩阵速查（UI & Testing Reference）
+# UI、物理动效与测试矩阵速查 (`UI_AND_TESTING.md`)
 
-> 覆盖 `lib/main.dart`、`lib/theme/*`、`lib/widgets/*`、`lib/pages/*`、`test/*`、`packages/zf_academic/test/*` 及 `.github/workflows/build-release.yml`。版本号唯一事实源为 `pubspec.yaml`（运行时 `lib/src/app_version.dart` `loadAppVersion()` 异步读取 `appVersion` / `appVersionFull`，严禁硬编码）。
+> 覆盖 `lib/main.dart`、`lib/theme/*`、`lib/widgets/*`、`lib/pages/*`、`test/*`、`packages/zf_academic/test/*` 及 `.github/workflows/build-release.yml`。
 
 ## 目录
 1. [文件速查路由](#1-文件速查路由)
@@ -38,8 +38,7 @@
 | `lib/widgets/changelog_category_badge.dart` | `ChangelogCategoryBadge` | 新增/优化/修复/碎碎念徽章（`AppColors.category*`） | `formatted_text_span_test`, `updater_test` |
 
 ### 1.2 页面索引（`lib/pages/*` 18 页）
-
-`home_shell.dart` (`HomeShell`, `_ShellPager`) · `schedule_page.dart` (`SchedulePage`, `showWeekPicker`, `showCalibrateSheet`, `showDayConflicts`) · `academic_page.dart` (`AcademicPage`, `NextExamHeroCard`, `isExamPast`, `sortAcademicExams`, `formatExamTimeLabel`) · `settings_page.dart` (`SettingsPage`) · `appearance_sheet.dart` (`showAppearanceSheet`) · `reschedule_page.dart` (`ReschedulePage`) · `timetable_list_page.dart` (`TimetableListPage`) · `timetable_edit_page.dart` (`TimetableEditPage`) · `school_address_page.dart` (`SchoolAddressPage`) · `login_page.dart` (`LoginPage`) · `captcha_page.dart` (`CaptchaPage`) · `debug_page.dart` (`DebugPage`) · `about_page.dart` (`AboutPage`, `LicenseTextPage`, `reflowLicenseBytes`, `kProjectHomeUrl`) · `changelog_page.dart` (`ChangelogPage`, `ReleaseLog`, `LogSection`, `parseChangelogBytes`, `parseChangelog`) · `update_dialog.dart` (`showUpdateDialog`, `showDownloadProgressDialog`) · `update_proxy_page.dart` (`UpdateProxyPage`) · `reminder_page.dart` (`ReminderPage`) · `widget_settings_page.dart` (`WidgetSettingsPage`, `computeWidgetSettingsSnapshots`)
+> 全量文件与导出见 [`FILE_MAP.md`](FILE_MAP.md) §1.5；各页 `Listenable` 订阅与交互契约见下方 §5。
 
 ---
 
@@ -48,9 +47,9 @@
 - **启动**：`WidgetsFlutterBinding.ensureInitialized()` → `unawaited(loadAppVersion())`（禁 `await` 阻塞首帧，未就绪前 `appVersion == '-'`）→ `CourseApp`（`theme: buildLightTheme()`、`scrollBehavior: AppScrollBehavior()`、`locale: Locale('zh', 'CN')`，支持 `zh_CN`/`en`）。
 - **`_AppShellState` 生命周期**：
   - `initState`（先挂监听再 `boot`）：① 仅 `TargetPlatform.android` 创建 `ReminderService` 与 `DesktopWidgetService`（桌面为 `null`）；② 订阅 `_model.hints` 与 `_model.routeNotifier` (`_onModelChanged`)；③ `_model.boot()`；④ `AppLifecycleListener(onShow: _onShown)`。
-  - `_onShown()`：`await _model.onAppShown()` → 并发 `_reminders?.syncNow(force: true)` 与 `_desktopWidgets?.syncNow(force: true)`（防系统强杀清闹钟后指纹未变漏排）。
+  - `_onShown()`：`await _model.onAppShown()`；满足 60s 同日冷却（`_foregroundForceSyncCooldown`）或跨天后，经 `_foregroundSyncTimer` 延迟 `600ms` 再触发 `_reminders?.syncNow(force: true)` 与 `_desktopWidgets?.syncNow(force: true)`（避开桌面小组件进场缩放动画）。
   - 存储异常：`_model.storageNoticeEvent != _lastStorageNoticeEvent` 且非 `booting` 时，post-frame 弹 `showAppSnackBar(type: error, aboveDock: status == ready, duration: 4s)`。
-  - `dispose` 顺序：`_lifecycle` → 移除监听器 → `_reminders?.dispose()` / `_desktopWidgets?.dispose()` → 最后 `_model.dispose()`。
+  - `dispose` 顺序：`_foregroundSyncTimer?.cancel()` → `_lifecycle` → 移除监听器 → `_reminders?.dispose()` / `_desktopWidgets?.dispose()` → 最后 `_model.dispose()`。
 - **顶层状态路由 `pageForStatus`**（`_AppShell.build` **仅**监听 `model.routeNotifier`）：
 
 | `AppModel.status` | 条件 | 目标页面 | 说明 |
