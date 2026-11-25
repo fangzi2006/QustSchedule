@@ -77,8 +77,11 @@ class _AppShellState extends State<_AppShell> {
   /// 桌面小组件编排层：仅 Android 有原生桌面小组件，桌面端不建。
   late final DesktopWidgetService? _desktopWidgets;
 
-  /// 前后台切换监听。只订阅 onShow（`hidden → inactive` 时触发）：
-  /// 手机切回前台、桌面端最小化后还原都会走到这里。
+  /// 前后台切换监听：
+  /// - `onShow`（`hidden → inactive`）：校正跨天日期/周次与按需静默刷新；
+  /// - `onResume`（`inactive → resumed`）：应用真正落稳前台后延时兜底同步提醒与小组件；
+  /// - `onInactive` / `onHide`：一旦开始退回桌面或失去焦点，立即取消尚未触发的延时强刷，
+  ///   杜绝在缩回桌面小组件动画途中抢占 UI 线程或向系统桌面推送更新。
   late final AppLifecycleListener _lifecycle;
   Timer? _foregroundSyncTimer;
   DateTime? _lastForegroundForceSyncAt;
@@ -99,7 +102,12 @@ class _AppShellState extends State<_AppShell> {
     _model.hints.addListener(_onModelChanged);
     _model.routeNotifier.addListener(_onModelChanged);
     _model.boot();
-    _lifecycle = AppLifecycleListener(onShow: () => unawaited(_onShown()));
+    _lifecycle = AppLifecycleListener(
+      onShow: () => unawaited(_onShown()),
+      onResume: _scheduleForegroundSyncIfNeeded,
+      onInactive: _cancelForegroundSyncTimer,
+      onHide: _cancelForegroundSyncTimer,
+    );
   }
 
   void _onModelChanged() {
@@ -134,13 +142,28 @@ class _AppShellState extends State<_AppShell> {
     });
   }
 
-  /// 回到前台：先校正日期/周次，再过一遍提醒。
+  bool get _isLifecycleResumed {
+    final state = WidgetsBinding.instance.lifecycleState;
+    return state == null || state == AppLifecycleState.resumed;
+  }
+
+  void _cancelForegroundSyncTimer() {
+    _foregroundSyncTimer?.cancel();
+    _foregroundSyncTimer = null;
+  }
+
+  /// 回到前台：先校正日期/周次，再在真正处于前台活跃态时安排提醒与小组件兜底恢复。
   ///
   /// 提醒**必须强制重排**：系统会在 force-stop、一键清理、覆盖安装时
   /// 清空闹钟，而指纹没变——不 force 就会漏排。
   Future<void> _onShown() async {
     await _model.onAppShown();
-    if (!mounted) return;
+    if (!mounted || !_isLifecycleResumed) return;
+    _scheduleForegroundSyncIfNeeded();
+  }
+
+  void _scheduleForegroundSyncIfNeeded() {
+    if (!mounted || !_isLifecycleResumed) return;
     if (_reminders == null && _desktopWidgets == null) return;
 
     // 短时间内在桌面小组件与应用之间频繁来回切换时，进程未被系统杀掉，
@@ -157,10 +180,12 @@ class _AppShellState extends State<_AppShell> {
     }
 
     // 提醒与桌面小组件的回前台兜底刷新统一延后至进场缩放动画落稳后再执行，
-    // 避免第 0 帧在 UI 线程同步规划 14 天日程/JSON 序列化与 Binder 通信引发掉帧。
+    // 避免第 0 帧在 UI 线程同步规划 14 天日程/JSON 序列化与 Binder 通信引发掉帧；
+    // 若 600ms 内用户已开始退回桌面（进入 inactive/hidden），定时器会被立即取消。
     _foregroundSyncTimer?.cancel();
     _foregroundSyncTimer = Timer(const Duration(milliseconds: 600), () {
-      if (!mounted) return;
+      _foregroundSyncTimer = null;
+      if (!mounted || !_isLifecycleResumed) return;
       _lastForegroundForceSyncAt = DateTime.now();
       if (_reminders != null) {
         unawaited(_reminders.syncNow(force: true));
@@ -173,8 +198,7 @@ class _AppShellState extends State<_AppShell> {
 
   @override
   void dispose() {
-    _foregroundSyncTimer?.cancel();
-    _foregroundSyncTimer = null;
+    _cancelForegroundSyncTimer();
     _lifecycle.dispose();
     _model.hints.removeListener(_onModelChanged);
     _model.routeNotifier.removeListener(_onModelChanged);

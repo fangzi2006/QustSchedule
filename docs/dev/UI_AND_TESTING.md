@@ -47,9 +47,9 @@
 - **启动**：`WidgetsFlutterBinding.ensureInitialized()` → `unawaited(loadAppVersion())`（禁 `await` 阻塞首帧，未就绪前 `appVersion == '-'`）→ `CourseApp`（`theme: buildLightTheme()`、`scrollBehavior: AppScrollBehavior()`、`locale: Locale('zh', 'CN')`，支持 `zh_CN`/`en`）。
 - **`_AppShellState` 生命周期**：
   - `initState`（先挂监听再 `boot`）：① 仅 `TargetPlatform.android` 创建 `ReminderService` 与 `DesktopWidgetService`（桌面为 `null`）；② 订阅 `_model.hints` 与 `_model.routeNotifier` (`_onModelChanged`)；③ `_model.boot()`；④ `AppLifecycleListener(onShow: _onShown)`。
-  - `_onShown()`：`await _model.onAppShown()`；满足 60s 同日冷却（`_foregroundForceSyncCooldown`）或跨天后，经 `_foregroundSyncTimer` 延迟 `600ms` 再触发 `_reminders?.syncNow(force: true)` 与 `_desktopWidgets?.syncNow(force: true)`（避开桌面小组件进场缩放动画）。
+  - `_onShown()` / 生命周期：`onShow` 调 `await _model.onAppShown()`；`onResume`（或已处 `resumed`）且满足 60s 同日冷却（`_foregroundForceSyncCooldown`）或跨天后，经 `_foregroundSyncTimer` 延迟 `600ms` 触发 `_reminders?.syncNow(force: true)` 与 `_desktopWidgets?.syncNow(force: true)`；进入 `onInactive` / `onHide` 立即 `_cancelForegroundSyncTimer()` 取消未触发定时器，杜绝退回桌面动画中途强刷。
   - 存储异常：`_model.storageNoticeEvent != _lastStorageNoticeEvent` 且非 `booting` 时，post-frame 弹 `showAppSnackBar(type: error, aboveDock: status == ready, duration: 4s)`。
-  - `dispose` 顺序：`_foregroundSyncTimer?.cancel()` → `_lifecycle` → 移除监听器 → `_reminders?.dispose()` / `_desktopWidgets?.dispose()` → 最后 `_model.dispose()`。
+  - `dispose` 顺序：`_cancelForegroundSyncTimer()` → `_lifecycle` → 移除监听器 → `_reminders?.dispose()` / `_desktopWidgets?.dispose()` → 最后 `_model.dispose()`。
 - **顶层状态路由 `pageForStatus`**（`_AppShell.build` **仅**监听 `model.routeNotifier`）：
 
 | `AppModel.status` | 条件 | 目标页面 | 说明 |

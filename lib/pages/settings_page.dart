@@ -503,6 +503,12 @@ class _ReminderAndWidgetCardState extends State<_ReminderAndWidgetCard>
   int _statusEpoch = 0;
   ReminderRuntimeStatus? _pendingStatus;
   int _pendingStatusEpoch = 0;
+  bool _pendingResumeRefresh = false;
+
+  bool get _isTabActive =>
+      mounted &&
+      TickerMode.valuesOf(context).enabled &&
+      (ModalRoute.of(context)?.isCurrent ?? true);
 
   @override
   void initState() {
@@ -510,6 +516,15 @@ class _ReminderAndWidgetCardState extends State<_ReminderAndWidgetCard>
     WidgetsBinding.instance.addObserver(this);
     if (widget.reminders != null) {
       unawaited(_refreshStatus(deferUntilSettled: true));
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_pendingResumeRefresh && _isTabActive && widget.reminders != null) {
+      _pendingResumeRefresh = false;
+      unawaited(_refreshStatus());
     }
   }
 
@@ -524,6 +539,7 @@ class _ReminderAndWidgetCardState extends State<_ReminderAndWidgetCard>
     if (widget.reminders != oldWidget.reminders) {
       _statusEpoch++;
       _pendingStatus = null;
+      _pendingResumeRefresh = false;
       _statusNotifier.value = widget.reminders?.lastStatus;
       if (widget.reminders != null) {
         unawaited(_refreshStatus());
@@ -541,7 +557,14 @@ class _ReminderAndWidgetCardState extends State<_ReminderAndWidgetCard>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && widget.reminders != null) {
-      unawaited(_refreshStatus());
+      // 设置页离屏常驻于 HomeShell，仅当前实际停留在设置页时立即查询原生提醒权限状态；
+      // 停留在课表/学业页频繁往返桌面小组件时跳过冗余 Binder 查询，切回设置页时再补刷。
+      if (_isTabActive) {
+        _pendingResumeRefresh = false;
+        unawaited(_refreshStatus());
+      } else {
+        _pendingResumeRefresh = true;
+      }
     }
   }
 
