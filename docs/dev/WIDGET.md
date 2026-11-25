@@ -11,7 +11,7 @@
 | [`lib/src/widget_style.dart`](../../lib/src/widget_style.dart) | `DesktopWidgetKind`, `WidgetThemeMode`, `WidgetDensity`, `FinishedCourseMode`, `WeekendColumnMode`, `WidgetStylePreset`, `WidgetStylePresetSpec`, `DesktopWidgetStyle`, `DesktopWidgetConfigSet` | 样式模型、5 套预设 `widgetStylePresets`、夹取量化（`widgetMinOpacity`/`Max` `0.0..1.0`, `widgetMinCornerRadius`/`Max` `8.0..28.0`, `widgetMinFontScale`/`Max` `0.75..1.20`）、`clampWidget*()`, `applyPreset()`, `copyWith()`, `defaultsFor()` |
 | [`lib/src/widget_planner.dart`](../../lib/src/widget_planner.dart) | `WidgetTimelineItem`, `WidgetDayPlan`, `WidgetUpcomingExam`, `WidgetWeekBlock`, `WidgetWeekPlan`, `WidgetSnapshot`, `buildWidgetSnapshot()`, `buildSignedOutWidgetSnapshot()` | 纯函数离线规划：14 天日程+考试、30 天未结束考试、2~3 周网格、FNV-1a 指纹；`widgetSnapshotVersion=1`, `widgetHorizonDays=14`, `widgetUpcomingExamWindowDays=7`, `widgetExamSnapshotMaxDays=30`, `_computeSnapshotFingerprint()`, `_fnv1a()`, `_stableCourseId` (`c_<hex8>`), `_stableExamId` (`x_<hex8>`) |
 | [`lib/src/widget_gateway.dart`](../../lib/src/widget_gateway.dart) | `DesktopWidgetGateway`, `MethodChannelDesktopWidgetGateway` | `qustschedule/widget` 通道封装：`syncSnapshot()`, `clearSnapshot()`, `requestPinWidget()`, `getPinnedCounts()`, `livePinnedCounts` (`ValueNotifier`), `ensurePushHandlerInstalled()` |
-| [`lib/src/widget_service.dart`](../../lib/src/widget_service.dart) | `WidgetSnapshotInput`, `DesktopWidgetService` | 监听 `AppModel`/`academicNotifier`/`prefsNotifier`；`preferencesLoaded` 守卫、300ms 防抖、单飞队列、指纹去重、跨学期考试隔离；`syncNow({force})`, `captureSnapshotInput()`, `buildSnapshot()`, `clearAll()`, `requestPinWidget()`, `getPinnedCounts()`, `ensureLivePinnedUpdates()`, `_syncEpoch` |
+| [`lib/src/widget_service.dart`](../../lib/src/widget_service.dart) | `WidgetSnapshotInput`, `DesktopWidgetService` | 监听 `AppModel`/`academicNotifier`/`prefsNotifier`；`preferencesLoaded` 守卫、300ms 防抖、单飞队列、指纹去重与同指纹 `_lastPayloadJson` 复用、跨学期考试隔离；`syncNow({force})`, `captureSnapshotInput()`, `buildSnapshot()`, `clearAll()`, `requestPinWidget()`, `getPinnedCounts()`, `ensureLivePinnedUpdates()`, `_syncEpoch` |
 | [`lib/pages/widget_settings_page.dart`](../../lib/pages/widget_settings_page.dart) | `WidgetSettingsPage`, `computeWidgetSettingsSnapshots()`, `_PreviewStageHeaderDelegate`, `_KindSegmentedHeader`, `_PresetStrip`, `_ZOrderedRow`, `_LabeledSliderTile`, `_WidgetTickedTrackShape` | 吸顶折叠预览、后台 Isolate 预计算、滑块草稿 (`_opacityDraft`/`_radiusDraft`/`_fontScaleDraft`)、`_useSampleData`, `_todayNarrow`, `_nextWide`, `_wallpaper`, `_pinnedCounts`, `_commitStyle()`, `_resetCurrentKind()`, `_pinSelectedWidget()` |
 | [`lib/widgets/desktop_widget_preview.dart`](../../lib/widgets/desktop_widget_preview.dart) | `DesktopWidgetPreview`, `PreviewWallpaper`, `samplePreviewClock()`, `buildSampleWidgetSnapshot()`, `_PreviewColors`, `_TodayPreviewCard`, `_WeekPreviewCard`, `_NextPreviewCard` | 像素级同构预览、10:40 示例快照、`_resolveTodayForPreview()`, `_resolveNextForPreview()`, `_resolveWeekForPreview()`, `_solvePreviewBlockPlan()`, `_cornerClearance()` |
 
@@ -24,7 +24,7 @@
 | [`WidgetStore.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetStore.kt) | `WidgetStore`, `WidgetSnapshotModel`, `WidgetStyleData`, `TimelineItemData`, `DayPlanData`, `UpcomingExamData`, `WeekBlockData`, `WeekPlanData` | `SharedPreferences` (`qust_desktop_widget_v1`) + 内存缓存；`KIND_TODAY`/`KIND_WEEK`/`KIND_NEXT`, `kindSignature()`, `saveSnapshot()`, `loadSnapshot()`, `saveTodayHeaderSig()`, `saveTodayWidthDp()`, `bumpTodayRevision()`, `saveLastWeekRenderDateIso()`, `clear()` |
 | [`WidgetContentResolver.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetContentResolver.kt) | `WidgetContentResolver`, `TodayWidgetViewModel`, `NextWidgetViewModel`, `WeekWidgetViewModel`, `NextStatusKind`, `WidgetRefreshPlan` | `UPCOMING_EXAM_WINDOW_DAYS = 7`, `resolveToday()`, `resolveNext()`, `resolveWeek()`, `computeNextRefreshPlan()`, `formatTimeRange()`, `calendarDayDiff()` |
 | [`WidgetThemeResolver.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetThemeResolver.kt) | `WidgetThemeResolver`, `ResolvedWidgetTheme`, `CourseChipColor`, `WidgetPillTone` | 主题/动态取色/`<35%` 提对比/9 色板/API 24–30 兼容：`LIGHT_COURSE_COLORS`, `DARK_COURSE_COLORS`, `resolve()`, `applyPill()`, `applyRoundedBackground()`, `clearBackground()`, `applyVerticalBar()` |
-| [`WidgetBackgroundRenderer.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetBackgroundRenderer.kt) | `WidgetBackgroundRenderer` | `MAX_BG_DIMENSION_PX = 1080`, `resolveSizeDp()`, `cornerClearanceDp()`, `render()`, `toImmutableAshmemFriendly()` |
+| [`WidgetBackgroundRenderer.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetBackgroundRenderer.kt) | `WidgetBackgroundRenderer` | `MAX_BG_DIMENSION_PX = 1080`, `resolveSizeDp()`, `cornerClearanceDp()`, `render()`, `toImmutableAshmemFriendly()` (`asShared()` + `prepareToDraw()`) |
 | [`WidgetCoordinator.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetCoordinator.kt) | `WidgetCoordinator`, `ActiveWidgetFlags` | 差量重绘、实例统计、`PendingIntent` 工厂：`RC_LAUNCH_IMMUTABLE=3101`, `RC_LAUNCH_TEMPLATE=3102`, `RC_PIN_CALLBACK=3103`, `refreshChangedWidgets()`, `refreshAllWidgets()`, `refreshForScheduledAlarm()`, `syncAlarmState()`, `getPinnedCounts()` |
 | [`WidgetRefreshScheduler.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetRefreshScheduler.kt) | `WidgetRefreshScheduler` | 单条 `RTC_WAKEUP` 闹钟：`ACTION_REFRESH_WIDGETS`, `ACTION_WIDGET_PINNED`, `EXTRA_INCLUDE_WEEK="include_week"`, `RC_WIDGET_REFRESH=3001`, `scheduleNext()`, `cancel()` |
 | [`WidgetRefreshReceiver.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetRefreshReceiver.kt) | `WidgetRefreshReceiver` | `onReceive()` 处理闹钟、Pin 回调、开机、覆盖安装、时间/时区/日期与精确闹钟权限广播 |
@@ -32,8 +32,8 @@
 | [`TodayWidgetService.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/TodayWidgetService.kt) | `TodayWidgetService`, `TodayRemoteViewsFactory` | API 24–30 `ListView` 适配器 + 顶栏自愈：`onGetViewFactory()`, `onDataSetChanged()`, `getViewAt()` |
 | [`TodayItemViewBinder.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/TodayItemViewBinder.kt) | `TodayItemViewBinder` | `isNarrowWidth(widthDp)` (`< 200`), `buildItemView()` |
 | [`NextClassWidgetProvider.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/NextClassWidgetProvider.kt) | `NextClassWidgetProvider` | `updateAll()`, `isStrip` (`hDp < 100`), `isUltraCompactStrip` (`isStrip && wDp < 195`), `isSpaciousTall` (`!isStrip && wDp >= 220`) |
-| [`WeekGridWidgetProvider.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WeekGridWidgetProvider.kt) | `WeekGridWidgetProvider` | `updateAll()`, `updateWidgetWithSnapshot()`（写入 `last_week_render_date_iso`） |
-| [`WeekGridCanvasRenderer.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WeekGridCanvasRenderer.kt) | `WeekGridCanvasRenderer` | `MIN_PIXELS_CEILING=640_000f`, `MAX_PIXELS_CEILING=1_050_000f`, `render()`, `solveCourseBlockPlan()`, `buildBlockLayout()` |
+| [`WeekGridWidgetProvider.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WeekGridWidgetProvider.kt) | `WeekGridWidgetProvider` | `WeekRenderKey` + `onAppWidgetOptionsChanged` 无变化跳过：`updateAll()`, `clearRenderCache()`, `updateWidgetWithSnapshot()`（写入 `last_week_render_date_iso`） |
+| [`WeekGridCanvasRenderer.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WeekGridCanvasRenderer.kt) | `WeekGridCanvasRenderer` | `MIN_PIXELS_CEILING=640_000f`, `MAX_PIXELS_CEILING=1_050_000f`, `render()`, `solveCourseBlockLayouts()`, `buildBlockLayout()` |
 
 ---
 
@@ -47,7 +47,7 @@
 | 修改 9 色板 | [`lib/theme/course_palette.dart`](../../lib/theme/course_palette.dart) + [`WidgetThemeResolver.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetThemeResolver.kt) | 浅/深 9 组 ARGB 与顺序 100% 一致 |
 | 修改主题/胶囊对比度 | [`WidgetThemeResolver.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetThemeResolver.kt) + [`desktop_widget_preview.dart`](../../lib/widgets/desktop_widget_preview.dart) (`_PreviewColors`) + `res/drawable/widget_pill_*.xml` / `widget_row_highlight_*.xml` | 纯色提对比、无文字阴影；两端同构 |
 | 修改展示文案/筛选 | [`WidgetContentResolver.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetContentResolver.kt) + [`desktop_widget_preview.dart`](../../lib/widgets/desktop_widget_preview.dart) (`_resolve*ForPreview`) | Kotlin 与 Dart 逻辑/文案 100% 同构 |
-| 修改周网格行数求解 | [`WeekGridCanvasRenderer.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WeekGridCanvasRenderer.kt) (`solveCourseBlockPlan`) + [`desktop_widget_preview.dart`](../../lib/widgets/desktop_widget_preview.dart) (`_solvePreviewBlockPlan`) | 与主课表 `CourseBlock._BlockPlan` 优先级一致 |
+| 修改周网格行数求解 | [`WeekGridCanvasRenderer.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WeekGridCanvasRenderer.kt) (`solveCourseBlockLayouts`) + [`desktop_widget_preview.dart`](../../lib/widgets/desktop_widget_preview.dart) (`_solvePreviewBlockPlan`) | 与主课表 `CourseBlock._BlockPlan` 优先级一致 |
 | 新增第 4 种形态 | `DesktopWidgetKind` + `*WidgetProvider.kt` + `res/xml` + `res/layout` + `AndroidManifest.xml` + `WidgetStore` (`KIND_*`/`kindSignature`) + `WidgetCoordinator` (`ActiveWidgetFlags`/`componentForKind`) | `computeNextRefreshPlan` 按是否依赖上下课节点设闹钟 |
 
 ---
@@ -183,9 +183,9 @@
 
 - **三路监听**：`model`、`model.academicNotifier`、`model.prefsNotifier` → `_onChanged`。
 - **`preferencesLoaded` 守卫**：`false` 时 `captureSnapshotInput()` 返回 `null`，`_syncOnce()` 返回 `false`，防冷启动默认样式覆盖磁盘样式。
-- **300ms 防抖 + 单飞队列 (`_runSyncLoop`)**：变更触发 300ms `_timer`；`_syncInFlight` 在途时不并发，置 `_resyncQueued = true`、`force` 累积到 `_resyncForceQueued`，本轮结束后 `while (!_disposed)` 续跑。
+- **300ms 防抖 + 单飞队列 (`_runSyncLoop`) + 同指纹载荷复用**：变更触发 300ms `_timer`；`_syncInFlight` 在途时不并发，置 `_resyncQueued = true`、`force` 累积到 `_resyncForceQueued`，本轮结束后 `while (!_disposed)` 续跑；`force == true` 且指纹与 `_lastFingerprint` 一致时直接复用 `_lastPayloadJson`，省去重复 `jsonEncode` 并使原生 `WidgetStore` O(1) 命中缓存。
 - **跨学期考试隔离**：仅当 `model.loadedAcademicTerm == schedule.termId` 时传入 `model.exams`。
-- **退出空态 vs `clearAll()`**：`schedule == null || termStart == null` 下发 `WidgetSnapshotInput.signedOut(styles, now)`（清空隐私、保留样式）；`clearAll()` 递增 `_syncEpoch++`、取消定时器、清空 `_lastFingerprint`/`_lastSnapshot`，`await` 在途 `_syncInFlight` 后再调 `_gateway.clearSnapshot()`。
+- **退出空态 vs `clearAll()`**：`schedule == null || termStart == null` 下发 `WidgetSnapshotInput.signedOut(styles, now)`（清空隐私、保留样式）；`clearAll()` 递增 `_syncEpoch++`、取消定时器、清空 `_lastFingerprint`/`_lastPayloadJson`/`_lastSnapshot`，`await` 在途 `_syncInFlight` 后再调 `_gateway.clearSnapshot()`。
 
 ---
 
@@ -200,7 +200,7 @@
 ### 8.2 `WidgetStore.kt`
 
 - `PREF_NAME = "qust_desktop_widget_v1"`，写盘同步 `.commit()`。
-- **内存缓存与零冗余写盘**：`@Volatile cachedRawJson` / `cachedModel`；`loadSnapshot()` 命中缓存 O(1) 返回；`saveSnapshot()` 与 `saveLastWeekRenderDateIso()` 内容未变直接跳过 `.commit()`；`clear()` 同步清缓存。
+- **内存缓存与零冗余写盘**：`@Volatile cachedRawJson` / `cachedModel`；`loadSnapshot()` 命中缓存 O(1) 返回；`saveSnapshot()` 在原文一致或解析模型 `(fingerprint, data)` 与已存一致时直接跳过 `.commit()`，`saveLastWeekRenderDateIso()` 同值跳过 `.commit()`；`clear()` 同步清缓存并调 `WeekGridWidgetProvider.clearRenderCache()`。
 
 | Key | 类型 | 用途 |
 |---|---|---|
@@ -214,7 +214,7 @@
 
 - **`kindSignature(kind)` 差量**：`KIND_WEEK` 仅哈希 `(version, signedIn, termId, termStartIso, maxWeek, weeks, styleOf(KIND_WEEK))`；`KIND_TODAY`/`KIND_NEXT` 哈希 `(version, signedIn, termId, termStartIso, maxWeek, days, upcomingExams, styleOf(kind))`。改单类样式仅重绘该类。
 - **`forceTimeWidgets` 兜底**：三类签名均未变且 `weekDateStale == false`（如回前台 600ms 后的 `syncNow(force: true)`）时，仅置 `forceTimeWidgets = true` 重绘今日/下一节，**不重绘周位图**。
-- **启动 Intent**：显式指向 `MainActivity`，`ACTION_MAIN` + `CATEGORY_LAUNCHER` + `FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_RESET_TASK_IF_NEEDED`，配合 `MainActivity.getRenderMode() = RenderMode.texture` + 浅色 `NormalTheme` 消除进出场黑闪。
+- **启动与返回衔接**：显式指向 `MainActivity`，`ACTION_MAIN` + `CATEGORY_LAUNCHER` + `FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_RESET_TASK_IF_NEEDED`；保持默认 `RenderMode.surface`（避免 `RenderMode.texture` 在 Impeller Vulkan 下多次前后台切换引发交换链阻塞）配合浅色 `LaunchTheme`/`NormalTheme` 与 `MainActivity.popSystemNavigator()` 根栈 `moveTaskToBack(true)`，兼顾零黑闪与反复切换流畅度。
 - **RequestCode 分配（严禁与 `reminder/` 的 `2000~2003` 冲突）**：
 
 | RC | 常量 | 类型 | Flag | 用途 |
@@ -307,7 +307,7 @@
 - `applyVerticalBar`：对 `widget_bar_pill` 传不透明 `setColorFilter(color or 0xFF000000.toInt())` + `setImageAlpha(105 | 255)`，防 `SRC_ATOP` 叠白泛白。
 - `resolveSizeDp`：竖屏 `(MIN_WIDTH, MAX_HEIGHT)`、横屏 `(MAX_WIDTH, MIN_HEIGHT)`，0 互退，默认今日 `260×140` / 下一节 `150×140` / 本周 `300×280`。
 - `cornerClearanceDp`：`opacity <= 0.01f ? 0f : cornerRadius * 0.30f`。
-- `render` / `toImmutableAshmemFriendly`：`MAX_BG_DIMENSION_PX = 1080`，绘完 `mutable.copy(ARGB_8888, false)` + `mutable.recycle()` 走 Ashmem。
+- `render` / `toImmutableAshmemFriendly`：`MAX_BG_DIMENSION_PX = 1080`；API 31+ 调 `mutable.asShared()`、API 24–30 调 `mutable.copy(ARGB_8888, false)` 转不可变 Ashmem Bitmap，回收 `mutable` 并调 `prepareToDraw()`。
 
 ---
 
@@ -332,11 +332,11 @@
 
 ### 11.3 本周课表 (`WeekGridWidgetProvider` / `WeekGridCanvasRenderer`)
 
-- **位图像素上限**：`screenPixels = max(dm.widthPixels * dm.heightPixels, 640_000f)`，`maxPixels = min(screenPixels * 0.55f, 1_050_000f).coerceAtLeast(640_000f)`（`MIN_PIXELS_CEILING=640_000f`, `MAX_PIXELS_CEILING=1_050_000f`），超限按 `sqrt(maxPixels / rawPixels)` 缩放，绘完转 `toImmutableAshmemFriendly`。
+- **位图像素上限与选项去重**：`screenPixels = max(dm.widthPixels * dm.heightPixels, 640_000f)`，`maxPixels = min(screenPixels * 0.55f, 1_050_000f).coerceAtLeast(640_000f)`（`MIN_PIXELS_CEILING=640_000f`, `MAX_PIXELS_CEILING=1_050_000f`），超限按 `sqrt(maxPixels / rawPixels)` 缩放并转 `toImmutableAshmemFriendly`；`WeekGridWidgetProvider` 按 `WeekRenderKey` 记录各实例已推签名，`onAppWidgetOptionsChanged` 未变化时跳过重绘与 `updateAppWidget`。
 - **透明与底边**：`hasVisibleCard = opacity > 0.01f`；为真时绘圆角底/1dp 边框 + `clipPath` 内缩 1dp、`padBottom = stroke`；为假（0% 透明）时跳过底/裁切/`clearance=0`，课程块保持 100% 实色 `chip.background`。
 - **表头与轴**：顶栏（`showHeader`）左起点 `contentLeft + (hasVisibleCard ? 2.5dp : 0)`，「第 X 周」(`11dp*scale` 粗 `accentColor`) + 间距 `6dp` + `dateRange` (`9.2dp*scale` `secondaryTextColor`)；单行星期 `"一".."五/七"`，仅 `isCurrentWeek && d == todayWeekday` 绘 `4.5dp` 胶囊 + `4dp` 整列高亮；`axisWidth = max(dp(compact?16f:19f), axisPaint.measureText(maxSection) + dp(6f))`（预览 `max(16/19, 14.5*scale+5.5)`）。
 - **空周提示**：无可见块时，`blocks.isEmpty()` 绘 `"本周无课，好好休息"`，否则绘 `"工作日无课，周末有安排"`。
-- **三段式排版求解 (`solveCourseBlockPlan` / `_solvePreviewBlockPlan`)**：居中 `ALIGN_CENTER`、`letterSpacing=0f`，顺序：课名 → 教师 (`showTeacher`) → 地点 (`showLocation`)。(1) 无限制测 `(titleNeeded, teacherNeeded, locationNeeded)`；(2) 溢出按 `title->1` → `teacher->0` → `location->1` → `location->0` → `title->0` 递减；(3) 余量按 `location++` → `teacher=teacherNeeded` → `title++` 回填，全显后仍有 >1 行课名空间则加 `titleLines`。`block.rescheduled` 右上角 `(right-4dp, top+4dp)` 绘 `r=2.1dp` `rescheduleDotColor` 圆点。
+- **三段式排版求解 (`solveCourseBlockLayouts` / `_solvePreviewBlockPlan`)**：居中 `ALIGN_CENTER`、`letterSpacing=0f`，顺序：课名 → 教师 (`showTeacher`) → 地点 (`showLocation`)，缓存并直接复用求解期生成的 `StaticLayout` 实例。(1) 无限制测 `(titleNeeded, teacherNeeded, locationNeeded)`；(2) 溢出按 `title->1` → `teacher->0` → `location->1` → `location->0` → `title->0` 递减；(3) 余量按 `location++` → `teacher=teacherNeeded` → `title++` 回填，全显后仍有 >1 行课名空间则加 `titleLines`。`block.rescheduled` 右上角 `(right-4dp, top+4dp)` 绘 `r=2.1dp` `rescheduleDotColor` 圆点。
 
 ---
 
@@ -402,7 +402,7 @@ flutter test test/widget_style_test.dart test/widget_planner_test.dart test/widg
 |---|---|
 | [`test/widget_style_test.dart`](../../test/widget_style_test.dart) | 5 预设解耦（不改密度/字号/内容开关）、5% 步进、`copyWith` 切 `custom`、「莫奈取色」≠「壁纸取色」、夹取与畸形 JSON / `schema 13->14` 容错 |
 | [`test/widget_planner_test.dart`](../../test/widget_planner_test.dart) | 14 天混排、调课标记、`roomOnly`、7/30 天考试、FNV-1a 对 `now` 幂等、同槽冲突分栏、节次倒挂与空白防御 |
-| [`test/widget_service_test.dart`](../../test/widget_service_test.dart) | `preferencesLoaded==false` 拦截、同指纹跳过/`force:true`、样式防抖重发、跨学期考试隔离、登出 `signedIn:false`、`clearAll()` 等待在途同步 |
+| [`test/widget_service_test.dart`](../../test/widget_service_test.dart) | `preferencesLoaded==false` 拦截、同指纹跳过/`force:true` 载荷复用、样式防抖重发、跨学期考试隔离、登出 `signedIn:false`、`clearAll()` 等待在途同步 |
 | [`test/widget_settings_page_test.dart`](../../test/widget_settings_page_test.dart) | `4×2`/`2×2` 全起止时间、周一至周日示例完整、`autoSwitchTomorrow`/`compactCue`、`showLocation` 控座位号、14 天超期 vs 假期结束、第 8 天显第 3 周、周末 `"auto"`/真实周高亮/空周与周末提示/12 节 `120%`+`2.0×` 零溢出、拖滑块 10 帧 `buildSnapshotCalls==0` 抬手仅同步 1 次、恢复默认 SnackBar 撤销、`360×640`+`2.0×` 零溢出 |
 
 ### 15.2 防雷铁律
@@ -411,5 +411,5 @@ flutter test test/widget_style_test.dart test/widget_planner_test.dart test/widg
 - **字体单位**：RemoteViews 用 `COMPLEX_UNIT_DIP`（XML 用 `dp`），Canvas 用 `density * fontScale`，Flutter 预览包 `TextScaler.noScaling`。
 - **透明与对比**：`<35%` 用 `lowOpacityFactor` 纯色插值（无文字阴影），两端同构；`0%` 隐背景、跳 `clipPath` 与 `cornerClearanceDp`。
 - **API 24–30 兼容**：圆角背景用 `applyRoundedBackground` 切 drawable（禁 `setBackgroundColor`）；竖条用 `applyVerticalBar` 不透明 RGB + `setImageAlpha`。
-- **周位图性能**：上下课闹钟 `includeWeek=false`；像素上限 `min(screenPixels*0.55, 1_050_000)` 并转不可变 Bitmap 走 Ashmem。
+- **周位图性能**：上下课闹钟 `includeWeek=false`；像素上限 `min(screenPixels*0.55, 1_050_000)`，转不可变 Ashmem Bitmap（API 31+ `asShared()`）并 `prepareToDraw()`；严禁 `Bitmap.Config.HARDWARE`（防 `AppWidgetHostView` 软件绘制崩溃）。
 - **滑块与预设**：`onChanged` 仅改草稿，`onChangeEnd` 才持久化并 `syncNow()`；预设不覆盖 `density`/`fontScale`/内容开关。

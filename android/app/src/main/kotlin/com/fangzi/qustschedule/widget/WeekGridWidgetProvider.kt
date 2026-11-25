@@ -30,12 +30,20 @@ class WeekGridWidgetProvider : AppWidgetProvider() {
     ) {
         WidgetWorker.runBroadcastAsync(this, TAG) {
             val snapshot = WidgetStore.loadSnapshot(context)
-            updateWidgetWithSnapshot(context, appWidgetManager, appWidgetId, newOptions, snapshot)
+            updateWidgetWithSnapshot(
+                context,
+                appWidgetManager,
+                appWidgetId,
+                newOptions,
+                snapshot,
+                skipIfUnchanged = true,
+            )
         }
     }
 
     override fun onDeleted(context: Context, appWidgetIds: IntArray) {
         WidgetWorker.runBroadcastAsync(this, TAG) {
+            removeCachedWidgetIds(appWidgetIds)
             WidgetCoordinator.syncAlarmState(context)
             WidgetCoordinator.notifyPinnedCountsChanged(context)
         }
@@ -43,6 +51,7 @@ class WeekGridWidgetProvider : AppWidgetProvider() {
 
     override fun onDisabled(context: Context) {
         WidgetWorker.runBroadcastAsync(this, TAG) {
+            clearRenderCache()
             WidgetCoordinator.syncAlarmState(context)
             WidgetCoordinator.notifyPinnedCountsChanged(context)
         }
@@ -50,6 +59,37 @@ class WeekGridWidgetProvider : AppWidgetProvider() {
 
     companion object {
         private const val TAG = "WeekGridWidgetProvider"
+
+        private data class WeekRenderKey(
+            val widthDp: Int,
+            val heightDp: Int,
+            val screenWidthPx: Int,
+            val screenHeightPx: Int,
+            val densityBits: Int,
+            val isDark: Boolean,
+            val surfaceColor: Int,
+            val accentColor: Int,
+            val todayIso: String,
+            val snapshotFingerprint: String,
+            val weekSignature: Int,
+        )
+
+        private val cacheLock = Any()
+        private val pushedKeyByWidgetId = HashMap<Int, WeekRenderKey>()
+
+        internal fun clearRenderCache() {
+            synchronized(cacheLock) {
+                pushedKeyByWidgetId.clear()
+            }
+        }
+
+        private fun removeCachedWidgetIds(appWidgetIds: IntArray) {
+            synchronized(cacheLock) {
+                for (id in appWidgetIds) {
+                    pushedKeyByWidgetId.remove(id)
+                }
+            }
+        }
 
         fun updateAll(context: Context, manager: AppWidgetManager): IntArray {
             val ids = manager.getAppWidgetIds(ComponentName(context, WeekGridWidgetProvider::class.java))
@@ -77,12 +117,37 @@ class WeekGridWidgetProvider : AppWidgetProvider() {
             appWidgetId: Int,
             options: Bundle?,
             snapshot: WidgetSnapshotModel?,
+            skipIfUnchanged: Boolean = false,
         ) {
             val style = snapshot?.styleOf(KIND_WEEK) ?: WidgetStyleData.defaultFor(KIND_WEEK)
             val theme = WidgetThemeResolver.resolve(context, style)
             val nowMs = System.currentTimeMillis()
-            val vm = WidgetContentResolver.resolveWeek(snapshot, style, nowMs)
+            val todayIso = WidgetContentResolver.formatIsoDate(nowMs)
             val (wDp, hDp) = WidgetBackgroundRenderer.resolveSizeDp(context, options, 300, 280)
+            val dm = context.resources.displayMetrics
+            val renderKey = WeekRenderKey(
+                widthDp = wDp,
+                heightDp = hDp,
+                screenWidthPx = dm.widthPixels,
+                screenHeightPx = dm.heightPixels,
+                densityBits = dm.density.toRawBits(),
+                isDark = theme.isDark,
+                surfaceColor = theme.surfaceColor,
+                accentColor = theme.accentColor,
+                todayIso = todayIso,
+                snapshotFingerprint = snapshot?.fingerprint ?: "",
+                weekSignature = snapshot?.kindSignature(KIND_WEEK) ?: 0,
+            )
+
+            if (skipIfUnchanged) {
+                synchronized(cacheLock) {
+                    if (pushedKeyByWidgetId[appWidgetId] == renderKey) {
+                        return
+                    }
+                }
+            }
+
+            val vm = WidgetContentResolver.resolveWeek(snapshot, style, nowMs)
             val bitmap = WeekGridCanvasRenderer.render(context, style, theme, vm, wDp, hDp)
 
             val views = RemoteViews(context.packageName, R.layout.widget_week)
@@ -92,7 +157,10 @@ class WeekGridWidgetProvider : AppWidgetProvider() {
                 WidgetCoordinator.createLaunchPendingIntent(context),
             )
             manager.updateAppWidget(appWidgetId, views)
-            WidgetStore.saveLastWeekRenderDateIso(context, WidgetContentResolver.formatIsoDate(nowMs))
+            synchronized(cacheLock) {
+                pushedKeyByWidgetId[appWidgetId] = renderKey
+            }
+            WidgetStore.saveLastWeekRenderDateIso(context, todayIso)
         }
     }
 }

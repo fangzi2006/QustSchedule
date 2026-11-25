@@ -300,7 +300,11 @@ internal object WeekGridCanvasRenderer {
                 val teacherText = if (style.showTeacher) block.teacher.trim() else ""
                 val locationText = if (style.showLocation) block.location.trim() else ""
 
-                val plan = solveCourseBlockPlan(
+                titlePaint.color = chip.foreground
+                teacherPaint.color = WidgetThemeResolver.withAlpha(chip.foreground, 0xBD)
+                locationPaint.color = WidgetThemeResolver.withAlpha(chip.foreground, 0xCB)
+
+                val layouts = solveCourseBlockLayouts(
                     titleText = titleText,
                     teacherText = teacherText,
                     locationText = locationText,
@@ -308,31 +312,11 @@ internal object WeekGridCanvasRenderer {
                     availH = availH,
                     fieldGap = fieldGap,
                     titlePaint = titlePaint,
-                    detailPaint = locationPaint,
+                    teacherPaint = teacherPaint,
+                    locationPaint = locationPaint,
                     titleLineMult = titleLineMult,
                     detailLineMult = detailLineMult,
                 )
-
-                titlePaint.color = chip.foreground
-                teacherPaint.color = WidgetThemeResolver.withAlpha(chip.foreground, 0xBD)
-                locationPaint.color = WidgetThemeResolver.withAlpha(chip.foreground, 0xCB)
-
-                val layouts = ArrayList<StaticLayout>(3)
-                if (plan.titleLines > 0 && titleText.isNotEmpty()) {
-                    layouts.add(
-                        buildBlockLayout(titleText, titlePaint, availW, plan.titleLines, titleLineMult),
-                    )
-                }
-                if (plan.teacherLines > 0 && teacherText.isNotEmpty()) {
-                    layouts.add(
-                        buildBlockLayout(teacherText, teacherPaint, availW, plan.teacherLines, detailLineMult),
-                    )
-                }
-                if (plan.locationLines > 0 && locationText.isNotEmpty()) {
-                    layouts.add(
-                        buildBlockLayout(locationText, locationPaint, availW, plan.locationLines, detailLineMult),
-                    )
-                }
 
                 if (layouts.isNotEmpty()) {
                     var totalH = 0f
@@ -373,13 +357,7 @@ internal object WeekGridCanvasRenderer {
         return WidgetBackgroundRenderer.toImmutableAshmemFriendly(mutable)
     }
 
-    private data class BlockPlan(
-        val titleLines: Int,
-        val teacherLines: Int,
-        val locationLines: Int,
-    )
-
-    private fun solveCourseBlockPlan(
+    private fun solveCourseBlockLayouts(
         titleText: String,
         teacherText: String,
         locationText: String,
@@ -387,10 +365,11 @@ internal object WeekGridCanvasRenderer {
         availH: Float,
         fieldGap: Float,
         titlePaint: TextPaint,
-        detailPaint: TextPaint,
+        teacherPaint: TextPaint,
+        locationPaint: TextPaint,
         titleLineMult: Float,
         detailLineMult: Float,
-    ): BlockPlan {
+    ): List<StaticLayout> {
         val titleUnbounded = if (titleText.isNotEmpty()) {
             buildBlockLayout(titleText, titlePaint, widthPx, null, titleLineMult)
         } else {
@@ -402,27 +381,48 @@ internal object WeekGridCanvasRenderer {
         } else {
             0f
         }
-        val teacherNeeded = if (teacherText.isNotEmpty()) {
-            buildBlockLayout(teacherText, detailPaint, widthPx, null, detailLineMult).lineCount
+        val teacherUnbounded = if (teacherText.isNotEmpty()) {
+            buildBlockLayout(teacherText, teacherPaint, widthPx, null, detailLineMult)
         } else {
-            0
+            null
         }
-        val locationNeeded = if (locationText.isNotEmpty()) {
-            buildBlockLayout(locationText, detailPaint, widthPx, null, detailLineMult).lineCount
+        val teacherNeeded = teacherUnbounded?.lineCount ?: 0
+        val locationUnbounded = if (locationText.isNotEmpty()) {
+            buildBlockLayout(locationText, locationPaint, widthPx, null, detailLineMult)
         } else {
-            0
+            null
         }
+        val locationNeeded = locationUnbounded?.lineCount ?: 0
 
         var titleLines = titleNeeded
         var teacherLines = teacherNeeded
         var locationLines = locationNeeded
 
-        val heightCache = HashMap<String, Float>()
-        fun fieldHeight(text: String, paint: TextPaint, maxLines: Int, mult: Float): Float {
-            if (text.isEmpty() || maxLines <= 0) return 0f
-            val key = "$text\u0000$maxLines\u0000$mult"
-            return heightCache.getOrPut(key) {
-                buildBlockLayout(text, paint, widthPx, maxLines, mult).height.toFloat()
+        val titleCache = HashMap<Int, StaticLayout>()
+        val teacherCache = HashMap<Int, StaticLayout>()
+        val locationCache = HashMap<Int, StaticLayout>()
+
+        fun titleLayoutFor(maxLines: Int): StaticLayout? {
+            if (titleUnbounded == null || maxLines <= 0) return null
+            if (maxLines >= titleNeeded) return titleUnbounded
+            return titleCache.getOrPut(maxLines) {
+                buildBlockLayout(titleText, titlePaint, widthPx, maxLines, titleLineMult)
+            }
+        }
+
+        fun teacherLayoutFor(maxLines: Int): StaticLayout? {
+            if (teacherUnbounded == null || maxLines <= 0) return null
+            if (maxLines >= teacherNeeded) return teacherUnbounded
+            return teacherCache.getOrPut(maxLines) {
+                buildBlockLayout(teacherText, teacherPaint, widthPx, maxLines, detailLineMult)
+            }
+        }
+
+        fun locationLayoutFor(maxLines: Int): StaticLayout? {
+            if (locationUnbounded == null || maxLines <= 0) return null
+            if (maxLines >= locationNeeded) return locationUnbounded
+            return locationCache.getOrPut(maxLines) {
+                buildBlockLayout(locationText, locationPaint, widthPx, maxLines, detailLineMult)
             }
         }
 
@@ -432,9 +432,9 @@ internal object WeekGridCanvasRenderer {
             if (teacherLines > 0) activeFields++
             if (locationLines > 0) activeFields++
             val gaps = if (activeFields > 1) activeFields - 1 else 0
-            return fieldHeight(titleText, titlePaint, titleLines, titleLineMult) +
-                fieldHeight(teacherText, detailPaint, teacherLines, detailLineMult) +
-                fieldHeight(locationText, detailPaint, locationLines, detailLineMult) +
+            return (titleLayoutFor(titleLines)?.height?.toFloat() ?: 0f) +
+                (teacherLayoutFor(teacherLines)?.height?.toFloat() ?: 0f) +
+                (locationLayoutFor(locationLines)?.height?.toFloat() ?: 0f) +
                 gaps * fieldGap
         }
 
@@ -488,11 +488,11 @@ internal object WeekGridCanvasRenderer {
             }
         }
 
-        return BlockPlan(
-            titleLines = titleLines,
-            teacherLines = teacherLines,
-            locationLines = locationLines,
-        )
+        val layouts = ArrayList<StaticLayout>(3)
+        titleLayoutFor(titleLines)?.let(layouts::add)
+        teacherLayoutFor(teacherLines)?.let(layouts::add)
+        locationLayoutFor(locationLines)?.let(layouts::add)
+        return layouts
     }
 
     // LineBreaker.BREAK_STRATEGY_SIMPLE 为编译期内联常量 0，在 API 24+ 与

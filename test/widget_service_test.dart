@@ -109,16 +109,19 @@ void main() {
 
     expect(await service.syncNow(), isTrue);
     expect(gateway.syncCount, 1);
+    final firstPayload = gateway.lastPayloadJson;
+    expect(firstPayload, isNotNull);
 
     // 同指纹第二次同步跳过
     expect(await service.syncNow(), isTrue);
     expect(gateway.syncCount, 1);
 
-    // force = true 强制下发
+    // force = true 强制下发时直接复用上次 JSON 字符串实例，避免重复序列化与原生冗余解析
     expect(await service.syncNow(force: true), isTrue);
     expect(gateway.syncCount, 2);
+    expect(identical(gateway.lastPayloadJson, firstPayload), isTrue);
 
-    // 改小组件样式通过 prefsNotifier 防抖触发重新下发
+    // 改小组件样式通过 prefsNotifier 防抖触发重新下发新载荷
     await model.setWidgetStyle(
       DesktopWidgetKind.today,
       model
@@ -127,6 +130,7 @@ void main() {
     );
     await Future<void>.delayed(const Duration(milliseconds: 30));
     expect(gateway.syncCount, 3);
+    expect(identical(gateway.lastPayloadJson, firstPayload), isFalse);
   });
 
   test('跨学期考试隔离与退出登录下发未登录空态快照', () async {

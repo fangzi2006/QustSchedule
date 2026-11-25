@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
+import android.os.Build
 import android.os.Bundle
 import kotlin.math.roundToInt
 
@@ -99,11 +100,17 @@ internal object WidgetBackgroundRenderer {
     }
 
     internal fun toImmutableAshmemFriendly(mutable: Bitmap): Bitmap {
-        val immutable = mutable.copy(Bitmap.Config.ARGB_8888, false)
+        val immutable = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            mutable.asShared()
+        } else {
+            mutable.copy(Bitmap.Config.ARGB_8888, false)
+        }
         if (immutable != null && immutable !== mutable) {
             mutable.recycle()
+            immutable.prepareToDraw()
             return immutable
         }
+        mutable.prepareToDraw()
         return mutable
     }
 }

@@ -349,6 +349,16 @@ internal object WidgetStore {
             return cachedModel
         }
         val parsed = WidgetSnapshotModel.parse(payloadJson) ?: return null
+        val existing = cachedModel ?: loadSnapshot(context)
+        if (existing != null &&
+            parsed.fingerprint.isNotEmpty() &&
+            existing.fingerprint == parsed.fingerprint &&
+            existing == parsed
+        ) {
+            cachedRawJson = payloadJson
+            cachedModel = existing
+            return existing
+        }
         val prefs = context.applicationContext
             .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         if (prefs.getString(KEY_SNAPSHOT, null) != payloadJson) {
@@ -439,6 +449,7 @@ internal object WidgetStore {
     fun clear(context: Context) {
         cachedRawJson = null
         cachedModel = null
+        WeekGridWidgetProvider.clearRenderCache()
         context.applicationContext
             .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .edit()

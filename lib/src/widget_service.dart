@@ -105,6 +105,7 @@ class DesktopWidgetService {
   int _syncEpoch = 0;
 
   String? _lastFingerprint;
+  String? _lastPayloadJson;
   WidgetSnapshot? _lastSnapshot;
 
   WidgetSnapshot? get lastSnapshot => _lastSnapshot;
@@ -160,15 +161,22 @@ class DesktopWidgetService {
     final snapshot = buildSnapshot();
     if (snapshot == null) return false;
 
-    if (!force && snapshot.fingerprint == _lastFingerprint) {
+    final sameFingerprint = snapshot.fingerprint == _lastFingerprint;
+    if (!force && sameFingerprint) {
       return true;
     }
 
-    final ok = await _gateway.syncSnapshot(snapshot.toPayloadJson());
+    // force=true 且指纹未变时直接复用上次已编码的 JSON 字符串，
+    // 既省去 UI 线程 ~50KB 二次 jsonEncode，又使原生 WidgetStore 命中 O(1) 原文缓存跳过解析与写盘。
+    final payloadJson = (sameFingerprint && _lastPayloadJson != null)
+        ? _lastPayloadJson!
+        : snapshot.toPayloadJson();
+    final ok = await _gateway.syncSnapshot(payloadJson);
     if (_disposed || epoch != _syncEpoch) return ok;
     _lastSnapshot = snapshot;
     if (ok) {
       _lastFingerprint = snapshot.fingerprint;
+      _lastPayloadJson = payloadJson;
     }
     return ok;
   }
@@ -217,6 +225,7 @@ class DesktopWidgetService {
     _timer?.cancel();
     _timer = null;
     _lastFingerprint = null;
+    _lastPayloadJson = null;
     _lastSnapshot = null;
     final active = _syncInFlight;
     if (active != null) {
