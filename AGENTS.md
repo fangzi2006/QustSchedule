@@ -31,7 +31,7 @@
 | 三页外壳 / Dock / 顶栏 / 菜单 | `lib/pages/home_shell.dart`, `lib/widgets/{floating_dock,tactile_button,app_menu}.dart`, `lib/theme/app_theme.dart` | 单运动源 `ValueNotifier<double>`、`TactileAppBar` 四层、`AppMenuScope` | [`docs/dev/UI_AND_TESTING.md`](docs/dev/UI_AND_TESTING.md) §4.1–§4.3 |
 | 二级页转场 / 骨架屏 / 气泡 | `lib/src/route_settled.dart`, `lib/widgets/{page_skeleton,status_popup,app_snack_bar}.dart`, `lib/src/state/hint_notice_controller.dart` | `RouteSettledStateMixin`, `runInBackground`, `hints` | [`docs/dev/CORE_AND_STATE.md`](docs/dev/CORE_AND_STATE.md) §4.4 · [`docs/dev/UI_AND_TESTING.md`](docs/dev/UI_AND_TESTING.md) §3.5 & §4.6 |
 | Android 课前提醒 / 流体云 | `lib/src/reminder_*.dart`, `lib/pages/{reminder,settings}_page.dart`, `android/.../reminder/*.kt` (13) | `ReminderService`, `ReminderWorker`, ID `2000`/`2001`/`2003` | [`docs/dev/REMINDER.md`](docs/dev/REMINDER.md) |
-| Android 桌面小组件 / 预览 | `lib/src/widget_*.dart`, `lib/pages/widget_settings_page.dart`, `lib/widgets/desktop_widget_preview.dart`, `android/.../widget/*.kt` (15) | `DesktopWidgetService`, `WidgetWorker`, `RenderMode.texture` | [`docs/dev/WIDGET.md`](docs/dev/WIDGET.md) |
+| Android 桌面小组件 / 预览 | `lib/src/widget_*.dart`, `lib/pages/widget_settings_page.dart`, `lib/widgets/desktop_widget_preview.dart`, `android/.../widget/*.kt` (15) | `DesktopWidgetService`, `WidgetWorker`, `RenderMode.surface` | [`docs/dev/WIDGET.md`](docs/dev/WIDGET.md) |
 | 测试矩阵 / 替身 / CI | `test/*_test.dart`, `test/support/fake_*.dart`, `packages/zf_academic/test/*_test.dart`, `.github/workflows/build-release.yml` | L0–L3 分层门禁 | [`docs/dev/UI_AND_TESTING.md`](docs/dev/UI_AND_TESTING.md) §6 |
 
 ---
