@@ -38,12 +38,14 @@ internal object WidgetCoordinator {
         val weekDirty = previous == null ||
             weekDateStale ||
             previous.kindSignature(KIND_WEEK) != current.kindSignature(KIND_WEEK)
-        // Dart 侧仅在显式 force=true（如回到前台兜底恢复）时才会下发与上次完全一致的快照。
-        val forceAll = !todayDirty && !nextDirty && !weekDirty
+        // Dart 侧仅在显式 force=true（如回到前台兜底恢复）时才会下发与上次完全一致的快照：
+        // 今日/下一节依赖当前时刻（防后台闹钟被系统拦截导致状态陈旧）需兜底重绘；
+        // 本周课表仅依赖快照与日期，未变化且未跨天时像素完全一致，跳过无意义的大位图重绘。
+        val forceTimeWidgets = !todayDirty && !nextDirty && !weekDirty
 
-        if (forceAll || todayDirty) TodayWidgetProvider.updateAll(appContext, manager)
-        if (forceAll || nextDirty) NextClassWidgetProvider.updateAll(appContext, manager)
-        if (forceAll || weekDirty) WeekGridWidgetProvider.updateAll(appContext, manager)
+        if (forceTimeWidgets || todayDirty) TodayWidgetProvider.updateAll(appContext, manager)
+        if (forceTimeWidgets || nextDirty) NextClassWidgetProvider.updateAll(appContext, manager)
+        if (weekDirty) WeekGridWidgetProvider.updateAll(appContext, manager)
 
         scheduleOrCancelAlarm(appContext, manager, current)
     }
@@ -127,10 +129,19 @@ internal object WidgetCoordinator {
         return ComponentName(context.applicationContext, cls)
     }
 
-    fun createLaunchPendingIntent(context: Context): PendingIntent {
-        val intent = Intent(context.applicationContext, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+    /**
+     * 构造与点击桌面应用图标完全一致的显式启动 Intent，确保系统桌面直接恢复已有任务栈
+     * 并平滑衔接小组件缩放过渡动画（保留显式组件以满足 Android 14 FLAG_MUTABLE 限制）。
+     */
+    private fun buildLaunchIntent(context: Context): Intent =
+        Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+            setClass(context.applicationContext, MainActivity::class.java)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
         }
+
+    fun createLaunchPendingIntent(context: Context): PendingIntent {
+        val intent = buildLaunchIntent(context)
         return PendingIntent.getActivity(
             context.applicationContext,
             RC_LAUNCH_IMMUTABLE,
@@ -140,9 +151,7 @@ internal object WidgetCoordinator {
     }
 
     fun createLaunchTemplatePendingIntent(context: Context): PendingIntent {
-        val intent = Intent(context.applicationContext, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
+        val intent = buildLaunchIntent(context)
         val mutableFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             PendingIntent.FLAG_MUTABLE
         } else {

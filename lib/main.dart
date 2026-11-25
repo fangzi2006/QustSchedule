@@ -80,6 +80,7 @@ class _AppShellState extends State<_AppShell> {
   /// 前后台切换监听。只订阅 onShow（`hidden → inactive` 时触发）：
   /// 手机切回前台、桌面端最小化后还原都会走到这里。
   late final AppLifecycleListener _lifecycle;
+  Timer? _foregroundWidgetSyncTimer;
   int _lastStorageNoticeEvent = 0;
   bool _storageNoticeScheduled = false;
 
@@ -137,14 +138,24 @@ class _AppShellState extends State<_AppShell> {
   /// 清空闹钟，而指纹没变——不 force 就会漏排。
   Future<void> _onShown() async {
     await _model.onAppShown();
-    await Future.wait<void>(<Future<void>>[
-      if (_reminders != null) _reminders.syncNow(force: true),
-      if (_desktopWidgets != null) _desktopWidgets.syncNow(force: true),
-    ]);
+    if (_reminders != null) {
+      unawaited(_reminders.syncNow(force: true));
+    }
+    // 桌面小组件兜底刷新延后到进场缩放动画落稳后再触发，避免刚点击小组件打开应用时
+    // 在动画途中向桌面下发 updateAppWidget 引起小组件视图重绘闪烁。
+    if (_desktopWidgets != null) {
+      _foregroundWidgetSyncTimer?.cancel();
+      _foregroundWidgetSyncTimer = Timer(const Duration(milliseconds: 600), () {
+        if (!mounted) return;
+        unawaited(_desktopWidgets.syncNow(force: true));
+      });
+    }
   }
 
   @override
   void dispose() {
+    _foregroundWidgetSyncTimer?.cancel();
+    _foregroundWidgetSyncTimer = null;
     _lifecycle.dispose();
     _model.hints.removeListener(_onModelChanged);
     _model.routeNotifier.removeListener(_onModelChanged);
