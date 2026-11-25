@@ -148,10 +148,7 @@ class WeekGridWidgetProvider : AppWidgetProvider() {
             }
 
             val vm = WidgetContentResolver.resolveWeek(snapshot, style, nowMs)
-            val bitmap = WeekGridCanvasRenderer.render(context, style, theme, vm, wDp, hDp)
-
-            val views = RemoteViews(context.packageName, R.layout.widget_week)
-            views.setImageViewBitmap(R.id.widget_week_image, bitmap)
+            val views = WeekGridRemoteViewsBuilder.build(context, style, theme, vm, wDp, hDp)
             views.setOnClickPendingIntent(
                 R.id.widget_week_root,
                 WidgetCoordinator.createLaunchPendingIntent(context),

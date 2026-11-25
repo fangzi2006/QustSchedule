@@ -33,7 +33,7 @@
 | [`TodayItemViewBinder.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/TodayItemViewBinder.kt) | `TodayItemViewBinder` | `isNarrowWidth(widthDp)` (`< 200`), `buildItemView()` |
 | [`NextClassWidgetProvider.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/NextClassWidgetProvider.kt) | `NextClassWidgetProvider` | `updateAll()`, `isStrip` (`hDp < 100`), `isUltraCompactStrip` (`isStrip && wDp < 195`), `isSpaciousTall` (`!isStrip && wDp >= 220`) |
 | [`WeekGridWidgetProvider.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WeekGridWidgetProvider.kt) | `WeekGridWidgetProvider` | `WeekRenderKey` + `onAppWidgetOptionsChanged` 无变化跳过：`updateAll()`, `clearRenderCache()`, `updateWidgetWithSnapshot()`（写入 `last_week_render_date_iso`） |
-| [`WeekGridCanvasRenderer.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WeekGridCanvasRenderer.kt) | `WeekGridCanvasRenderer` | `MIN_PIXELS_CEILING=640_000f`, `MAX_PIXELS_CEILING=1_050_000f`, `render()`, `solveCourseBlockLayouts()`, `buildBlockLayout()` |
+| [`WeekGridRemoteViewsBuilder.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WeekGridRemoteViewsBuilder.kt) | `WeekGridRemoteViewsBuilder` | 纯原生零位图 `RemoteViews` 整周网格（6 档矢量底卡 + 权重槽位 + 冲突分栏 + 三段式 `solveCourseBlockPlan` 求解）：`build()`, `solveCourseBlockPlan()`, `buildBlockLayout()` |
 
 ---
 
@@ -47,7 +47,7 @@
 | 修改 9 色板 | [`lib/theme/course_palette.dart`](../../lib/theme/course_palette.dart) + [`WidgetThemeResolver.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetThemeResolver.kt) | 浅/深 9 组 ARGB 与顺序 100% 一致 |
 | 修改主题/胶囊对比度 | [`WidgetThemeResolver.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetThemeResolver.kt) + [`desktop_widget_preview.dart`](../../lib/widgets/desktop_widget_preview.dart) (`_PreviewColors`) + `res/drawable/widget_pill_*.xml` / `widget_row_highlight_*.xml` | 纯色提对比、无文字阴影；两端同构 |
 | 修改展示文案/筛选 | [`WidgetContentResolver.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WidgetContentResolver.kt) + [`desktop_widget_preview.dart`](../../lib/widgets/desktop_widget_preview.dart) (`_resolve*ForPreview`) | Kotlin 与 Dart 逻辑/文案 100% 同构 |
-| 修改周网格行数求解 | [`WeekGridCanvasRenderer.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WeekGridCanvasRenderer.kt) (`solveCourseBlockLayouts`) + [`desktop_widget_preview.dart`](../../lib/widgets/desktop_widget_preview.dart) (`_solvePreviewBlockPlan`) | 与主课表 `CourseBlock._BlockPlan` 优先级一致 |
+| 修改周网格行数求解 | [`WeekGridRemoteViewsBuilder.kt`](../../android/app/src/main/kotlin/com/fangzi/qustschedule/widget/WeekGridRemoteViewsBuilder.kt) (`solveCourseBlockPlan`) + [`desktop_widget_preview.dart`](../../lib/widgets/desktop_widget_preview.dart) (`_solvePreviewBlockPlan`) | 与主课表 `CourseBlock._BlockPlan` 优先级一致 |
 | 新增第 4 种形态 | `DesktopWidgetKind` + `*WidgetProvider.kt` + `res/xml` + `res/layout` + `AndroidManifest.xml` + `WidgetStore` (`KIND_*`/`kindSignature`) + `WidgetCoordinator` (`ActiveWidgetFlags`/`componentForKind`) | `computeNextRefreshPlan` 按是否依赖上下课节点设闹钟 |
 
 ---
@@ -330,13 +330,13 @@
 - **考试日期拆分**：`!isStrip` 时 `widget_next_date_hint` 显 `"M/D 周X"`、`widget_next_time` 显时间段；`isStrip` 时右栏下合显 `"$md $startHm"`（`isUltraCompactStrip` 仅 `"$md"`）。
 - **常驻胶囊与色条**：`widget_next_badge` 恒 `VISIBLE`（不受 `showHeader` 控）；`!vm.hasCourseAccent` 或 `colorIndex < 0` 竖条用 `theme.neutralBarColor`。
 
-### 11.3 本周课表 (`WeekGridWidgetProvider` / `WeekGridCanvasRenderer`)
+### 11.3 本周课表 (`WeekGridWidgetProvider` / `WeekGridRemoteViewsBuilder`)
 
-- **位图像素上限与选项去重**：`screenPixels = max(dm.widthPixels * dm.heightPixels, 640_000f)`，`maxPixels = min(screenPixels * 0.55f, 1_050_000f).coerceAtLeast(640_000f)`（`MIN_PIXELS_CEILING=640_000f`, `MAX_PIXELS_CEILING=1_050_000f`），超限按 `sqrt(maxPixels / rawPixels)` 缩放并转 `toImmutableAshmemFriendly`；`WeekGridWidgetProvider` 按 `WeekRenderKey` 记录各实例已推签名，`onAppWidgetOptionsChanged` 未变化时跳过重绘与 `updateAppWidget`。
-- **透明与底边**：`hasVisibleCard = opacity > 0.01f`；为真时绘圆角底/1dp 边框 + `clipPath` 内缩 1dp、`padBottom = stroke`；为假（0% 透明）时跳过底/裁切/`clearance=0`，课程块保持 100% 实色 `chip.background`。
-- **表头与轴**：顶栏（`showHeader`）左起点 `contentLeft + (hasVisibleCard ? 2.5dp : 0)`，「第 X 周」(`11dp*scale` 粗 `accentColor`) + 间距 `6dp` + `dateRange` (`9.2dp*scale` `secondaryTextColor`)；单行星期 `"一".."五/七"`，仅 `isCurrentWeek && d == todayWeekday` 绘 `4.5dp` 胶囊 + `4dp` 整列高亮；`axisWidth = max(dp(compact?16f:19f), axisPaint.measureText(maxSection) + dp(6f))`（预览 `max(16/19, 14.5*scale+5.5)`）。
-- **空周提示**：无可见块时，`blocks.isEmpty()` 绘 `"本周无课，好好休息"`，否则绘 `"工作日无课，周末有安排"`。
-- **三段式排版求解 (`solveCourseBlockLayouts` / `_solvePreviewBlockPlan`)**：居中 `ALIGN_CENTER`、`letterSpacing=0f`，顺序：课名 → 教师 (`showTeacher`) → 地点 (`showLocation`)，缓存并直接复用求解期生成的 `StaticLayout` 实例。(1) 无限制测 `(titleNeeded, teacherNeeded, locationNeeded)`；(2) 溢出按 `title->1` → `teacher->0` → `location->1` → `location->0` → `title->0` 递减；(3) 余量按 `location++` → `teacher=teacherNeeded` → `title++` 回填，全显后仍有 >1 行课名空间则加 `titleLines`。`block.rescheduled` 右上角 `(right-4dp, top+4dp)` 绘 `r=2.1dp` `rescheduleDotColor` 圆点。
+- **纯原生零位图架构与选项去重**：全量采用原生 `RemoteViews`（零 `Bitmap` 分配与传输）；背景层 `@android:id/background` 使用 6 档纯矢量 `<shape>`（`widget_week_card_r{8,12,16,20,24,28}`）+ `setColorFilter`/`setImageAlpha`（API 24–36 通用支持任意 0–100% 不透明度与深浅/动态色）；`WeekGridWidgetProvider` 按 `WeekRenderKey` 记录各实例已推签名，`onAppWidgetOptionsChanged` 未变化时跳过重建与 `updateAppWidget`。
+- **透明与边距**：`hasVisibleCard = opacity > 0.01f`；为真时显 `@android:id/background`、`padBottom = max(4dp, clearance * 0.55)`；为假（0% 透明）时隐藏 `@android:id/background` 并归零 `clearance`/`padBottom`，课程块保持 100% 实色 `chip.background`（`widget_week_block_bg` + `setColorFilter`）。
+- **表头、轴与权重列**：顶栏（`showHeader`）「第 X 周」(`11dp*scale` 粗 `accentColor`) + `dateRange` (`9.2dp*scale` `secondaryTextColor`)；单行星期 `"一".."五/七"` 仅 `isCurrentWeek && d == todayWeekday` 用 `applyPill(ACCENT)` 粗体胶囊 + `applyRoundedBackground` 今日列高亮；左侧节次轴 `widget_week_axis_col` 动态填充 `1..maxSection` 等权单元格（`widget_week_axis_spacer` 隐形对齐）；每日列由 `widget_week_block_w1..w6`、`widget_week_spacer_w1..w4` 与冲突簇 `widget_week_cluster_w1..w6` + `widget_week_subcol` 精确拼齐总权重 `maxSection`。
+- **空周提示**：无可见块时隐藏 `widget_week_grid_body` 显示 `widget_week_empty_box`，`blocks.isEmpty()` 显 `"本周无课，好好休息"`，否则显 `"工作日无课，周末有安排"`。
+- **三段式排版求解 (`solveCourseBlockPlan` / `_solvePreviewBlockPlan`)**：基于 `(wDp, hDp, dayCount, maxSection, span, laneCount)` 估算单格可用像素并执行原三段式预算求解（顺序：课名 → 教师 `showTeacher` → 地点 `showLocation`；溢出按 `title->1` → `teacher->0` → `location->1` → `location->0` → `title->0` 递减；余量按 `location++` → `teacher` → `title++` 回填），将求解后的 `maxLines` 直接绑定至原生 `TextView`。`block.rescheduled` 右上角显示 `widget_week_block_dot` (`rescheduleDotColor`)。
 
 ---
 
@@ -383,7 +383,7 @@
 |---|---|
 | [`widget_today.xml`](../../android/app/src/main/res/layout/widget_today.xml) | `widget_today_root`, `widget_today_bg`, `widget_today_content`, `widget_today_header` (`_badge`, `_title`, `_subtitle`), `widget_today_compact_cue_box` (`widget_today_compact_cue`), `widget_today_list_container` (`widget_today_list`), `widget_today_empty_box` (`_text`), `widget_today_exam_box` (`_card`, `_badge`, `_title`, `_meta`) |
 | [`widget_today_item.xml`](../../android/app/src/main/res/layout/widget_today_item.xml) | `widget_today_item_outer`, `_root`, `_time_col` (`_time_start`, `_time_end`), `_bar`, `_body` (`_tag`, `_title`, `_meta`) |
-| [`widget_week.xml`](../../android/app/src/main/res/layout/widget_week.xml) | `widget_week_root` (`FrameLayout`), `widget_week_image` (`ImageView`, `fitXY`) |
+| [`widget_week.xml`](../../android/app/src/main/res/layout/widget_week.xml) | `widget_week_root` (`FrameLayout`), `@android:id/background` (`ImageView`, 6 档矢量底卡), `widget_week_content` (`_header`, `_weekdays`, `_grid_body` 含 `_axis_col` 与 `_col_1..7`, `_empty_box`)；辅以 `widget_week_{axis_cell,block_inner,block_w1..6,spacer_w1..4,cluster_w1..6,subcol}.xml` |
 | [`widget_next.xml`](../../android/app/src/main/res/layout/widget_next.xml) | `widget_next_root`, `_bg`, `_content`, `_badge`, `_date_hint`, `_bar`, `_title`, `_time`, `_subtitle` |
 | [`widget_next_wide.xml`](../../android/app/src/main/res/layout/widget_next_wide.xml) | 同 `widget_next.xml` ID（无 `widget_next_date_hint`），`hDp < 100dp` 用 |
 | [`widget_today_preview.xml`](../../android/app/src/main/res/layout/widget_today_preview.xml) / [`widget_week_preview.xml`](../../android/app/src/main/res/layout/widget_week_preview.xml) / [`widget_next_preview.xml`](../../android/app/src/main/res/layout/widget_next_preview.xml) | Android 12+ 选择器静态预览（全用 `dp`，内联示例防空白） |
@@ -411,5 +411,5 @@ flutter test test/widget_style_test.dart test/widget_planner_test.dart test/widg
 - **字体单位**：RemoteViews 用 `COMPLEX_UNIT_DIP`（XML 用 `dp`），Canvas 用 `density * fontScale`，Flutter 预览包 `TextScaler.noScaling`。
 - **透明与对比**：`<35%` 用 `lowOpacityFactor` 纯色插值（无文字阴影），两端同构；`0%` 隐背景、跳 `clipPath` 与 `cornerClearanceDp`。
 - **API 24–30 兼容**：圆角背景用 `applyRoundedBackground` 切 drawable（禁 `setBackgroundColor`）；竖条用 `applyVerticalBar` 不透明 RGB + `setImageAlpha`。
-- **周位图性能**：上下课闹钟 `includeWeek=false`；像素上限 `min(screenPixels*0.55, 1_050_000)`，转不可变 Ashmem Bitmap（API 31+ `asShared()`）并 `prepareToDraw()`；严禁 `Bitmap.Config.HARDWARE`（防 `AppWidgetHostView` 软件绘制崩溃）。
+- **周课表轻量化**：上下课闹钟 `includeWeek=false`；本周课表全量走纯原生 `RemoteViews` + 矢量 `<shape>`（零 `Bitmap` 分配），`addView` 前必先 `removeAllViews` 防重复叠加；非 `@RemoteView` 类（如裸 `<View>`）严禁进小组件 XML。
 - **滑块与预设**：`onChanged` 仅改草稿，`onChangeEnd` 才持久化并 `syncNow()`；预设不覆盖 `density`/`fontScale`/内容开关。
