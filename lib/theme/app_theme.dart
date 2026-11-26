@@ -9,7 +9,11 @@ library;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
-import '../widgets/app_menu.dart' show AppMenuScope;
+/// 路由内容外层包装器（由应用壳传入路由级作用域，保持主题层零组件依赖）。
+typedef RouteTransitionWrapper = Widget Function(
+  BuildContext context,
+  Widget child,
+);
 
 /// 品牌主色：偏靛蓝，和课程色板里的蓝/青/紫相邻但不冲突。
 const Color _seed = Color(0xFF3F5AA6);
@@ -238,7 +242,7 @@ class AppColors extends ThemeExtension<AppColors> {
   }
 }
 
-ThemeData buildLightTheme() {
+ThemeData buildLightTheme({RouteTransitionWrapper? routeWrapper}) {
   final scheme = ColorScheme.fromSeed(
     seedColor: _seed,
     brightness: Brightness.light,
@@ -276,12 +280,20 @@ ThemeData buildLightTheme() {
     // 页面进出用一个短促的**水平位移**（见 [_SlideTransitionsBuilder]）：
     // 淡入淡出要给整页做离屏合成，桌面端每帧都做一次太贵。
     // 只列本项目实际发布的平台；其余平台走框架默认。
-    pageTransitionsTheme: const PageTransitionsTheme(
+    pageTransitionsTheme: PageTransitionsTheme(
       builders: <TargetPlatform, PageTransitionsBuilder>{
-        TargetPlatform.android: _SlideTransitionsBuilder(),
-        TargetPlatform.windows: _SlideTransitionsBuilder(),
-        TargetPlatform.linux: _SlideTransitionsBuilder(),
-        TargetPlatform.fuchsia: _SlideTransitionsBuilder(),
+        TargetPlatform.android: _SlideTransitionsBuilder(
+          routeWrapper: routeWrapper,
+        ),
+        TargetPlatform.windows: _SlideTransitionsBuilder(
+          routeWrapper: routeWrapper,
+        ),
+        TargetPlatform.linux: _SlideTransitionsBuilder(
+          routeWrapper: routeWrapper,
+        ),
+        TargetPlatform.fuchsia: _SlideTransitionsBuilder(
+          routeWrapper: routeWrapper,
+        ),
       },
     ),
     dividerTheme: DividerThemeData(
@@ -389,7 +401,9 @@ class AppScrollBehavior extends MaterialScrollBehavior {
 ///   平滑衔接折返至目标端点，绝不跳帧、不闪回、不卡顿。
 /// - **入场期间即可交互**：不使用静态快照，不阻塞点击/滚动，命中测试随 `SlideTransition` 实时跟随。
 class _SlideTransitionsBuilder extends PageTransitionsBuilder {
-  const _SlideTransitionsBuilder();
+  const _SlideTransitionsBuilder({this.routeWrapper});
+
+  final RouteTransitionWrapper? routeWrapper;
 
   /// 旧页被推走时的视差位移（占页宽的比例）。
   static const double _exitParallaxDistance = 0.24;
@@ -416,6 +430,7 @@ class _SlideTransitionsBuilder extends PageTransitionsBuilder {
       secondaryAnimation: secondaryAnimation,
       exitParallaxDistance: _exitParallaxDistance,
       curve: _curve,
+      routeWrapper: routeWrapper,
       child: child,
     );
   }
@@ -428,6 +443,7 @@ class _SmoothSlidePageTransition extends StatefulWidget {
     required this.secondaryAnimation,
     required this.exitParallaxDistance,
     required this.curve,
+    this.routeWrapper,
     required this.child,
   });
 
@@ -436,6 +452,7 @@ class _SmoothSlidePageTransition extends StatefulWidget {
   final Animation<double> secondaryAnimation;
   final double exitParallaxDistance;
   final Curve curve;
+  final RouteTransitionWrapper? routeWrapper;
   final Widget child;
 
   @override
@@ -536,7 +553,9 @@ class _SmoothSlidePageTransitionState
     // _EdgeShadowPainter 与 SlideTransition 触发进出双方页面整页重绘。
     Widget content = CustomPaint(
       foregroundPainter: _RouteScrimPainter(progress: _secondaryVisual),
-      child: RepaintBoundary(child: AppMenuScope(child: widget.child)),
+      child: RepaintBoundary(
+        child: widget.routeWrapper?.call(context, widget.child) ?? widget.child,
+      ),
     );
 
     if (!widget.route.isFirst && !widget.route.fullscreenDialog) {

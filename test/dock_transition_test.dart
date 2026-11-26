@@ -7,6 +7,8 @@
 ///     跨页（课表 ↔ 设置）路过学业页时不误判落点且保持按需懒建。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/pages/academic_page.dart';
@@ -20,7 +22,7 @@ import 'package:qustschedule/theme/app_theme.dart';
 import 'package:qustschedule/widgets/app_menu.dart';
 import 'package:qustschedule/widgets/floating_dock.dart';
 import 'package:qustschedule/widgets/tactile_button.dart';
-import 'package:zf_academic/zf_academic_io.dart' hide Page;
+import 'package:zf_academic/zf_academic_io.dart';
 
 import 'support/fake_backend.dart';
 
@@ -46,7 +48,10 @@ AppModel _buildModel({FakeBackend? backend}) {
 
 Widget _wrapHome(AppModel model) {
   return MaterialApp(
-    theme: buildLightTheme(),
+    theme: buildLightTheme(
+      routeWrapper: (BuildContext context, Widget child) =>
+          AppMenuScope(child: child),
+    ),
     home: HomeShell(model: model),
   );
 }
@@ -957,9 +962,11 @@ void main() {
       //     松手绝不在 Dialog 背后偷偷切换到设置页。
       final pressDuringDialog = await tester.startGesture(settingsPos);
       await tester.pump(const Duration(milliseconds: 32));
-      showDialog<void>(
-        context: tester.element(find.byType(HomeShell)),
-        builder: (_) => const AlertDialog(content: Text('遮罩弹窗')),
+      unawaited(
+        showDialog<void>(
+          context: tester.element(find.byType(HomeShell)),
+          builder: (_) => const AlertDialog(content: Text('遮罩弹窗')),
+        ),
       );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 32));

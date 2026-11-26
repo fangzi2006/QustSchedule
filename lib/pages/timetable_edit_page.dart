@@ -12,9 +12,9 @@ import 'package:flutter/material.dart';
 
 import '../src/app_model.dart';
 import '../src/timetable.dart';
-import '../widgets/time_wheel_picker.dart';
 import '../widgets/app_snack_bar.dart';
 import '../widgets/tactile_button.dart';
+import '../widgets/time_wheel_picker.dart';
 
 class TimetableEditPage extends StatefulWidget {
   const TimetableEditPage({

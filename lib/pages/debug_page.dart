@@ -18,9 +18,9 @@ import '../src/app_model.dart';
 import '../src/route_settled.dart';
 import '../src/term_calendar.dart' show formatIsoDate;
 import '../theme/app_theme.dart';
+import '../widgets/app_snack_bar.dart';
 import '../widgets/course_detail_sheet.dart'
     show compressWeeks, showEntryDetails;
-import '../widgets/app_snack_bar.dart';
 import '../widgets/page_skeleton.dart';
 import '../widgets/tactile_button.dart';
 

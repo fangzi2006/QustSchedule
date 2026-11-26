@@ -30,19 +30,18 @@ import '../src/updater/update_flow_controller.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_bottom_sheet.dart';
 import '../widgets/app_menu.dart';
+import '../widgets/calibrate_sheet.dart';
 import '../widgets/course_detail_sheet.dart';
 import '../widgets/course_tile.dart';
 import '../widgets/floating_dock.dart';
 import '../widgets/status_popup.dart';
 import '../widgets/tactile_button.dart';
-import '../widgets/time_wheel_picker.dart';
 import '../widgets/week_pager.dart';
 import 'appearance_sheet.dart';
-
-import 'update_dialog.dart';
 import 'reschedule_page.dart';
 import 'school_address_page.dart';
 import 'timetable_list_page.dart';
+import 'update_dialog.dart';
 
 class SchedulePage extends StatefulWidget {
   const SchedulePage({super.key, required this.model});
@@ -1581,21 +1580,6 @@ Future<void> showWeekPicker(
     ],
     onSelected: model.goToWeek,
   );
-}
-
-/// 校准：'本周实际是第几周' → 滚轮选择并反推开学日落盘。
-Future<void> showCalibrateSheet(BuildContext context, AppModel model) async {
-  final picked = await showWeekCalibrationWheel(
-    context,
-    currentWeek: model.currentWeekOfToday,
-    maxWeek: model.maxWeek > 30 ? model.maxWeek : 30,
-  );
-  if (picked == null) return;
-  if (picked == 0) {
-    model.resetCalendar();
-  } else {
-    model.calibrateCurrentWeek(picked);
-  }
 }
 
 /// 课表页下方的"备注"区：实践课程 / 其他课程（来自课表响应的 `sjkList`）。

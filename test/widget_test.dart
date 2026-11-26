@@ -7,6 +7,16 @@ import 'dart:async';
 import 'dart:typed_data' show Float64List;
 import 'dart:ui' as ui;
 
+import 'package:flutter/cupertino.dart' show CupertinoPicker;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, debugDefaultTargetPlatformOverride;
+import 'package:flutter/gestures.dart'
+    show PointerDeviceKind, PointerScrollEvent, kSecondaryButton;
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart'
+    show ContainerLayer, MatrixUtils, PaintingContext, RenderParagraph;
+import 'package:flutter/services.dart' show SystemChannels;
+import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/main.dart' show pageForStatus;
 import 'package:qustschedule/pages/about_page.dart';
 import 'package:qustschedule/pages/academic_page.dart';
@@ -23,6 +33,16 @@ import 'package:qustschedule/pages/timetable_edit_page.dart';
 import 'package:qustschedule/pages/timetable_list_page.dart';
 import 'package:qustschedule/pages/update_proxy_page.dart';
 import 'package:qustschedule/pages/widget_settings_page.dart';
+import 'package:qustschedule/src/app_model.dart';
+import 'package:qustschedule/src/preferences_repository.dart';
+import 'package:qustschedule/src/reminder_gateway.dart';
+import 'package:qustschedule/src/reminder_planner.dart';
+import 'package:qustschedule/src/reminder_service.dart';
+import 'package:qustschedule/src/schedule_service.dart';
+import 'package:qustschedule/src/term_calendar.dart';
+import 'package:qustschedule/src/timetable.dart';
+import 'package:qustschedule/src/widget_service.dart';
+import 'package:qustschedule/src/widget_style.dart';
 import 'package:qustschedule/theme/app_theme.dart';
 import 'package:qustschedule/widgets/app_bottom_sheet.dart';
 import 'package:qustschedule/widgets/app_menu.dart';
@@ -33,31 +53,11 @@ import 'package:qustschedule/widgets/floating_dock.dart';
 import 'package:qustschedule/widgets/section_title.dart';
 import 'package:qustschedule/widgets/tactile_button.dart';
 import 'package:qustschedule/widgets/time_wheel_picker.dart';
-import 'package:qustschedule/src/app_model.dart';
-import 'package:qustschedule/src/preferences_repository.dart';
-import 'package:qustschedule/src/reminder_gateway.dart';
-import 'package:qustschedule/src/reminder_planner.dart';
-import 'package:qustschedule/src/reminder_service.dart';
-import 'package:qustschedule/src/schedule_service.dart';
-import 'package:qustschedule/src/term_calendar.dart';
-import 'package:qustschedule/src/timetable.dart';
-import 'package:qustschedule/src/widget_gateway.dart';
-import 'package:qustschedule/src/widget_service.dart';
-import 'package:qustschedule/src/widget_style.dart';
-import 'package:flutter/cupertino.dart' show CupertinoPicker;
-import 'package:flutter/foundation.dart'
-    show TargetPlatform, debugDefaultTargetPlatformOverride;
-import 'package:flutter/gestures.dart'
-    show PointerDeviceKind, PointerScrollEvent, kSecondaryButton;
-import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart'
-    show ContainerLayer, MatrixUtils, PaintingContext, RenderParagraph;
-import 'package:flutter/services.dart' show SystemChannels;
-import 'package:flutter_test/flutter_test.dart';
 import 'package:zf_academic/zf_academic_io.dart';
 
 import 'support/fake_backend.dart';
 import 'support/fake_reminder_gateway.dart';
+import 'support/fake_widget_gateway.dart';
 
 AppModel buildModel({FakeBackend? backend}) {
   final fake = backend ?? FakeBackend();
@@ -3307,7 +3307,11 @@ void main() {
       );
       final widgetService = DesktopWidgetService(
         model: rig.model,
-        gateway: _FakeWidgetGateway(),
+        gateway: FakeDesktopWidgetGateway(
+          pinnedCounts: const <DesktopWidgetKind, int>{
+            DesktopWidgetKind.week: 1,
+          },
+        ),
         debounce: const Duration(seconds: 5),
         now: () => DateTime(2026, 9, 7, 9, 0),
       );
@@ -4942,7 +4946,9 @@ void main() {
         termStart: DateTime(2026, 9, 7),
         week: 1,
       );
-      final gateway = _FakeWidgetGateway();
+      final gateway = FakeDesktopWidgetGateway(
+        pinnedCounts: const <DesktopWidgetKind, int>{DesktopWidgetKind.week: 1},
+      );
       final service = DesktopWidgetService(
         model: model,
         gateway: gateway,
@@ -5026,30 +5032,6 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     });
   });
-}
-
-class _FakeWidgetGateway implements DesktopWidgetGateway {
-  DesktopWidgetKind? lastPinnedKind;
-  int syncCount = 0;
-
-  @override
-  Future<bool> syncSnapshot(String payloadJson) async {
-    syncCount++;
-    return true;
-  }
-
-  @override
-  Future<void> clearSnapshot() async {}
-
-  @override
-  Future<bool> requestPinWidget(DesktopWidgetKind kind) async {
-    lastPinnedKind = kind;
-    return true;
-  }
-
-  @override
-  Future<Map<DesktopWidgetKind, int>> getPinnedCounts() async =>
-      const <DesktopWidgetKind, int>{DesktopWidgetKind.week: 1};
 }
 
 class _DisposeNotifyHelper extends StatefulWidget {

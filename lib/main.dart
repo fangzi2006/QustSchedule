@@ -3,7 +3,7 @@
 /// 分层：
 ///   pages（UI）→ AppModel（状态机）→ ScheduleService（编排）→ zf_academic（协议）
 ///
-/// 已登录后进 [HomeShell] 的两页结构（课表 / 设置 + 悬浮 dock）；
+/// 已登录后进 [HomeShell] 的三页结构（课表 / 学业 / 设置 + 悬浮 dock）；
 /// 未登录与验证码是独立全屏页，不显示 dock。
 library;
 
@@ -22,6 +22,7 @@ import 'src/app_version.dart';
 import 'src/reminder_service.dart';
 import 'src/widget_service.dart';
 import 'theme/app_theme.dart';
+import 'widgets/app_menu.dart' show AppMenuScope;
 import 'widgets/app_snack_bar.dart';
 
 void main() {
@@ -42,7 +43,10 @@ class CourseApp extends StatelessWidget {
     return MaterialApp(
       title: '青科课表通',
       debugShowCheckedModeBanner: false,
-      theme: buildLightTheme(),
+      theme: buildLightTheme(
+        routeWrapper: (BuildContext context, Widget child) =>
+            AppMenuScope(child: child),
+      ),
       // 桌面端允许鼠标/触控板拖拽（翻周、时间轮都依赖它）。
       scrollBehavior: AppScrollBehavior(),
       locale: const Locale('zh', 'CN'),
@@ -57,7 +61,7 @@ class CourseApp extends StatelessWidget {
   }
 }
 
-/// 按状态切换「登录 / 验证码 / 两页外壳」。
+/// 按状态切换「登录 / 验证码 / 三页外壳」。
 class _AppShell extends StatefulWidget {
   const _AppShell();
 

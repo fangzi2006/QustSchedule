@@ -37,7 +37,6 @@ import 'package:qustschedule/src/schedule_service.dart';
 import 'package:qustschedule/src/session_repository.dart';
 import 'package:qustschedule/src/timetable.dart';
 import 'package:qustschedule/src/updater/update_service.dart';
-import 'package:qustschedule/src/widget_gateway.dart';
 import 'package:qustschedule/src/widget_planner.dart';
 import 'package:qustschedule/src/widget_service.dart';
 import 'package:qustschedule/src/widget_style.dart';
@@ -50,6 +49,7 @@ import 'package:zf_academic/zf_academic_io.dart';
 
 import 'support/fake_backend.dart';
 import 'support/fake_reminder_gateway.dart';
+import 'support/fake_widget_gateway.dart';
 
 const String _baseUrl = 'https://jw.example.edu.cn/jwglxt';
 
@@ -1045,7 +1045,11 @@ void main() {
       (tester) async {
         final model = _buildTestModel();
         await model.boot();
-        final widgetGateway = _SpyWidgetGateway();
+        final widgetGateway = FakeDesktopWidgetGateway(
+          pinnedCounts: const <DesktopWidgetKind, int>{
+            DesktopWidgetKind.today: 2,
+          },
+        );
         final widgetService = DesktopWidgetService(
           model: model,
           gateway: widgetGateway,
@@ -1294,7 +1298,11 @@ void main() {
       (tester) async {
         final model = _buildTestModel();
         await model.boot();
-        final gateway = _SpyWidgetGateway();
+        final gateway = FakeDesktopWidgetGateway(
+          pinnedCounts: const <DesktopWidgetKind, int>{
+            DesktopWidgetKind.today: 2,
+          },
+        );
         final widgetService = _SpySnapshotWidgetService(
           model: model,
           gateway: gateway,
@@ -1398,7 +1406,11 @@ void main() {
       await model.boot();
       final widgetService = DesktopWidgetService(
         model: model,
-        gateway: _SpyWidgetGateway(),
+        gateway: FakeDesktopWidgetGateway(
+          pinnedCounts: const <DesktopWidgetKind, int>{
+            DesktopWidgetKind.today: 2,
+          },
+        ),
         debounce: const Duration(milliseconds: 1),
       );
       addTearDown(() {
@@ -1442,7 +1454,11 @@ void main() {
       await model.boot();
       final widgetService = _SpySnapshotWidgetService(
         model: model,
-        gateway: _SpyWidgetGateway(),
+        gateway: FakeDesktopWidgetGateway(
+          pinnedCounts: const <DesktopWidgetKind, int>{
+            DesktopWidgetKind.today: 2,
+          },
+        ),
         debounce: const Duration(seconds: 10),
         now: () => DateTime(2026, 9, 9, 10, 0),
       );
@@ -1514,7 +1530,11 @@ void main() {
         await model.boot();
         final widgetService = DesktopWidgetService(
           model: model,
-          gateway: _SpyWidgetGateway(),
+          gateway: FakeDesktopWidgetGateway(
+            pinnedCounts: const <DesktopWidgetKind, int>{
+              DesktopWidgetKind.today: 2,
+            },
+          ),
           debounce: const Duration(milliseconds: 1),
         );
 
@@ -1661,25 +1681,6 @@ class _SlowFirstStatusGateway extends FakeReminderGateway {
     }
     return super.status();
   }
-}
-
-class _SpyWidgetGateway implements DesktopWidgetGateway {
-  int pinnedQueryCount = 0;
-
-  @override
-  Future<void> clearSnapshot() async {}
-
-  @override
-  Future<Map<DesktopWidgetKind, int>> getPinnedCounts() async {
-    pinnedQueryCount++;
-    return const <DesktopWidgetKind, int>{DesktopWidgetKind.today: 2};
-  }
-
-  @override
-  Future<bool> requestPinWidget(DesktopWidgetKind kind) async => true;
-
-  @override
-  Future<bool> syncSnapshot(String payloadJson) async => true;
 }
 
 class _RouteSettledProbePage extends StatefulWidget {

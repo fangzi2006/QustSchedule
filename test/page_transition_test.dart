@@ -27,9 +27,15 @@ void main() {
     Widget buildTestApp({
       required Widget home,
       TargetPlatform platform = TargetPlatform.android,
+      bool wrapMenuScope = true,
     }) {
       return MaterialApp(
-        theme: buildLightTheme().copyWith(platform: platform),
+        theme: buildLightTheme(
+          routeWrapper: wrapMenuScope
+              ? (BuildContext context, Widget child) =>
+                    AppMenuScope(child: child)
+              : null,
+        ).copyWith(platform: platform),
         scrollBehavior: AppScrollBehavior(),
         home: home,
       );
@@ -997,6 +1003,60 @@ void main() {
         expect(staticBodyPaints, 1);
       },
     );
+
+    testWidgets('buildLightTheme 默认不传 routeWrapper 时正常滑行且不插入 AppMenuScope', (
+      tester,
+    ) async {
+      const firstKey = ValueKey<String>('plain-first');
+      const secondKey = ValueKey<String>('plain-second');
+
+      await tester.pumpWidget(
+        buildTestApp(
+          wrapMenuScope: false,
+          home: Scaffold(
+            key: firstKey,
+            body: Builder(
+              builder: (context) => Center(
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const Scaffold(
+                          key: secondKey,
+                          body: Center(child: Text('无菜单作用域二级页')),
+                        ),
+                      ),
+                    );
+                  },
+                  child: const Text('PushPlain'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('PushPlain'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(secondKey), findsOneWidget);
+      expect(find.byType(AppMenuScope), findsNothing);
+      final slide = find.ancestor(
+        of: find.byKey(secondKey),
+        matching: find.byType(SlideTransition),
+      );
+      expect(slide, findsAtLeastNWidgets(1));
+      expect(
+        find.descendant(
+          of: slide.first,
+          matching: find.ancestor(
+            of: find.byKey(secondKey),
+            matching: find.byType(RepaintBoundary),
+          ),
+        ),
+        findsAtLeastNWidgets(1),
+      );
+    });
   });
 }
 
