@@ -32,7 +32,7 @@
 | 二级页转场 / 骨架屏 / 气泡 | `lib/src/route_settled.dart`, `lib/widgets/page_skeleton.dart`, `lib/widgets/status_popup.dart`, `lib/widgets/app_snack_bar.dart`, `lib/src/state/hint_notice_controller.dart` | `RouteSettledStateMixin`, `runInBackground`, `hints` | [`docs/dev/CORE_AND_STATE.md`](docs/dev/CORE_AND_STATE.md) §4.4 · [`docs/dev/UI_AND_TESTING.md`](docs/dev/UI_AND_TESTING.md) §3.5 & §4.6 |
 | Android 课前提醒 / 流体云 | `lib/src/reminder_*.dart`, `lib/pages/reminder_page.dart`, `lib/pages/settings_page.dart`, `android/.../reminder/*.kt` (13) | `ReminderService`, `ReminderWorker`, ID `2000`/`2001`/`2003` | [`docs/dev/REMINDER.md`](docs/dev/REMINDER.md) |
 | Android 桌面小组件 / 预览 | `lib/src/widget_*.dart`, `lib/pages/widget_settings_page.dart`, `lib/widgets/desktop_widget_preview.dart`, `android/.../widget/*.kt` (15) | `DesktopWidgetService`, `WidgetWorker`, `RenderMode.surface` | [`docs/dev/WIDGET.md`](docs/dev/WIDGET.md) |
-| 测试矩阵 / 替身 / 架构守卫 / CI | `test/*_test.dart`, `test/architecture_guard_test.dart`, `test/support/fake_*.dart`, `packages/zf_academic/test/*_test.dart`, `.github/workflows/build-release.yml` | L0–L3 分层门禁与静态架构守卫 | [`docs/dev/UI_AND_TESTING.md`](docs/dev/UI_AND_TESTING.md) §6 |
+| 测试矩阵 / 替身 / 架构守卫 / CI | `test/*_test.dart`, `test/architecture_guard_test.dart`, `test/support/*.dart`, `tool/verify.dart`, `packages/zf_academic/test/*_test.dart`, `.github/workflows/build-release.yml` | L0–L3 分层门禁、统一验证入口与静态架构守卫 | [`docs/dev/UI_AND_TESTING.md`](docs/dev/UI_AND_TESTING.md) §6 |
 
 ---
 
@@ -48,7 +48,8 @@
   - `lib/widgets/**` 禁引 `pages/`、`*_repository.dart`、`*_cache.dart`、`*_gateway.dart`、service/installer/`zf_academic_io.dart`/`dart:io`/`MethodChannel`。
   - `lib/pages/**` 禁引 `dart:io`、`zf_academic_io.dart`、`*_cache.dart`、`credentials_repository.dart`、`session_repository.dart`、`schedule_service.dart`、`update_service.dart`、`app_installer.dart`、`updater_gateway.dart`、`MethodChannel`；同级 `pages/` 路由依赖严格有向无环（三 Tab 页互不引用亦不引 `home_shell.dart`，非外壳页不引 `home_shell.dart`，叶页零同级引用）；`pages/` 与 `widgets/` 禁直接实例化 `*Service(` / `MethodChannel*(`。
   - `MethodChannel` 仅限 [`reminder_gateway.dart`](lib/src/reminder_gateway.dart)、[`widget_gateway.dart`](lib/src/widget_gateway.dart)、[`app_installer.dart`](lib/src/updater/app_installer.dart)、[`updater_gateway.dart`](lib/src/updater/updater_gateway.dart)；测试替身网关实现集中于 `test/support/fake_*.dart`（业务测试禁直接 `implements *Gateway`）。
-- **Windows**：[`windows/runner/`](windows/runner/) `.cpp`/`.h` **纯 ASCII（禁中文注释/字面量，防 MSVC `C4819`，用 `\uXXXX`）**；`Runner.rc` 保持 **无 BOM UTF-8 + `#pragma code_page(65001)`**；`setup.iss` 保持 **UTF-8 + BOM**；产物名 `qustschedule.exe`（绑定 DPAPI / `Local\com.fangzi.qustschedule.SingleInstance`）。
+  - **`AppModel` 薄透传冻结**：[`lib/src/app_model.dart`](lib/src/app_model.dart) 仅保留跨控制器协调逻辑与既有兼容转发（上限冻结 `<= 134`）；新增状态或动作**禁再向 `AppModel` 新增 1:1 透传**，新页面直接读取/订阅 `model.prefs` / `session` / `scheduleState` / `academic` / `hints` / `updateFlow`。
+- **换行与编码（`.gitattributes` + Windows）**：[`.gitattributes`](.gitattributes) 统一跨平台换行（Dart/Kotlin/YAML/MD/JSON `lf`；`.cpp`/`.h`/`.rc`/`.iss`/`.bat`/`.ps1` `crlf`）；[`windows/runner/`](windows/runner/) `.cpp`/`.h` **纯 ASCII（禁中文注释/字面量，防 MSVC `C4819`，用 `\uXXXX`）**；`Runner.rc` 保持 **无 BOM UTF-8 + `#pragma code_page(65001)`**；`setup.iss` 保持 **UTF-8 + BOM**；产物名 `qustschedule.exe`（绑定 DPAPI / `Local\com.fangzi.qustschedule.SingleInstance`）。
 - **Android & 原生通道**：三条 MethodChannel（`qustschedule/reminder`、`qustschedule/widget`、`com.fangzi.qustschedule/updater`）两端契约 1:1 对齐；Flutter 3.29+ 主线程已合并，MethodChannel 与 `BroadcastReceiver` 重 I/O/闹钟/Bitmap/APK 校验统一派发单线程 Worker（`ReminderWorker`/`WidgetWorker`/`UpdaterWorker`）+ `postReply`（`@Volatile disposed`）或 `goAsync()`；`ReminderScheduler.MIN_EVENT_REQUEST_CODE = 10_000`；`minSdk 24`（`widget/` 禁 `java.time.*`，用 `Calendar`）；`android/gradle.properties` 保持 `android.newDsl=false` 与 `android.builtInKotlin=false`（随 Flutter `3.47.7` 锁 `org.jetbrains.kotlin.android`）；`debug`/`release` 签名分离；`useLegacyPackaging = true`；`allowBackup="false"`；`android/keystore/` 与 `android/key.properties` 禁入库。
 
 ### 当前业务现状
@@ -68,7 +69,8 @@
 | 改小组件色板 / 样式边界 / 本周预览或布局 | Dart 与 Kotlin 色板/范围/行高/行数上限不一致 | 同步 `stable_hash.dart`/`course_palette.dart`/`widget_style.dart`/`desktop_widget_preview.dart` ↔ `WidgetThemeResolver.kt`/`WidgetStore.kt`/`WeekGridRemoteViewsBuilder.kt` | `test/architecture_guard_test.dart`, `test/widget_settings_page_test.dart` |
 | 改 Android MethodChannel / Bridge / 提醒排程 | 主线程校验 APK 或漏 `!disposed` 回调；`requestCode` 占 `0..9999`；`ReminderService` 漏监听 `prefsNotifier` | 重操作走 `*Worker` + `postReply`；`MIN_EVENT_REQUEST_CODE = 10_000`；`cancelAll()` 先等 `_syncInFlight`；同步网关与 Kotlin | `test/architecture_guard_test.dart`, `test/reminder_service_test.dart`, CI `verify-android` |
 | 状态订阅 | `ListenableBuilder(listenable: model)` 整页包裹或高频调根 `notifyListeners()` | 细粒度订阅 `routeNotifier`/`hints`/`scheduleState`/`weekNotifier`/`refreshingNotifier`/`academicNotifier`/`prefsNotifier`/`updateFlow` | `test/rebuild_scope_test.dart` |
-| 课程块预排版 | 裸 `TextStyle` 喂 `TextPainter`、漏 `letterSpacing: 0` 或 `>0.5px` 容差 | `DefaultTextStyle.of(context).style.merge(...)` + `MediaQuery.boldTextOf(context)` + `letterSpacing: 0` + `1e-4` | `test/widget_test.dart` |
+| 课程块预排版 | 裸 `TextStyle` 喂 `TextPainter`、漏 `letterSpacing: 0` 或 `>0.5px` 容差 | `DefaultTextStyle.of(context).style.merge(...)` + `MediaQuery.boldTextOf(context)` + `letterSpacing: 0` + `1e-4` | `test/schedule_grid_widget_test.dart` |
+| 升级 Flutter SDK / AGP / 安全存储插件 | 只改 CI 版本号或 `pubspec.yaml`，遗留过时 Gradle 标志或让 `example` 漂移 | 同步 `build-release.yml` `FLUTTER_VERSION` 与 `AGENTS.md`；复查 `android/gradle.properties`（`android.newDsl=false`/`android.builtInKotlin=false`）；核对 `packages/zf_academic/example/secure_storage_flutter.dart` 与 `credentials_repository.dart` 并跑 `dart run tool/verify.dart --full --android` | `test/architecture_guard_test.dart`, CI `verify-android` |
 | 三页与菜单 | `PageView` 做底栏、`TactileSurfaceScope` 套 `Opacity`、菜单脱离页坐标 | `FloatingDock` 单运动源驱动 `_ShellPager`；`TactileAppBar` 四层合绘；`routeWrapper` + 页级 `AppMenuScope` | `test/dock_transition_test.dart` |
 | 转场与选字 | 260ms 转场中途 `setState` 挂重子树；用 `SelectableText` 或多棵 `SelectionArea` | `initState` 并行 `runInBackground` + `RouteSettledStateMixin` 骨架；页级单层 `SelectionArea` + `Text` | `test/page_transition_test.dart` |
 | Cookie 免登 | `sessionInfo?.username ?? accountHint`（`''` 不触发 `??`） | 按 `isNotEmpty` 顺序回退：`username` → `accountHint` → `studentId` → `prefs.accountOf` | `test/schedule_service_test.dart` |
@@ -80,27 +82,19 @@
 
 ## 四、CI 与一键验证命令
 
-- **CI（[`.github/workflows/build-release.yml`](.github/workflows/build-release.yml)）**：改 `**.md` 不触发；非 PR 触发 `test` + `build-android` + `build-windows` 并行（`test` 失败即 `fail-fast` 中止打包），`test` 含 `zf_academic`（格式含 `example`、`dart analyze --fatal-infos`、`dart test -j 2 --timeout 30s`）、Windows 编码/C4819 Python 校验及主工程 `-j 2 --timeout 30s`；PR 额外跑 `verify-android`（`flutter build apk --debug --config-only` + `./android/gradlew -p android :app:processDebugManifest :app:compileDebugKotlin`）；`v*` 标签全绿校验版本号一致后发 Release。
+- **统一验证入口（[`tool/verify.dart`](tool/verify.dart)）**：本地开发与 CI `test` job 共用同一套门禁逻辑，避免命令漂移。
+- **CI（[`.github/workflows/build-release.yml`](.github/workflows/build-release.yml)）**：改 `**.md` 不触发；非 PR 触发 `test` + `build-android` + `build-windows` 并行（`test` 失败即 `fail-fast` 中止打包），`test` 调用 `dart run tool/verify.dart --lint-only` 与 `--tests-only`；PR 额外跑 `verify-android`（`flutter build apk --debug --config-only` + `./android/gradlew -p android :app:processDebugManifest :app:compileDebugKotlin`）；`v*` 标签全绿校验版本号一致后发 Release。
 - **代理 502 处理**：`$env:HTTP_PROXY=''; $env:HTTPS_PROXY=''; $env:NO_PROXY='127.0.0.1,localhost'`。
 
 ```powershell
-# L0: 格式与静态分析（均需 0 issues / exit 0）
-dart format --output=none --set-exit-if-changed lib test
-flutter analyze --no-fatal-infos lib test
-flutter analyze lib test
-cd packages/zf_academic; dart format --output=none --set-exit-if-changed lib test example; dart analyze --fatal-infos lib test
+# 日常快速门禁（L0 格式/分析 + Windows 编码检查 + 架构守卫，<15s）
+dart run tool/verify.dart --quick
 
-# L1: 协议包单测
-dart test -j 2 --timeout 30s; cd ../..
+# 完整验证（L0 + zf_academic + 主工程全量测试）
+dart run tool/verify.dart --full
 
-# L1–L3: 主工程全量测试（含 test/architecture_guard_test.dart）
-flutter test -j 2 --timeout 30s
-
-# Android 校验（改 android/ 后必跑）
-.\android\gradlew.bat -p android :app:processDebugManifest :app:compileDebugKotlin
-
-# 外层工具静态检查（按需）
-cd ../tools/probe; dart analyze; cd ../../qustschedule
+# 改 android/ 或升 SDK 时追加原生校验（可选再加 --probe 检查 ../tools/probe）
+dart run tool/verify.dart --full --android
 
 # 仓库洁净检查
 git status -s

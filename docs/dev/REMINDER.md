@@ -46,9 +46,9 @@
 | 横幅文案/样式 | `ReminderNotifier.kt` + `ReminderSamples.kt` + `reminder_planner.dart` (`roomOnly`) | 固定 `NOTIFY_ID=2000`；发前调 `ReminderFluidService.stop`；保留 `Chronometer` + `setTimeoutAfter` | `reminder_planner_test.dart` + 真机预览 |
 | 流体云文案/属性 | `ReminderFluidRenderer.kt` + `ReminderFluidService.kt` | 禁 `ProgressStyle`/`BigTextStyle`；保留 `FOREGROUND_SERVICE_IMMEDIATE` 与 `RC_FLUID_STOP=2003` | `reminder_service_test.dart` + 真机 5s 测试 |
 | 课表/调课/作息换算 | `reminder_planner.dart` (`planCourseReminders`) | 纯函数；按**当天**调 `activeTimetableAt`；`remindAtMs <= now` 跳过 | `reminder_planner_test.dart` |
-| MethodChannel 变更 | `reminder_gateway.dart` + `reminder_service.dart` + `ReminderBridge.kt` + `ReminderScheduler.kt` + `fake_reminder_gateway.dart` | 涉及 SP/`AlarmManager` 必须进 `ReminderWorker.execute` 并 `postReply` 回主线程；同步更新 `FakeReminderGateway` | `reminder_service_test.dart`, `widget_test.dart` |
-| 权限/OEM 跳转 | `ReminderPermissions.kt` + `settings_page.dart` + `reminder_page.dart` + `AndroidManifest.xml` | 通知在 `ReminderPage`，电池/闹钟/自启动在 `SettingsPage`；新增自启动项须同步 `<queries>` | `reminder_service_test.dart`, `widget_test.dart` |
-| 切页/滑块卡顿排查 | `reminder_page.dart` + `settings_page.dart` + `route_settled.dart` | 禁顶层 `ListenableBuilder`；滑块 `onChanged` 只改 `_leadDraft`；`initState` 带 `deferUntilSettled: true` | `widget_test.dart` |
+| MethodChannel 变更 | `reminder_gateway.dart` + `reminder_service.dart` + `ReminderBridge.kt` + `ReminderScheduler.kt` + `fake_reminder_gateway.dart` | 涉及 SP/`AlarmManager` 必须进 `ReminderWorker.execute` 并 `postReply` 回主线程；同步更新 `FakeReminderGateway` | `reminder_service_test.dart`, `settings_and_features_widget_test.dart` |
+| 权限/OEM 跳转 | `ReminderPermissions.kt` + `settings_page.dart` + `reminder_page.dart` + `AndroidManifest.xml` | 通知在 `ReminderPage`，电池/闹钟/自启动在 `SettingsPage`；新增自启动项须同步 `<queries>` | `reminder_service_test.dart`, `settings_and_features_widget_test.dart` |
+| 切页/滑块卡顿排查 | `reminder_page.dart` + `settings_page.dart` + `route_settled.dart` | 禁顶层 `ListenableBuilder`；滑块 `onChanged` 只改 `_leadDraft`；`initState` 带 `deferUntilSettled: true` | `settings_and_features_widget_test.dart` |
 
 ## 3. 分层架构与单向数据流
 
@@ -310,21 +310,21 @@ _onModelChanged (监听 model 与 model.prefsNotifier) -> 重置 300ms _timer ->
 | 流体云样式 | 设 `ProgressStyle`/`BigTextStyle` 或 Timer 轮询 | `ContentTitle` + `SubText` + `ShortCriticalText` + `Chronometer` + `FOREGROUND_SERVICE_IMMEDIATE` | `ProgressStyle` 与胶囊环重叠；`BigTextStyle` 不识别；轮询耗电闪烁 |
 | 电池优化跳转 | 优先跳总列表或直弹白名单弹窗 | 优先 `ACTION_APPLICATION_DETAILS_SETTINGS` | 国产 ROM 私有耗电管理在应用详情页，放行后台会同步放行白名单 |
 | `RC_TEST=2002` | 写入 `alarm_codes` 账本 | 独立于账本之外 | 进账本会被 `sync` 当多余闹钟撤掉 / `reminder_service_test.dart` |
-| `ReminderPage` 性能 | 顶层 `ListenableBuilder` / `SelectableText` / `onChanged` 落盘 | 三卡隔离 / `Text` / `_leadDraft` / `deferUntilSettled: true` | 避免滑块拖动每帧重建 1500+ Widget 与首帧膨胀 / `widget_test.dart` |
+| `ReminderPage` 性能 | 顶层 `ListenableBuilder` / `SelectableText` / `onChanged` 落盘 | 三卡隔离 / `Text` / `_leadDraft` / `deferUntilSettled: true` | 避免滑块拖动每帧重建 1500+ Widget 与首帧膨胀 / `settings_and_features_widget_test.dart` |
 
 ## 13. 自动化测试与真机验收
 
 ### 13.1 自动化测试
 
 ```powershell
-flutter test test/reminder_planner_test.dart test/reminder_service_test.dart test/timetable_test.dart test/widget_test.dart
+flutter test test/reminder_planner_test.dart test/reminder_service_test.dart test/timetable_test.dart test/settings_and_features_widget_test.dart
 ```
 
 - `test/reminder_planner_test.dart`：提前量（1/10/30）、`endMs` 末节下课、`roomOnly`、`clampReminderLead` 任意整数（7/43）、按当天切作息表、超节次 `skipped++`、单双周/空 `weeks`/超 `maxWeek`/调课、过点不补发、`maxEvents` 截断、`generatedAtMs` 不变指纹与 `event.id` 稳定。
 - `test/reminder_service_test.dart`：指纹去重、`syncNow(force: true)`、`prefsNotifier` 变更重同步、改提前量/切流体云重排、失败不记指纹、`syncGate` 在途串行合并、`cancelAll()` 等在途同步并串行续跑、`_cancelled` 幂等、冷启动保护、300ms 防抖、`ReminderRuntimeStatus.fromMap`/`unavailable()`/`==`/`hashCode`、`MethodChannelReminderGateway` 往返与异常降级、预览/测试/`stopFluid`/4 项权限跳转。
 - `test/support/fake_reminder_gateway.dart`：`FakeReminderGateway` 记录 `syncedPayloads`/`testRequests`/`previewRequests`/`toasts`，支持 `syncGate` 与 `syncResult` 注入。
 - `test/timetable_test.dart`：`Preferences` 默认值、旧 schema 兼容、未知形态（`"capsule"`）回退 `banner`、`1..60` 夹取往返。
-- `test/widget_test.dart`：入口显隐、`_leadDraft` 拖动不落盘、预设胶囊、流体云双向切换 + `stopFluid`、诊断卡、预览/5s/60s 测试、`resumed` 刷新、自启动恒显示手动确认。
+- `test/settings_and_features_widget_test.dart`：入口显隐、`_leadDraft` 拖动不落盘、预设胶囊、流体云双向切换 + `stopFluid`、诊断卡、预览/5s/60s 测试、`resumed` 刷新、自启动恒显示手动确认。
 
 ### 13.2 真机诊断与验收（PLG110 / ColorOS / Android 17 基准）
 

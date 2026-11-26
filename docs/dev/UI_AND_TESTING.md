@@ -18,25 +18,25 @@
 
 | 路径 | 核心导出 | 职责关键字 | 守护测试 |
 | :--- | :--- | :--- | :--- |
-| `lib/main.dart` | `main()`, `CourseApp`, `_AppShell`, `pageForStatus()` | 异步版本、经 `routeWrapper` 注入 `AppMenuScope`、Android 提醒/小组件挂载、`onShow` 强制同步、顶层状态路由 | `widget_test`, `rebuild_scope_test` |
-| `lib/theme/app_theme.dart` | `AppRadius`, `AppColors`, `RouteTransitionWrapper`, `buildLightTheme()`, `AppScrollBehavior`, `_SlideTransitionsBuilder`, `_ContinuousCurveAnimation`, `_EdgeShadowPainter`, `_RouteScrimPainter` | 5 级圆角、25 语义色、M3 浅色、全指针拖拽、260/240ms 全宽滑动转场（可注入 `routeWrapper`） | `page_transition_test`, `widget_test` |
-| `lib/theme/course_palette.dart` | `CourseColor`, `CoursePalette` | 9 组浅/深色板；`indexOf(courseName)` 委托 `courseColorIndex()` (`stable_hash.dart`) 与原生小组件同构 | `widget_test`, `widget_settings_page_test`, `stable_hash_test` |
-| `lib/widgets/floating_dock.dart` | `FloatingDockItem`, `FloatingDock`, `FloatingDockState` | 58dp 胶囊、`RSuperellipse` 液态透镜、过阻尼中心弹簧、速度拉伸振子、`_OutsideLensClipper`、`hitTestGlobalPosition` | `dock_transition_test`, `widget_test` |
-| `lib/widgets/tactile_button.dart` | `TactileSurfaceStyle`, `TactileSurfaceButton`, `TactileIconButton`, `TactileBackButton`, `TactileActionVariant`, `TactileActionButton`, `TactileSurfaceScope`, `TactileAppBar` | 按压放大、橡皮筋微拖、190ms 长按/下拉开菜单、四层合绘、`_TactileArenaRecognizer` | `widget_test`, `dock_transition_test` |
-| `lib/widgets/app_menu.dart` | `AppMenuItem`, `AppMenuScopeController`, `AppMenuScope`, `showAppMenu()`, `RenderMenuMorphBox`, `activeAppMenuMorph`, `activeTactileDragStart`, `isRouteActiveForAppMenu()` | 双轴形变弹簧、`CompositedTransformTarget` 跟随、五重活跃门控、`_MenuBarrier` | `dock_transition_test`, `rebuild_scope_test`, `widget_test` |
-| `lib/widgets/week_pager.dart` | `WeekPagerController`, `_WeekPagerPosition`, `_SkipJumpScrollActivity`, `_IgnoredHold`, `_DeferredDrag` | 锚点单页翻页、`1/3` 阈值、不冻结在途、零死区延迟拖、跨 4 周借位滑入 | `widget_test` |
-| `lib/widgets/course_tile.dart` | `CourseBlockLayoutSnapshot`, `CourseBlock`, `_BlockPlan` | `letterSpacing: 0` + 预合并、4 步预算求解、`1e-4` 容差、512 LRU、`prewarmEntry()` | `widget_test`, `boost_idle_optimization_test` |
-| `lib/widgets/course_detail_sheet.dart` | `kDayLabels`, `compressWeeks()`, `showEntryDetails()` | 课程详情抽屉、周次压缩、单层 `SelectionArea` + `SelectionContainer.disabled` | `widget_test`, `term_calendar_test` |
-| `lib/widgets/app_bottom_sheet.dart` | `showAppModalBottomSheet()`, `ScrollableBottomSheetFrame` | `showDragHandle: true` 底部弹窗、80% 屏高上限安全区滚动容器 | `widget_test` |
-| `lib/widgets/app_snack_bar.dart` | `AppSnackBarType`, `buildAppSnackBar()`, `showAppSnackBar()` | 单行 `999dp`/多行 `20dp` 悬浮胶囊、`aboveDock` 避让、清前条防排队 | `widget_test` |
-| `lib/widgets/status_popup.dart` | `StatusPopup` | 右上角非阻塞气泡、三作用域退避、重试/重登/调试栏 | `widget_test`, `rebuild_scope_test` |
-| `lib/widgets/time_wheel_picker.dart` | `showTimeWheel()`, `showTimeRangeWheel()`, `showDurationWheel()`, `showMonthDayWheel()`, `showBigBreakWheel()`, `showSectionCountWheel()`, `showWeekCalibrationWheel()` | 7 类 `CupertinoPicker`、鼠标滚轮单格抢占、起止校验 | `widget_test` |
+| `lib/main.dart` | `main()`, `CourseApp`, `_AppShell`, `pageForStatus()` | 异步版本、经 `routeWrapper` 注入 `AppMenuScope`、Android 提醒/小组件挂载、`onShow` 强制同步、顶层状态路由 | `auth_and_shell_widget_test`, `rebuild_scope_test` |
+| `lib/theme/app_theme.dart` | `AppRadius`, `AppColors`, `RouteTransitionWrapper`, `buildLightTheme()`, `AppScrollBehavior`, `_SlideTransitionsBuilder`, `_ContinuousCurveAnimation`, `_EdgeShadowPainter`, `_RouteScrimPainter` | 5 级圆角、25 语义色、M3 浅色、全指针拖拽、260/240ms 全宽滑动转场（可注入 `routeWrapper`） | `page_transition_test`, `ui_components_widget_test` |
+| `lib/theme/course_palette.dart` | `CourseColor`, `CoursePalette` | 9 组浅/深色板；`indexOf(courseName)` 委托 `courseColorIndex()` (`stable_hash.dart`) 与原生小组件同构 | `schedule_grid_widget_test`, `widget_settings_page_test`, `stable_hash_test` |
+| `lib/widgets/floating_dock.dart` | `FloatingDockItem`, `FloatingDock`, `FloatingDockState` | 58dp 胶囊、`RSuperellipse` 液态透镜、过阻尼中心弹簧、速度拉伸振子、`_OutsideLensClipper`、`hitTestGlobalPosition` | `dock_transition_test`, `auth_and_shell_widget_test` |
+| `lib/widgets/tactile_button.dart` | `TactileSurfaceStyle`, `TactileSurfaceButton`, `TactileIconButton`, `TactileBackButton`, `TactileActionVariant`, `TactileActionButton`, `TactileSurfaceScope`, `TactileAppBar` | 按压放大、橡皮筋微拖、190ms 长按/下拉开菜单、四层合绘、`_TactileArenaRecognizer` | `ui_components_widget_test`, `dock_transition_test` |
+| `lib/widgets/app_menu.dart` | `AppMenuItem`, `AppMenuScopeController`, `AppMenuScope`, `showAppMenu()`, `RenderMenuMorphBox`, `activeAppMenuMorph`, `activeTactileDragStart`, `isRouteActiveForAppMenu()` | 双轴形变弹簧、`CompositedTransformTarget` 跟随、五重活跃门控、`_MenuBarrier` | `dock_transition_test`, `rebuild_scope_test`, `ui_components_widget_test`, `schedule_menu_and_appearance_widget_test` |
+| `lib/widgets/week_pager.dart` | `WeekPagerController`, `_WeekPagerPosition`, `_SkipJumpScrollActivity`, `_IgnoredHold`, `_DeferredDrag` | 锚点单页翻页、`1/3` 阈值、不冻结在途、零死区延迟拖、跨 4 周借位滑入 | `schedule_grid_widget_test` |
+| `lib/widgets/course_tile.dart` | `CourseBlockLayoutSnapshot`, `CourseBlock`, `_BlockPlan` | `letterSpacing: 0` + 预合并、4 步预算求解、`1e-4` 容差、512 LRU、`prewarmEntry()` | `schedule_grid_widget_test`, `boost_idle_optimization_test` |
+| `lib/widgets/course_detail_sheet.dart` | `kDayLabels`, `compressWeeks()`, `showEntryDetails()` | 课程详情抽屉、周次压缩、单层 `SelectionArea` + `SelectionContainer.disabled` | `schedule_grid_widget_test`, `term_calendar_test` |
+| `lib/widgets/app_bottom_sheet.dart` | `showAppModalBottomSheet()`, `ScrollableBottomSheetFrame` | `showDragHandle: true` 底部弹窗、80% 屏高上限安全区滚动容器 | `ui_components_widget_test` |
+| `lib/widgets/app_snack_bar.dart` | `AppSnackBarType`, `buildAppSnackBar()`, `showAppSnackBar()` | 单行 `999dp`/多行 `20dp` 悬浮胶囊、`aboveDock` 避让、清前条防排队 | `ui_components_widget_test` |
+| `lib/widgets/status_popup.dart` | `StatusPopup` | 右上角非阻塞气泡、三作用域退避、重试/重登/调试栏 | `schedule_grid_widget_test`, `rebuild_scope_test` |
+| `lib/widgets/time_wheel_picker.dart` | `showTimeWheel()`, `showTimeRangeWheel()`, `showDurationWheel()`, `showMonthDayWheel()`, `showBigBreakWheel()`, `showSectionCountWheel()`, `showWeekCalibrationWheel()` | 7 类 `CupertinoPicker`、鼠标滚轮单格抢占、起止校验 | `settings_and_features_widget_test`, `schedule_menu_and_appearance_widget_test` |
 | `lib/widgets/desktop_widget_preview.dart` | `PreviewWallpaper`, `samplePreviewClock()`, `buildSampleWidgetSnapshot()`, `DesktopWidgetPreview` | 与原生小组件像素同构预览、10:40 黄金快照、`TextScaler.noScaling` | `widget_settings_page_test` |
 | `lib/widgets/page_skeleton.dart` | `CardListTransitionPlaceholder`, `DocumentTransitionPlaceholder`, `PreviewSettingsTransitionPlaceholder` | 260ms 转场纯色骨架（零 Ticker/排版、`ExcludeSemantics`） | `page_transition_test`, `boost_idle_optimization_test` |
-| `lib/widgets/reminder_permission_tile.dart` | `ReminderPermissionTile`, `showReminderGuideToast()` | 权限项（`ok`: `true` 绿/`false` 红/`null` 橙）、跳系统设置 Toast/SnackBar 指路 | `widget_test` |
-| `lib/widgets/section_title.dart` | `SectionTitle` | 分组标题（`12sp`、`w500`、`hintColor`、`letterSpacing: 0.3`） | `widget_test` |
+| `lib/widgets/reminder_permission_tile.dart` | `ReminderPermissionTile`, `showReminderGuideToast()` | 权限项（`ok`: `true` 绿/`false` 红/`null` 橙）、跳系统设置 Toast/SnackBar 指路 | `settings_and_features_widget_test` |
+| `lib/widgets/section_title.dart` | `SectionTitle` | 分组标题（`12sp`、`w500`、`hintColor`、`letterSpacing: 0.3`） | `ui_components_widget_test` |
 | `lib/widgets/changelog_category_badge.dart` | `ChangelogCategoryBadge` | 新增/优化/修复/碎碎念徽章（`AppColors.category*`） | `formatted_text_span_test`, `updater_test` |
-| `lib/widgets/calibrate_sheet.dart` | `showCalibrateSheet()` | 学期周次校准底部抽屉（供 `SchedulePage` 与 `SettingsPage` 共享，避免页面互引） | `widget_test` |
+| `lib/widgets/calibrate_sheet.dart` | `showCalibrateSheet()` | 学期周次校准底部抽屉（供 `SchedulePage` 与 `SettingsPage` 共享，避免页面互引） | `schedule_menu_and_appearance_widget_test`, `settings_and_features_widget_test` |
 | `lib/widgets/formatted_text_span.dart` | `buildTextSpanFromSegments()`, `buildFormattedTextSpan()` | 将 `formatted_text.dart` 分词结果拼装为 `TextSpan` | `formatted_text_span_test` |
 
 ### 1.2 页面索引（`lib/pages/*` 18 页）
@@ -263,14 +263,14 @@
 
 | 层级 | 内容 | 目录 / 命令 |
 | :---: | :--- | :--- |
-| **L0** | 静态门禁（`<15s`） | `dart format --output=none --set-exit-if-changed lib test` + `flutter analyze --no-fatal-infos lib test` & `flutter analyze lib test`（主工程，严格类型与 7 条 lint）/ `(cd packages/zf_academic && dart format --output=none --set-exit-if-changed lib test example && dart analyze --fatal-infos lib test)` |
+| **L0** | 静态门禁（`<15s`） | `dart run tool/verify.dart --lint-only`（涵盖主工程/`tool/`/`zf_academic` 格式与静态分析、Windows 编码/C4819 校验）；日常快检用 `dart run tool/verify.dart --quick`（额外跑 `architecture_guard_test.dart`） |
 | **L1** | 协议与纯算法单测 | `packages/zf_academic/test/*_test.dart`（9 文件）+ 主工程纯算法/静态守卫 11 文件（`flutter test -j 2 --timeout 30s`） |
 | **L2** | 服务编排与状态机 | 注入 `FakeBackend` / `FakeReminderGateway` / `FakeDesktopWidgetGateway` / `FakeUpdaterGateway` 测单 flight 重登、熔断、`_authEpoch`、防抖与指纹去重 |
 | **L3** | UI、物理动效与重建隔离 | `flutter_test` 虚拟时钟帧进，断言弹簧单调、`RepaintBoundary` 0 重绘、`debugOnRebuildDirtyWidget` 0 重建、跨屏 0 溢出 |
 
 > 铁律：① 均在 `qustschedule/` 根目录执行；② 单次进程并发跑全量 `flutter test`（禁循环逐文件启动）；③ 优先向现有测试文件补用例，临时专项放 `test/custom/*_test.dart`。
 
-### 6.2 主工程测试套件（`test/*.dart`，26 文件）
+### 6.2 主工程测试套件（`test/*.dart`，30 文件）
 
 | 测试文件 | 层 | 守护契约 |
 | :--- | :---: | :--- |
@@ -279,7 +279,8 @@
 | `test/academic_service_test.dart` | L2 | `GradeStats.calculate` 加权 GPA 与扩展及格词表、`AcademicService` 拉取/缓存、`notEvaluated` 保留旧缓存、`syncCurrentTermAsync` 后台同步与并发共享单次重登 |
 | `test/app_model_test.dart` | L2 | 冷启动恢复、登录/退登清理、周次/校历/`gridSectionCount` 动态托底、后台刷新与重登流转、改密（`sessionInfo.username` 空回退本地）、切校原地加载与回滚、静默间隔与串联学业、调课 overlay、`_authEpoch`/`_academicLoadSeq` 防写脏、`accountKey` 大小写无关恢复与登出清理 |
 | `test/app_version_test.dart` | L1 | `loadAppVersion()` 的 `appVersionFull`/`appVersion` 严格等于 `pubspec.yaml` `version` |
-| `test/architecture_guard_test.dart` | L1 | `zf_academic` 隔离与 43 符号桶、`lib/` Import DAG 与纯 Dart 边界、`test/support/fake_*.dart` 集中、Kotlin/Windows C4819 & BOM 契约、`docs/dev/FILE_MAP.md` 双向对齐 |
+| `test/architecture_guard_test.dart` | L1 | `zf_academic` 隔离与 43 符号桶、`lib/` Import DAG 与纯 Dart 边界、`test/support/fake_*.dart` 集中、Kotlin/Windows C4819 & BOM 契约、`docs/dev/FILE_MAP.md` 双向对齐、`AppModel` 透传冻结（`<=134`）、`.gitattributes` 换行规则、SDK/AGP/`example` v11 对齐 |
+| `test/auth_and_shell_widget_test.dart` | L3 | 登录页、验证码页容错与样式统一、顶层状态路由、`HomeShell` 外壳懒建、Dock 按住滑动与液态透镜、调试页 |
 | `test/boost_idle_optimization_test.dart` | L2/L3 | `scheduleAfterRouteSettled`（含 `forward->reverse->forward` 恢复）、`SecureCredentialStore.get` 双 Key 并发、`SafeJsonFile` `>16KB` Isolate + `.bak` 自愈、`boot` 单次目录查询与空闲恢复学业、`ScheduleController`/`AcademicController` 记忆化、邻近周切片预热（`CourseBlock.debugBlockPlanSolveCountForTest` 0 新增）、`HomeShell` 懒建、`CaptchaPage` Base64 缓存、`DebugPage` 懒格式化、`ReminderPage`/`WidgetSettingsPage` 入场并行查询与骨架门控 |
 | `test/credentials_repository_test.dart` | L1/L2 | `SecureCredentialStore` `credentialStoreKey` 哈希键名、多账号隔离、`get`/`save`/`remove` 与异常降级 |
 | `test/dock_transition_test.dart` | L3 | 滑行中途抢跑交互、零时长不透明路由静默收敛、离场锁死、按住 Dock 锁内容、`0<->2` 单调不误停、反向零反冲、同向续速无跳变、`AppMenuScope` 随页滑入/划走收起、190ms 长按切页不误弹 |
@@ -289,17 +290,20 @@
 | `test/reminder_planner_test.dart` | L1 | `planCourseReminders`：1~60 分提前量、按日匹配夏冬表、超节跳过、单双周与调课覆盖、过期不补、`reminderMaxEvents` 截断、跨年、指纹与 payload、`reminderEventId` |
 | `test/reminder_service_test.dart` | L2 | `ReminderService`：指纹去重与 `force: true`、`prefsNotifier` 监听重同步、改提前量/形态重发、失败重试、`cancelAll()` 等在途同步并串行续跑、关开关/无课表幂等取消、`preferencesLoaded==false` 守卫、防抖、`ReminderRuntimeStatus.dirty`/`unavailable()`/`==`/`hashCode`、`MethodChannelReminderGateway` 往返与异常降级 |
 | `test/safe_json_file_test.dart` | L1 | `.tmp` 原子写 + `.bak` 轮转、损坏自愈、双坏 `hadUnrecoverableCorruption`、高并发 `updateJson` 排队、连续 `writeJson` 合并、`Preferences`/`FileScheduleCache` 抗损与写失败节流 |
+| `test/schedule_grid_widget_test.dart` | L3 | 周视图课表、冲突打点/抽屉、备注开关、`WeekPager` 全手势与借位、周次/内容通知分离、时间轴 `FittedBox`、`CourseBlock` M3/粗体预排版、右上角气泡与「今」按钮打断 |
+| `test/schedule_menu_and_appearance_widget_test.dart` | L3 | 课表页三点菜单（形变/滑选/Dock 直达/校准周次/作息/调课入口）与外观调节面板 |
 | `test/schedule_service_test.dart` | L2 | Cookie 优先免密/10s 超时/`bootstrap` 同源、`SESSION_EXPIRED` 自动重登、跨接口单 flight、10 分钟 2 次熔断与手动解除、失败回滚旧 Cookie、重登遇验证码、重登互斥阻塞新查询、中途 `signOut` 防复活、`buildAccountKey` 大小写与 `http↔https`/尾 `/` 回退 |
+| `test/settings_and_features_widget_test.dart` | L3 | 作息表草稿编辑与新建、三段节数与起止时间滚轮、设置页账号区与教务地址簿、课程提醒 UI（入口/`_leadDraft`/流体云/诊断）与桌面小组件入口 |
 | `test/stable_hash_test.dart` | L1 | `fnv1a32`/`fnv1a32Hex`/`courseColorIndex` 确定性、空串/越界防御与 9 色板边界 |
 | `test/term_calendar_test.dart` | L1 | `mondayOf`、`estimateTermStart`（秋 9/1、春 2/23 周一）、`weekOf`/`dateOf` 互逆、`termStartFromWeek`、`occursInWeek`/`entriesOfWeek`、`weekRangeLabel`、`compressWeeks`、`formatIsoDate` |
 | `test/term_selector_helper_test.dart` | L1 | `parseEnrollmentYear`（10 位学号前 2 位，修 `2021010101` 误判）、`estimateCurrentAcademicYear`、`filterTerms`（滤入学前/未来/第 3 小学期，保当前）、`formatTermPrimaryLabel` |
 | `test/timetable_test.dart` | L1 | `buildSections` 三段累加+大课间、月日生效与跨年回绕、`reconcileSections`、`roomOnly`、`Preferences` schema 1..15 迁移、边界夹取 |
+| `test/ui_components_widget_test.dart` | L3 | `AppSnackBar` 悬浮胶囊、触控按钮/长按菜单与 `TactileAppBar` 四层合绘、单层 `SelectionArea` 与底部弹窗公用容器 |
 | `test/updater_test.dart` | L2/L3 | `isVersionNewer`、`buildProxiedUrl`、`ReleaseInfo.cleanReleaseBody`、`cleanOldUpdateFiles`、Win 安装/便携匹配、`UpdateFlowController`（`UpdaterGateway` 注入、Android 权限/安装/取消 `_downloadEpoch` 与 `_isTriggeringInstall` 防竞态）单弹窗流转、顶栏更新图标与 SnackBar、`SHA256SUMS`、Win 便携 `robocopy /mir` + VBS、分片下载异常/取消即时中止清句柄 |
 | `test/widget_planner_test.dart` | L1 | `buildWidgetSnapshot` 14 天日程+双周网格、课/考混排、`rescheduled: true`、近期考试周次、指纹稳定、`conflictIndex/conflictTotal`、未登录空快照与异常节次防御 |
 | `test/widget_service_test.dart` | L2 | `DesktopWidgetService`：`preferencesLoaded==false` 守卫、指纹去重/`force: true`、改样式防抖、跨学期考试隔离、退登下发空快照、`clearAll` 等在途 `syncSnapshot` 防竞态回写 |
 | `test/widget_settings_page_test.dart` | L3 | 今日 4×2/2×2 混排、周日衔接下周一、课后切明日、关地点隐座位、14 天过期不误报、本周周末列智能显隐与 M3 行高/标题上限 `12`/圆角留白/`dateRange` 对齐、下一节状态胶囊、0% 透明隐圆角滑块、恢复默认撤销、`360×640` + `2.0×` 字体 0 溢出 |
 | `test/widget_style_test.dart` | L1 | `DesktopWidgetStyle` 5 预设（解耦密度/字号/开关）、透明度/圆角/字号(`75%..120%`)夹取、畸形/旧 JSON 迁移、`DesktopWidgetConfigSet` 三类独立持久化（schema 14） |
-| `test/widget_test.dart` | L3 | 综合 UI 回归（5000+ 行）：登录、周课表、冲突打点/抽屉、备注开关、`WeekPager` 全手势与借位、通知分离、`HomeShell` 懒建/Dock、时间轴 `FittedBox`、`CourseBlock` M3/粗体扫雷、菜单形变/滑选/Dock 直达、外观面板、液态透镜、作息表草稿编辑、7 滚轮、气泡、地址簿、调试、提醒、`AppSnackBar`、验证码、`TactileAppBar` 四层合绘、单层 `SelectionArea` |
 
 ### 6.3 协议包测试套件（`packages/zf_academic/test/*.dart`，9 文件）
 
@@ -315,20 +319,21 @@
 | `http_client_test.dart` | `ZfHttpClient`：Cookie、表单空格 `+`、双 `name=mm`、302 POST→GET、`UNTRUSTED_URL`、统一认证归 `SESSION_EXPIRED`、同主机 http 升 https、`inspectResponse` 区分 200 下 `SERVER_ERROR`/`ACCESS_FORBIDDEN`/`PAGE_CHANGED`、读重试 1 次/写不重试 `RESULT_UNKNOWN`、GBK/latin1、可注入 `paceHosts`、真实 `dart:io`、`close()` 幂等与关闭后拦截 |
 | `login_test.dart` | `ZhengfangClient`：URL 推导、`probe()`、表单 RSA 登录（`?time=`/双 `mm`/复用公钥/密码错优先）、验证码、Cookie 免登与 `0600`、`checkSession` 三态、`fetchTerms`/`lastTermsRawBody` 刷新/`fetchSchedule`（`kbList`+`sjkList`+`cxXsgrkb`）、`dispose()`/`close()` 取消在途请求、`httpStatus` 透传、`FileCookieStorage` 合并与容错 |
 
-### 6.4 测试替身（`test/support/*`，4 替身）
+### 6.4 测试替身与公共辅助（`test/support/*`，5 文件）
 
 - **`test/support/fake_backend.dart`**：样本 `sampleSchedule([termId])`（含 `'电力电子技术'`）、`snapshotOf(baseUrl, {value})`、`sampleExams([termId])`（2 门）、`sampleGrades([termId])`（2 门）；`FakeBackend implements ScheduleBackend`；`FakeSessionRepository` & `FakeScheduleCache`；快捷异常 `expired()`、`pageChanged()`、`badCredentials()`。
 - **`test/support/fake_reminder_gateway.dart`**：`FakeReminderGateway implements ReminderGateway`（记录 `syncedPayloads`/`testRequests`/`previewRequests`/`toasts`/权限打开计数；`Completer<void>? syncGate` 挂起 `sync()` 测在途并发合并）。
 - **`test/support/fake_updater_gateway.dart`**：`FakeUpdaterGateway implements UpdaterGateway`（可控 `canInstall`/`installError`/`externalUrlResult` 与调用计数，供 `UpdateFlowController` 与弹窗测试注入）。
 - **`test/support/fake_widget_gateway.dart`**：`FakeDesktopWidgetGateway implements DesktopWidgetGateway`（记录 `syncedPayloads`/`clearCount`/`pinRequests`、支持 `syncGate`/`livePinnedCounts` 实时推送）。
+- **`test/support/widget_test_helpers.dart`**：UI 回归公共构造器与断言辅助（`buildModel`、`wrap`、`shellPagePosition`、`shellCurrentPage`、`todayFab`、`pushEditor`、`sparseSchedule`）。
 
 ### 6.5 CI/CD 流水线（`.github/workflows/build-release.yml`）
 
-- **触发**：`main`/`master` `push`/`pull_request`（路径过滤 `lib/**`, `test/**`, `packages/**`, `assets/**`, `android/**`, `windows/**`, `pubspec.*`, `analysis_options.yaml`, `.github/**`，排除 `**.md`）、`v*` Tag、`workflow_dispatch`。
+- **触发**：`main`/`master` `push`/`pull_request`（路径过滤 `lib/**`, `test/**`, `tool/**`, `packages/**`, `assets/**`, `android/**`, `windows/**`, `pubspec.*`, `analysis_options.yaml`, `.gitattributes`, `.github/**`，排除 `**.md`）、`v*` Tag、`workflow_dispatch`。
 - **并发与权限**：分支 `cancel-in-progress: true`，`refs/tags/v*` `false`；顶层 `contents: read`，按需下放 `test` (`actions: write`) 与 `create-release` (`contents: write`)。
 - **环境**：Flutter `3.47.7`；Node 24 Actions（`actions/checkout@v7`、`actions/setup-java@v6`、`gradle/actions/setup-gradle@v6`、`actions/upload-artifact@v7`、`actions/download-artifact@v8`、`softprops/action-gh-release@v3`）。
 - **五 Job**：
-  1. **`test` (`ubuntu-latest`)**：`v*` 校验 Tag == `pubspec.yaml` `v${VERSION}` → 双目录 `dart format`（含 `packages/zf_academic/example`）→ `flutter analyze --no-fatal-infos lib test` + `dart analyze --fatal-infos lib test` → `Lint: Windows encoding & C4819 guard`（`.cpp`/`.h` 纯 ASCII、`setup.iss` UTF-8 BOM、`Runner.rc` 无 BOM UTF-8 + `#pragma code_page(65001)`）→ `(cd packages/zf_academic && dart test -j 2 --timeout 30s)` → `flutter test -j 2 --timeout 30s`（`CORE_TESTS` 排除 `test/custom`）→ 若有 `test/custom/*_test.dart` 单独运行；非 PR 失败时 `gh run cancel ${{ github.run_id }}` Fail-Fast 中止双端打包。
+  1. **`test` (`ubuntu-latest`)**：`v*` 校验 Tag == `pubspec.yaml` `v${VERSION}` → `dart run tool/verify.dart --lint-only`（含主工程/`tool/`/`zf_academic` 格式含 `example`、静态分析、Windows C4819/BOM/`Runner.rc` 校验）→ `dart run tool/verify.dart --tests-only`（`zf_academic` `dart test -j 2 --timeout 30s` + 主工程 `CORE_TESTS` 排除 `test/custom` + `test/custom` 按需运行）；非 PR 失败时 `gh run cancel ${{ github.run_id }}` Fail-Fast 中止双端打包。
   2. **`verify-android` (`ubuntu-latest`，仅 PR)**：JDK 21 + Gradle + `flutter build apk --debug --config-only` → `./android/gradlew -p android :app:processDebugManifest :app:compileDebugKotlin`（fork PR 可免密钥跑通原生校验）。
   3. **`build-android` (`ubuntu-latest`，非 PR)**：JDK 21 + Gradle (`cache-cleanup: never`)；`v*` 强校验 `KEYSTORE_BASE64`/`KEY_STORE_PASSWORD`/`KEY_ALIAS`/`KEY_PASSWORD`（非 Tag 缺则退 debug）；`flutter build apk --release --split-per-abi --target-platform android-arm,android-arm64` → 产出 `QustSchedule_v${VERSION}-arm64-v8a.apk` & `armeabi-v7a.apk`（`archive: false`, `retention-days: 14`）。
   4. **`build-windows` (`windows-latest`，非 PR)**：关 Defender 实时扫描 → `flutter build windows --release` → Inno Setup (`windows\packaging\setup.iss`，检 `$LASTEXITCODE`) 产 `QustSchedule_v${VERSION}-windows-x64-setup.exe` + `Compress-Archive` 产 `QustSchedule_v${VERSION}-windows-x64.zip`（`retention-days: 14`）。
