@@ -214,7 +214,7 @@
 
 - **`kindSignature(kind)` 差量**：`KIND_WEEK` 仅哈希 `(version, signedIn, termId, termStartIso, maxWeek, weeks, styleOf(KIND_WEEK))`；`KIND_TODAY`/`KIND_NEXT` 哈希 `(version, signedIn, termId, termStartIso, maxWeek, days, upcomingExams, styleOf(kind))`。改单类样式仅重绘该类。
 - **`forceTimeWidgets` 兜底**：三类签名均未变且 `weekDateStale == false`（如回前台 600ms 后的 `syncNow(force: true)`）时，仅置 `forceTimeWidgets = true` 重绘今日/下一节，**不重绘周位图**。
-- **启动与返回衔接**：显式指向 `MainActivity`，`ACTION_MAIN` + `CATEGORY_LAUNCHER` + `FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_RESET_TASK_IF_NEEDED`；保持默认 `RenderMode.surface`（避免 `RenderMode.texture` 在 Impeller Vulkan 下多次前后台切换引发交换链阻塞）配合浅色 `LaunchTheme`/`NormalTheme` 与 `MainActivity.popSystemNavigator()` 根栈 `moveTaskToBack(true)`，兼顾零黑闪与反复切换流畅度。
+- **启动与返回衔接**：显式指向 `MainActivity`，`ACTION_MAIN` + `CATEGORY_LAUNCHER` + `FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_RESET_TASK_IF_NEEDED`；保持默认 `RenderMode.surface` 并在 `MainActivity.onFlutterSurfaceViewCreated()` 中调用 `setZOrderOnTop(true)`（避免 `SurfaceView` 在 `DecorView` 打洞导致小组件交叉淡入内容从暗变亮），配合浅色 `LaunchTheme`/`NormalTheme` 与 `MainActivity.popSystemNavigator()` 根栈 `moveTaskToBack(true)`，兼顾零闪变与反复切换流畅度。
 - **RequestCode 分配（严禁与 `reminder/` 的 `2000~2003` 冲突）**：
 
 | RC | 常量 | 类型 | Flag | 用途 |
