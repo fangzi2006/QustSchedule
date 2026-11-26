@@ -412,10 +412,10 @@ class ReminderScheduler(context: Context) {
         )
     }
 
-    /** 稳定 requestCode：同一事件永远落在同一槽位，重排即覆盖。 */
+    /** 稳定 requestCode：同一事件永远落在同一槽位，重排即覆盖（保留 0..9999 给固定槽位）。 */
     private fun requestCodeFor(eventId: String): Int {
-        val code = eventId.hashCode() and 0x3fffffff
-        return if (code == 0) 1 else code
+        val raw = eventId.hashCode() and 0x3fffffff
+        return if (raw < MIN_EVENT_REQUEST_CODE) raw + MIN_EVENT_REQUEST_CODE else raw
     }
 
     /** 旧版撤销闹钟 requestCode：仅用于升级后清理历史遗留闹钟。 */
@@ -434,6 +434,9 @@ class ReminderScheduler(context: Context) {
 
         /** 剩余不足一秒的事件直接跳过，避免刚排上就触发。 */
         private const val MIN_LEAD_MS = 1000L
+
+        /** 0..9999 保留给固定 requestCode（2001/2002/2003/3001/4402/4403/4501）。 */
+        private const val MIN_EVENT_REQUEST_CODE = 10_000
 
         private const val RC_DAILY_RESYNC = 2001
         private const val RC_TEST = 2002

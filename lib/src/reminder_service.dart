@@ -25,6 +25,7 @@ class ReminderService {
        _debounce = debounce,
        _now = now ?? DateTime.now {
     model.addListener(_onModelChanged);
+    model.prefsNotifier.addListener(_onModelChanged);
   }
 
   final AppModel model;
@@ -34,9 +35,12 @@ class ReminderService {
 
   Timer? _timer;
   bool _disposed = false;
-  Future<ReminderSyncResult?>? _syncInFlight;
-  bool _resyncQueued = false;
-  bool _resyncForceQueued = false;
+  Future<void>? _syncInFlight;
+  Future<void>? _cancelInFlight;
+  Completer<ReminderSyncResult?>? _queuedSyncCompleter;
+  bool _queuedForce = false;
+  Completer<ReminderSyncResult?>? _postCancelSyncCompleter;
+  bool _postCancelForce = false;
   int _syncEpoch = 0;
 
   /// 已经"取消过"一次：课表没了 / 开关关着时不必每次通知都再调一次原生。
@@ -80,34 +84,97 @@ class ReminderService {
     _timer?.cancel();
     _timer = null;
 
-    final active = _syncInFlight;
-    if (active != null) {
-      _resyncQueued = true;
-      _resyncForceQueued = _resyncForceQueued || force;
-      return active;
+    final cancelFlight = _cancelInFlight;
+    if (cancelFlight != null) {
+      final existing = _postCancelSyncCompleter;
+      _postCancelForce = _postCancelForce || force;
+      if (existing != null) return existing.future;
+      final completer = Completer<ReminderSyncResult?>();
+      _postCancelSyncCompleter = completer;
+      unawaited(
+        cancelFlight.whenComplete(() {
+          final pending = _postCancelSyncCompleter;
+          final pendingForce = _postCancelForce;
+          _postCancelSyncCompleter = null;
+          _postCancelForce = false;
+          if (pending == null || pending.isCompleted) return;
+          if (_disposed) {
+            pending.complete(null);
+            return;
+          }
+          syncNow(force: pendingForce)
+              .then(pending.complete, onError: pending.completeError);
+        }),
+      );
+      return completer.future;
     }
 
-    final future = _runSyncLoop(force);
-    _syncInFlight = future;
-    return future;
+    if (_syncInFlight != null) {
+      _queuedForce = _queuedForce || force;
+      final existing = _queuedSyncCompleter;
+      if (existing != null) return existing.future;
+      final completer = Completer<ReminderSyncResult?>();
+      _queuedSyncCompleter = completer;
+      return completer.future;
+    }
+
+    final completer = Completer<ReminderSyncResult?>();
+    _syncInFlight = _runSyncLoop(
+      initialForce: force,
+      initialCompleter: completer,
+    );
+    return completer.future;
   }
 
-  Future<ReminderSyncResult?> _runSyncLoop(bool initialForce) async {
+  Future<void> _runSyncLoop({
+    required bool initialForce,
+    required Completer<ReminderSyncResult?> initialCompleter,
+  }) async {
     var force = initialForce;
-    ReminderSyncResult? latest;
+    var completer = initialCompleter;
     try {
-      while (!_disposed) {
-        _resyncQueued = false;
-        _resyncForceQueued = false;
-        latest = await _syncOnce(force: force);
-        if (!_resyncQueued || _disposed) break;
-        force = _resyncForceQueued;
+      while (true) {
+        if (_disposed) {
+          if (!completer.isCompleted) completer.complete(null);
+          break;
+        }
+        final epochAtStart = _syncEpoch;
+        try {
+          final result = await _syncOnce(force: force);
+          if (!completer.isCompleted) {
+            completer.complete(result);
+          }
+        } catch (error, stackTrace) {
+          if (!completer.isCompleted) {
+            completer.completeError(error, stackTrace);
+          }
+        }
+
+        final nextCompleter = _queuedSyncCompleter;
+        final nextForce = _queuedForce;
+        _queuedSyncCompleter = null;
+        _queuedForce = false;
+
+        if (nextCompleter == null) break;
+        if (_disposed ||
+            _cancelInFlight != null ||
+            epochAtStart != _syncEpoch) {
+          if (!nextCompleter.isCompleted) {
+            nextCompleter.complete(null);
+          }
+          break;
+        }
+        force = nextForce;
+        completer = nextCompleter;
       }
-      return latest;
     } finally {
       _syncInFlight = null;
-      _resyncQueued = false;
-      _resyncForceQueued = false;
+      final leftover = _queuedSyncCompleter;
+      _queuedSyncCompleter = null;
+      _queuedForce = false;
+      if (leftover != null && !leftover.isCompleted) {
+        leftover.complete(null);
+      }
     }
   }
 
@@ -170,17 +237,50 @@ class ReminderService {
   }
 
   /// 强制取消（退出登录、换账号时用）：无论指纹如何都清一遍。
-  Future<void> cancelAll() async {
+  Future<void> cancelAll() {
+    if (_disposed) return Future<void>.value();
+    final existingCancel = _cancelInFlight;
+    if (existingCancel != null) {
+      final postCancel = _postCancelSyncCompleter;
+      _postCancelSyncCompleter = null;
+      _postCancelForce = false;
+      if (postCancel != null && !postCancel.isCompleted) {
+        postCancel.complete(null);
+      }
+      return existingCancel;
+    }
+
     _syncEpoch++;
-    _resyncQueued = false;
-    _resyncForceQueued = false;
     _timer?.cancel();
     _timer = null;
     _cancelled = true;
     _lastFingerprint = null;
     _lastPlan = null;
     _lastResult = null;
-    await _gateway.cancel();
+    final preCancelQueued = _queuedSyncCompleter;
+    _queuedSyncCompleter = null;
+    _queuedForce = false;
+    if (preCancelQueued != null && !preCancelQueued.isCompleted) {
+      preCancelQueued.complete(null);
+    }
+
+    final flight = _runCancelAll();
+    _cancelInFlight = flight;
+    return flight;
+  }
+
+  Future<void> _runCancelAll() async {
+    try {
+      while (_syncInFlight != null) {
+        try {
+          await _syncInFlight;
+        } catch (_) {}
+      }
+      if (_disposed) return;
+      await _gateway.cancel();
+    } finally {
+      _cancelInFlight = null;
+    }
   }
 
   /// 查一次原生状态（诊断/权限卡片打开时调用，不进 build 热路径）。
@@ -255,8 +355,22 @@ class ReminderService {
 
   void dispose() {
     _disposed = true;
+    _syncEpoch++;
     _timer?.cancel();
     _timer = null;
     model.removeListener(_onModelChanged);
+    model.prefsNotifier.removeListener(_onModelChanged);
+    final queued = _queuedSyncCompleter;
+    _queuedSyncCompleter = null;
+    _queuedForce = false;
+    if (queued != null && !queued.isCompleted) {
+      queued.complete(null);
+    }
+    final postCancel = _postCancelSyncCompleter;
+    _postCancelSyncCompleter = null;
+    _postCancelForce = false;
+    if (postCancel != null && !postCancel.isCompleted) {
+      postCancel.complete(null);
+    }
   }
 }

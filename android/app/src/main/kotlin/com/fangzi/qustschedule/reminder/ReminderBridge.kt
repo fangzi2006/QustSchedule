@@ -23,6 +23,7 @@ class ReminderBridge(
     messenger: BinaryMessenger,
 ) : MethodChannel.MethodCallHandler {
 
+    private val appContext = activity.applicationContext
     private val channel = MethodChannel(messenger, CHANNEL)
     private val scheduler = ReminderScheduler(activity)
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -111,10 +112,13 @@ class ReminderBridge(
             }
 
             // 诊断页「立即显示通知」：只发一条示例，不挂闹钟、不碰账本。
+            // untilEnd 为保留兼容参数：按 REMINDER.md 约定，原生流体云卡片统一在上课时刻（startMs）收起。
             "previewReminder" -> {
                 val style = call.argument<String>("style")
                     ?: ReminderPayload.STYLE_BANNER
                 val lead = call.argument<Int>("leadMinutes") ?: 10
+                @Suppress("UNUSED_VARIABLE")
+                val untilEnd = call.argument<Boolean>("untilEnd") ?: false
                 val event = ReminderSamples.event(lead)
                 val shown = if (style == ReminderPayload.STYLE_FLUID) {
                     ReminderFluidService.start(activity, event)
@@ -133,9 +137,9 @@ class ReminderBridge(
                 val message = call.argument<String>("message") ?: ""
                 val isLong = call.argument<Boolean>("long") ?: false
                 if (message.isNotEmpty()) {
-                    mainHandler.post {
+                    postReply {
                         val duration = if (isLong) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
-                        Toast.makeText(activity.applicationContext, message, duration).show()
+                        Toast.makeText(appContext, message, duration).show()
                     }
                 }
                 result.success(null)

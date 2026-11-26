@@ -14,6 +14,7 @@ import 'package:zf_academic/zf_academic.dart';
 
 import 'course_text.dart';
 import 'reschedule.dart';
+import 'stable_hash.dart';
 import 'term_calendar.dart';
 import 'timetable.dart';
 
@@ -266,7 +267,7 @@ ReminderPlan planCourseReminders({
       // 容错路径（空 weeks = 每周都上）也保持同一套语义。
       if (!occursInWeek(entry, week)) continue;
 
-      final startMinutes = _minutesOf(sections, entry.startPeriod);
+      final startMinutes = sectionStartMinutes(sections, entry.startPeriod);
       if (startMinutes == null) {
         skipped++;
         continue;
@@ -274,10 +275,10 @@ ReminderPlan planCourseReminders({
       // 结束时刻要取「末节的**下课**时间」，不是末节的开始时间。
       // 取不到就退化成零时长，绝不让 endMs < startMs。
       final endMinutes =
-          _endMinutesOf(sections, entry.endPeriod) ?? startMinutes;
+          sectionEndMinutes(sections, entry.endPeriod) ?? startMinutes;
 
-      final startMs = _at(date, startMinutes).millisecondsSinceEpoch;
-      final endMs = _at(date, endMinutes).millisecondsSinceEpoch;
+      final startMs = dateAtMinutes(date, startMinutes).millisecondsSinceEpoch;
+      final endMs = dateAtMinutes(date, endMinutes).millisecondsSinceEpoch;
       final remindAtMs = startMs - leadMs;
       // 已经过点的、以及"提前量把时间推到过去"的，都不补发。
       if (remindAtMs <= now.millisecondsSinceEpoch) continue;
@@ -355,7 +356,7 @@ String reminderEventId({
     date.day.toString().padLeft(2, '0'),
   ].join();
   final seed = '$entryId|$day|$startPeriod';
-  return 'e_${_hex32(_fnv1a(seed))}';
+  return 'e_${fnv1a32Hex(seed)}';
 }
 
 /// 课表 + 提前量的稳定指纹（FNV-1a 32 位，8 位十六进制）。
@@ -382,35 +383,5 @@ String reminderFingerprint({
       ..write(':')
       ..write(event.remindAtMs);
   }
-  return _hex32(_fnv1a(buffer.toString()));
+  return fnv1a32Hex(buffer.toString());
 }
-
-int? _minutesOf(List<SectionTime> sections, int period) {
-  for (final section in sections) {
-    if (section.period == period) return section.startMinutes;
-  }
-  return null;
-}
-
-int? _endMinutesOf(List<SectionTime> sections, int period) {
-  for (final section in sections) {
-    if (section.period == period) return section.endMinutes;
-  }
-  return null;
-}
-
-/// 当天 [minutes] 分钟对应的本地时刻。
-DateTime _at(DateTime date, int minutes) =>
-    DateTime(date.year, date.month, date.day, minutes ~/ 60, minutes % 60);
-
-/// FNV-1a 32 位。用 UTF-8 字节而不是 code unit，结果与平台无关。
-int _fnv1a(String text) {
-  var hash = 0x811C9DC5;
-  for (final byte in utf8.encode(text)) {
-    hash ^= byte;
-    hash = (hash * 0x01000193) & 0xFFFFFFFF;
-  }
-  return hash;
-}
-
-String _hex32(int value) => value.toRadixString(16).padLeft(8, '0');

@@ -84,7 +84,7 @@ object ReminderFluidRenderer {
             .setShowWhen(true)
             .setUsesChronometer(true)
             .setChronometerCountDown(true)
-            .setTimeoutAfter((state.startMs - now).coerceAtLeast(1000L))
+            .setTimeoutAfter((state.stopAtMs - now).coerceAtLeast(1000L))
             .setShortCriticalText(primary.take(7))
             .setRequestPromotedOngoing(true)
             .setOngoing(true)

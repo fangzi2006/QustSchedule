@@ -41,7 +41,7 @@ class ReminderFluidService : Service() {
                     return START_NOT_STICKY
                 }
                 val now = System.currentTimeMillis()
-                if (now >= state.startMs) {
+                if (now >= state.stopAtMs) {
                     Log.i(TAG, "already reached class start time, skipping fluid card")
                     stopSelf()
                     return START_NOT_STICKY
@@ -62,9 +62,9 @@ class ReminderFluidService : Service() {
                     return START_NOT_STICKY
                 }
                 // 挂一条"开课准时收起"的闹钟兜底（防止进程被冻结时 Handler 延迟失效）。
-                armStopAlarm(this, state.startMs)
+                armStopAlarm(this, state.stopAtMs)
                 handler.removeCallbacks(stopRunnable)
-                handler.postDelayed(stopRunnable, (state.startMs - now).coerceAtLeast(0L))
+                handler.postDelayed(stopRunnable, (state.stopAtMs - now).coerceAtLeast(0L))
                 Log.i(
                     TAG,
                     "fluid card started name=${state.name} " +

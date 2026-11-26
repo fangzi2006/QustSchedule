@@ -9,12 +9,15 @@
 ///  - `cancel()`：取消全部（含流体云卡片）；
 ///  - `status()`：权限、账本、形态与流体云状态；
 ///  - `requestNotificationPermission()`：申请通知权限（Android 13+）；
+///  - `openNotificationSettings()`：跳到应用通知管理页；
 ///  - `openExactAlarmSettings()`：跳到精确闹钟授权页；
 ///  - `openBatterySettings()`：跳到应用详情（耗电管理）；
 ///  - `openAutostartSettings()`：跳到厂商自启动页，跳不动退系统设置主页；
 ///  - `testReminder({style, delaySeconds})`：延迟若干秒发一条示例提醒；
-///  - `previewReminder({style, leadMinutes})`：不挂闹钟，立刻显示一条示例；
-///  - `stopFluid()`：立刻收起流体云卡片。
+///  - `previewReminder({style, leadMinutes, untilEnd})`：不挂闹钟，立刻显示一条示例
+///    （`untilEnd` 为保留兼容参数，原生流体云卡片统一在上课时刻收起）；
+///  - `stopFluid()`：立刻收起流体云卡片；
+///  - `toast({message, long})`：显示系统级 Toast 提示。
 library;
 
 import 'package:flutter/foundation.dart';
@@ -82,6 +85,7 @@ class ReminderRuntimeStatus {
     this.payloadAtMs,
     this.fingerprint = '',
     this.style = '',
+    this.dirty = false,
     this.fluidCasting = false,
   });
 
@@ -98,6 +102,7 @@ class ReminderRuntimeStatus {
       payloadAtMs = null,
       fingerprint = '',
       style = '',
+      dirty = false,
       fluidCasting = false;
 
   final bool available;
@@ -123,6 +128,9 @@ class ReminderRuntimeStatus {
   /// 原生记住的形态：`banner` / `fluid`。
   final String style;
 
+  /// 系统时间/时区变化后尚未由 Flutter 重新同步。
+  final bool dirty;
+
   /// 流体云卡片当前是否正在显示。
   final bool fluidCasting;
 
@@ -145,6 +153,7 @@ class ReminderRuntimeStatus {
       payloadAtMs: _intOf(map['payloadAtMs']),
       fingerprint: (map['fingerprint'] as String?) ?? '',
       style: (map['style'] as String?) ?? '',
+      dirty: map['dirty'] == true,
       fluidCasting: map['fluidCasting'] == true,
     );
   }
@@ -165,6 +174,7 @@ class ReminderRuntimeStatus {
           payloadAtMs == other.payloadAtMs &&
           fingerprint == other.fingerprint &&
           style == other.style &&
+          dirty == other.dirty &&
           fluidCasting == other.fluidCasting;
 
   @override
@@ -180,6 +190,7 @@ class ReminderRuntimeStatus {
     payloadAtMs,
     fingerprint,
     style,
+    dirty,
     fluidCasting,
   );
 }
@@ -214,6 +225,7 @@ abstract class ReminderGateway {
   ///
   /// 与 [sendTestReminder] 的区别：这里只验证「文案与形态长什么样」，
   /// 用来预览横幅/流体云，链路是否通畅要看 [sendTestReminder]。
+  /// [untilEnd] 为保留兼容参数：按设计约定，原生流体云卡片统一在上课时刻（`startMs`）收起。
   Future<bool> previewReminder({
     required String style,
     required int leadMinutes,
@@ -223,7 +235,7 @@ abstract class ReminderGateway {
   /// 立刻收起流体云卡片（用户手动停止或在页面里关掉形态时用）。
   Future<void> stopFluid();
 
-  /// 显示系统级 Toast 提示（跨进程覆盖在系统设置等页面上方）。
+  /// 显示系统级 Toast 提示（跨进程覆盖在系统设置等页面上方，通过通道方法 `toast` 发送）。
   Future<void> showToast(String message, {bool longDuration = false});
 }
 

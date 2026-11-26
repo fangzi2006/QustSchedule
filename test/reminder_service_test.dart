@@ -5,6 +5,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/src/app_model.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
@@ -248,4 +249,455 @@ void main() {
       expect(rig.service.lastStatus, isNotNull);
     });
   });
+
+  group('prefsNotifier 订阅与 cancelAll 竞态防护', () {
+    test('仅 prefsNotifier 通知即可触发防抖同步，dispose 后不再响应', () async {
+      final rig = buildRig(debounce: const Duration(milliseconds: 20));
+      expect(rig.gateway.syncedPayloads, isEmpty);
+
+      rig.model.prefs.notifyPrefs();
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(rig.gateway.syncedPayloads.length, 1);
+
+      rig.service.dispose();
+      rig.model.prefs.notifyPrefs();
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(rig.gateway.syncedPayloads.length, 1);
+    });
+
+    test('cancelAll 等待在途 sync 完成后再调用原生 cancel（成功与异常场景）', () async {
+      final rig = buildRig();
+      final gate = Completer<void>();
+      rig.gateway.syncGate = gate;
+
+      final syncFuture = rig.service.syncNow();
+      await Future<void>.delayed(Duration.zero);
+      expect(rig.gateway.syncedPayloads.length, 1);
+      expect(rig.gateway.cancelCount, 0);
+
+      final cancelFuture = rig.service.cancelAll();
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        rig.gateway.cancelCount,
+        0,
+        reason: '在途 sync 尚未结束时 cancelAll 不得提前调用原生 cancel',
+      );
+
+      rig.gateway.syncGate = null;
+      gate.complete();
+      await Future.wait(<Future<Object?>>[syncFuture, cancelFuture]);
+      expect(rig.gateway.cancelCount, 1);
+      expect(rig.service.lastPlan, isNull);
+      expect(rig.service.lastResult, isNull);
+
+      // 即使在途 sync 抛出异常，cancelAll 仍应安全落到 _gateway.cancel()。
+      final throwingGateway = _ThrowingSyncReminderGateway();
+      final throwingModel = buildModel(
+        preferences: Preferences.inMemory(reminderEnabled: true),
+      );
+      throwingModel.hydrateForTest(
+        schedule: sampleSchedule(),
+        termStart: DateTime(2026, 9, 7),
+        week: 1,
+      );
+      final throwingService = ReminderService(
+        model: throwingModel,
+        gateway: throwingGateway,
+        debounce: const Duration(milliseconds: 1),
+        now: () => _now,
+      );
+      addTearDown(() {
+        throwingService.dispose();
+        throwingModel.dispose();
+      });
+
+      final failingSync = throwingService.syncNow();
+      await Future<void>.delayed(Duration.zero);
+      final cancelAfterThrow = throwingService.cancelAll();
+      await Future<void>.delayed(Duration.zero);
+      expect(throwingGateway.cancelCount, 0);
+
+      throwingGateway.failGate.completeError(StateError('native boom'));
+      await expectLater(failingSync, throwsStateError);
+      await cancelAfterThrow;
+      expect(throwingGateway.cancelCount, 1);
+    });
+
+    test('T3c: cancelAll 等待在途 sync 期间到达的 syncNow 不得在 cancel 前触发额外同步', () async {
+      final gw = _OrderedReminderGateway();
+      final model = buildModel(
+        preferences: Preferences.inMemory(reminderEnabled: true),
+      );
+      model.hydrateForTest(
+        schedule: sampleSchedule(),
+        termStart: DateTime(2026, 9, 7),
+        week: 1,
+      );
+      final service = ReminderService(
+        model: model,
+        gateway: gw,
+        debounce: const Duration(milliseconds: 1),
+        now: () => _now,
+      );
+      addTearDown(() {
+        service.dispose();
+        model.dispose();
+      });
+
+      final syncGate1 = Completer<void>();
+      gw.syncGates.add(syncGate1);
+
+      final sync1 = service.syncNow();
+      await Future<void>.delayed(Duration.zero);
+      expect(gw.ops, <String>['sync:start']);
+
+      final cancelFuture = service.cancelAll();
+      // cancelAll 等待在途 sync 期间触发 syncNow（以及 prefsNotifier 触发）
+      final sync2 = service.syncNow();
+      model.prefs.notifyPrefs();
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(gw.ops, <String>[
+        'sync:start',
+      ], reason: 'cancelAll 尚未完成时不得启动第二次同步');
+
+      syncGate1.complete();
+      await Future.wait(<Future<Object?>>[sync1, cancelFuture, sync2]);
+
+      expect(gw.ops, <String>[
+        'sync:start',
+        'sync:end',
+        'cancel:start',
+        'cancel:end',
+        'sync:start',
+        'sync:end',
+      ]);
+    });
+
+    test(
+      'T3a: cancelAll 正在 await _gateway.cancel 期间到达的 syncNow 串行排在其后且之后可继续同步',
+      () async {
+        final gw = _OrderedReminderGateway();
+        final model = buildModel(
+          preferences: Preferences.inMemory(reminderEnabled: true),
+        );
+        model.hydrateForTest(
+          schedule: sampleSchedule(),
+          termStart: DateTime(2026, 9, 7),
+          week: 1,
+        );
+        final service = ReminderService(
+          model: model,
+          gateway: gw,
+          debounce: const Duration(milliseconds: 1),
+          now: () => _now,
+        );
+        addTearDown(() {
+          service.dispose();
+          model.dispose();
+        });
+
+        final cancelGate = Completer<void>();
+        gw.cancelGates.add(cancelGate);
+
+        final cancelFuture = service.cancelAll();
+        await Future<void>.delayed(Duration.zero);
+        expect(gw.ops, <String>['cancel:start']);
+
+        final syncDuringCancel = service.syncNow();
+        await Future<void>.delayed(Duration.zero);
+        expect(gw.ops, <String>[
+          'cancel:start',
+        ], reason: 'cancel 尚未结束前不得并发调用 _gateway.sync');
+
+        cancelGate.complete();
+        await Future.wait(<Future<Object?>>[cancelFuture, syncDuringCancel]);
+        expect(gw.ops, <String>[
+          'cancel:start',
+          'cancel:end',
+          'sync:start',
+          'sync:end',
+        ]);
+
+        // cancelAll 彻底结束后继续调 syncNow(force: true) 仍能正常工作
+        final after = await service.syncNow(force: true);
+        expect(after?.ok, isTrue);
+        expect(gw.ops, <String>[
+          'cancel:start',
+          'cancel:end',
+          'sync:start',
+          'sync:end',
+          'sync:start',
+          'sync:end',
+        ]);
+      },
+    );
+
+    test('T3b: 在途 sync 抛错时已排队的二次 syncNow 仍独立执行并解析各自结果', () async {
+      final gw = _OrderedReminderGateway();
+      final model = buildModel(
+        preferences: Preferences.inMemory(
+          reminderEnabled: true,
+          reminderLeadMinutes: 10,
+        ),
+      );
+      model.hydrateForTest(
+        schedule: sampleSchedule(),
+        termStart: DateTime(2026, 9, 7),
+        week: 1,
+      );
+      final service = ReminderService(
+        model: model,
+        gateway: gw,
+        debounce: const Duration(milliseconds: 1),
+        now: () => _now,
+      );
+      addTearDown(() {
+        service.dispose();
+        model.dispose();
+      });
+
+      final firstGate = Completer<void>();
+      gw.syncGates.add(firstGate);
+      gw.syncErrors.add(StateError('sync failed'));
+
+      final first = service.syncNow();
+      await Future<void>.delayed(Duration.zero);
+
+      await model.setReminderLeadMinutes(30);
+      final second = service.syncNow(force: true);
+
+      firstGate.complete();
+      await expectLater(first, throwsStateError);
+      final secondResult = await second;
+      expect(secondResult, isNotNull);
+      expect(secondResult!.ok, isTrue);
+      expect(service.lastPlan?.leadMinutes, 30);
+      expect(gw.ops, <String>[
+        'sync:start',
+        'sync:throw',
+        'sync:start',
+        'sync:end',
+      ]);
+    });
+
+    test('dispose 期间存在挂起 sync/cancel/post-cancel 排队时安全收尾不卡死且不越界调用原生', () async {
+      final gw = _OrderedReminderGateway();
+      final model = buildModel(
+        preferences: Preferences.inMemory(reminderEnabled: true),
+      );
+      model.hydrateForTest(
+        schedule: sampleSchedule(),
+        termStart: DateTime(2026, 9, 7),
+        week: 1,
+      );
+      final service = ReminderService(
+        model: model,
+        gateway: gw,
+        debounce: const Duration(milliseconds: 1),
+        now: () => _now,
+      );
+      addTearDown(model.dispose);
+
+      final cancelGate = Completer<void>();
+      gw.cancelGates.add(cancelGate);
+
+      final cancelFuture = service.cancelAll();
+      await Future<void>.delayed(Duration.zero);
+      final queuedAfterCancel = service.syncNow();
+
+      service.dispose();
+      cancelGate.complete();
+
+      await cancelFuture;
+      expect(await queuedAfterCancel, isNull);
+      expect(gw.ops, <String>['cancel:start', 'cancel:end']);
+    });
+  });
+
+  group('ReminderRuntimeStatus 与 MethodChannelReminderGateway 契约', () {
+    test('ReminderRuntimeStatus.fromMap 正确解析 dirty 与全字段及相等性', () {
+      expect(
+        ReminderRuntimeStatus.fromMap(null),
+        const ReminderRuntimeStatus.unavailable(),
+      );
+
+      final parsed = ReminderRuntimeStatus.fromMap(<Object?, Object?>{
+        'notificationPermission': true,
+        'notificationsEnabled': true,
+        'exactAlarmAllowed': false,
+        'batteryOptimizationIgnored': true,
+        'autoStartVendorPage': true,
+        'scheduled': 5,
+        'nextTriggerMs': 1700000100000,
+        'payloadAtMs': 1700000000000,
+        'fingerprint': 'fp-123',
+        'style': 'fluid',
+        'dirty': true,
+        'fluidCasting': true,
+      });
+
+      expect(parsed.available, isTrue);
+      expect(parsed.canNotify, isTrue);
+      expect(parsed.exactAlarmAllowed, isFalse);
+      expect(parsed.batteryOptOut, isTrue);
+      expect(parsed.autoStartVendorPage, isTrue);
+      expect(parsed.scheduled, 5);
+      expect(parsed.nextTriggerMs, 1700000100000);
+      expect(parsed.payloadAtMs, 1700000000000);
+      expect(parsed.fingerprint, 'fp-123');
+      expect(parsed.style, 'fluid');
+      expect(parsed.dirty, isTrue);
+      expect(parsed.fluidCasting, isTrue);
+
+      const cleanCopy = ReminderRuntimeStatus(
+        notificationPermission: true,
+        notificationsEnabled: true,
+        exactAlarmAllowed: false,
+        batteryOptimizationIgnored: true,
+        autoStartVendorPage: true,
+        scheduled: 5,
+        nextTriggerMs: 1700000100000,
+        payloadAtMs: 1700000000000,
+        fingerprint: 'fp-123',
+        style: 'fluid',
+        dirty: false,
+        fluidCasting: true,
+      );
+      expect(parsed, isNot(equals(cleanCopy)));
+      expect(parsed.hashCode, isNot(equals(cleanCopy.hashCode)));
+    });
+
+    test(
+      'MethodChannelReminderGateway 往返 status/previewReminder/toast 与异常处理',
+      () async {
+        TestWidgetsFlutterBinding.ensureInitialized();
+        const gw = MethodChannelReminderGateway();
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        addTearDown(
+          () => messenger.setMockMethodCallHandler(
+            MethodChannelReminderGateway.channel,
+            null,
+          ),
+        );
+
+        final calls = <MethodCall>[];
+        messenger.setMockMethodCallHandler(
+          MethodChannelReminderGateway.channel,
+          (call) async {
+            calls.add(call);
+            return switch (call.method) {
+              'status' => <String, Object?>{
+                'notificationPermission': true,
+                'notificationsEnabled': true,
+                'exactAlarmAllowed': true,
+                'scheduled': 2,
+                'style': 'banner',
+                'dirty': true,
+                'fluidCasting': false,
+              },
+              'previewReminder' => true,
+              'toast' => null,
+              _ => null,
+            };
+          },
+        );
+
+        final st = await gw.status();
+        expect(st.available, isTrue);
+        expect(st.dirty, isTrue);
+        expect(st.scheduled, 2);
+
+        final previewed = await gw.previewReminder(
+          style: 'fluid',
+          leadMinutes: 10,
+          untilEnd: true,
+        );
+        expect(previewed, isTrue);
+
+        await gw.showToast('已打开自启动设置', longDuration: true);
+
+        expect(calls[0].method, 'status');
+        expect(calls[1].method, 'previewReminder');
+        expect(calls[1].arguments, <String, Object?>{
+          'style': 'fluid',
+          'leadMinutes': 10,
+          'untilEnd': true,
+        });
+        expect(calls[2].method, 'toast');
+        expect(calls[2].arguments, <String, Object?>{
+          'message': '已打开自启动设置',
+          'long': true,
+        });
+
+        // MissingPluginException -> 安全降级
+        messenger.setMockMethodCallHandler(
+          MethodChannelReminderGateway.channel,
+          null,
+        );
+        expect(await gw.status(), const ReminderRuntimeStatus.unavailable());
+        expect((await gw.sync('{}')).ok, isFalse);
+
+        // PlatformException -> 安全降级
+        messenger.setMockMethodCallHandler(
+          MethodChannelReminderGateway.channel,
+          (call) async {
+            throw PlatformException(code: 'ERR', message: 'native error');
+          },
+        );
+        expect(await gw.status(), const ReminderRuntimeStatus.unavailable());
+        final syncFailed = await gw.sync('{}');
+        expect(syncFailed.ok, isFalse);
+        expect(syncFailed.error, 'native error');
+        expect(
+          await gw.previewReminder(style: 'banner', leadMinutes: 10),
+          isFalse,
+        );
+        await gw.showToast('ignored');
+      },
+    );
+  });
+}
+
+class _ThrowingSyncReminderGateway extends FakeReminderGateway {
+  final Completer<void> failGate = Completer<void>();
+
+  @override
+  Future<ReminderSyncResult> sync(String payloadJson) async {
+    syncedPayloads.add(payloadJson);
+    await failGate.future;
+    return syncResult;
+  }
+}
+
+class _OrderedReminderGateway extends FakeReminderGateway {
+  final List<String> ops = <String>[];
+  final List<Completer<void>> syncGates = <Completer<void>>[];
+  final List<Object> syncErrors = <Object>[];
+  final List<Completer<void>> cancelGates = <Completer<void>>[];
+
+  @override
+  Future<ReminderSyncResult> sync(String payloadJson) async {
+    ops.add('sync:start');
+    syncedPayloads.add(payloadJson);
+    if (syncGates.isNotEmpty) {
+      await syncGates.removeAt(0).future;
+    }
+    if (syncErrors.isNotEmpty) {
+      ops.add('sync:throw');
+      throw syncErrors.removeAt(0);
+    }
+    ops.add('sync:end');
+    return syncResult;
+  }
+
+  @override
+  Future<void> cancel() async {
+    ops.add('cancel:start');
+    cancelCount++;
+    if (cancelGates.isNotEmpty) {
+      await cancelGates.removeAt(0).future;
+    }
+    ops.add('cancel:end');
+  }
 }
