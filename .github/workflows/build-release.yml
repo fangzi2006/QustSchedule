@@ -107,31 +107,80 @@ jobs:
       - name: "Lint: Format check"
         run: |
           dart format --output=none --set-exit-if-changed lib test
-          (cd packages/zf_academic && dart format --output=none --set-exit-if-changed lib test)
+          (cd packages/zf_academic && dart format --output=none --set-exit-if-changed lib test example)
 
       - name: "Lint: Static analysis (Main project)"
         run: flutter analyze --no-fatal-infos lib test
 
       - name: "Lint: Static analysis (zf_academic package)"
-        run: (cd packages/zf_academic && dart analyze lib test)
+        run: (cd packages/zf_academic && dart analyze --fatal-infos lib test)
+
+      - name: "Lint: Windows encoding & C4819 guard"
+        run: |
+          python3 - <<'PY'
+          import pathlib, sys
+
+          errors = []
+          for p in sorted(pathlib.Path('windows/runner').rglob('*')):
+              if p.is_file() and p.suffix.lower() in ('.cpp', '.h'):
+                  data = p.read_bytes()
+                  for idx, b in enumerate(data):
+                      if b > 0x7f:
+                          line = data[:idx].count(b'\n') + 1
+                          errors.append(f'{p}:{line}: non-ASCII byte 0x{b:02x} (C4819 risk)')
+                          break
+
+          iss = pathlib.Path('windows/packaging/setup.iss')
+          iss_data = iss.read_bytes()
+          if not iss_data.startswith(b'\xef\xbb\xbf'):
+              errors.append(f'{iss}: missing UTF-8 BOM (EF BB BF)')
+          else:
+              try:
+                  iss_data.decode('utf-8-sig')
+              except UnicodeDecodeError as e:
+                  errors.append(f'{iss}: invalid UTF-8: {e}')
+
+          rc = pathlib.Path('windows/runner/Runner.rc')
+          rc_data = rc.read_bytes()
+          if rc_data.startswith((b'\xff\xfe', b'\xfe\xff', b'\xef\xbb\xbf')):
+              errors.append(f'{rc}: unexpected BOM (expected UTF-8 without BOM + #pragma code_page(65001))')
+          else:
+              try:
+                  rc_text = rc_data.decode('utf-8')
+              except UnicodeDecodeError as e:
+                  errors.append(f'{rc}: invalid UTF-8: {e}')
+              else:
+                  if '#pragma code_page(65001)' not in rc_text:
+                      errors.append(f'{rc}: missing #pragma code_page(65001)')
+
+          if errors:
+              for err in errors:
+                  print(f'::error::{err}', file=sys.stderr)
+              sys.exit(1)
+          print('Windows encoding checks passed!')
+          PY
 
       # --- 固定基本测试项 ---
       - name: "Core Test: Protocol tests (zf_academic)"
-        run: (cd packages/zf_academic && dart test)
+        run: (cd packages/zf_academic && dart test -j 2 --timeout 30s)
 
       # 单元 / 状态机 / 界面合并为一次 flutter test：只编译、启动一次测试进程，文件间并发执行。
       # 排除 test/custom/（由下一步单独跑），同时支持 test/ 下任意子目录。
       - name: "Core Test: Unit, State machine & Widget tests"
         run: |
-          CORE_TESTS=$(find test -path test/custom -prune -o -type f -name '*_test.dart' -print | sort)
-          flutter test $CORE_TESTS
+          mapfile -t CORE_TESTS < <(find test -path test/custom -prune -o -type f -name '*_test.dart' -print | sort)
+          if [ ${#CORE_TESTS[@]} -eq 0 ]; then
+            echo "::error::未找到任何核心测试文件"
+            exit 1
+          fi
+          flutter test -j 2 --timeout 30s "${CORE_TESTS[@]}"
 
       # --- 自定义测试项：test/custom/ 下有 *_test.dart 才跑 ---
       - name: "Custom Test: Run test/custom if present"
         run: |
           if [ -n "$(find test/custom -type f -name '*_test.dart' -print -quit 2>/dev/null)" ]; then
             echo "::notice::检测到 test/custom/ 下的自定义测试，开始运行"
-            flutter test test/custom
+            flutter test -j 2 --timeout 30s test/custom
           else
             echo "test/custom/ 下没有测试项，跳过"
           fi
@@ -142,6 +191,43 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}
+
+  # ================= 1b. PR 阶段 Android Manifest & Kotlin 编译校验 =================
+  verify-android:
+    name: "Verify Android (Manifest & Kotlin)"
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-cleanup: never
+
+      - name: Accept Android SDK licenses
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      # android/gradlew 与 local.properties 被 .gitignore 排除，先由 Flutter 生成配置再编译 Kotlin。
+      - name: Generate Android Gradle wrapper & config
+        run: flutter build apk --debug --config-only
+
+      - name: Verify Android Manifest & Kotlin
+        run: ./android/gradlew -p android :app:processDebugManifest :app:compileDebugKotlin
 
   # ================= 2. 编译 Android APK（与测试、Windows 同时起跑） =================
   build-android:

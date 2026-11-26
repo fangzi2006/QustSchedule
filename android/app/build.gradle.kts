@@ -97,7 +97,7 @@ flutter {
 }
 
 // ---------------------------------------------------------------------------
-// 产物命名：flutter-apk/青科课表通_v<版本号>[-abi].apk
+// 产物命名：flutter-apk/QustSchedule_v<版本号>[-abi].apk
 // ---------------------------------------------------------------------------
 // 为什么不能只改 AGP 的 outputFileName：Flutter 的 gradle 插件会在 assemble 任务的
 // doLast 里把 AGP 产物复制成固定名字（app[-abi]-<mode>.apk），而 Dart 侧的
