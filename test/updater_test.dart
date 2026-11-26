@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/pages/about_page.dart';
 import 'package:qustschedule/pages/home_shell.dart';
@@ -21,6 +21,7 @@ import 'package:qustschedule/src/updater/update_service.dart';
 import 'package:qustschedule/src/updater/version_comparator.dart';
 
 import 'support/fake_backend.dart';
+import 'support/fake_updater_gateway.dart';
 
 void main() {
   group('版本号比对与加速代理 URL 拼装', () {
@@ -560,8 +561,7 @@ void main() {
 
       final controller = UpdateFlowController(
         updateService: service,
-        canInstallCheck: () async => true,
-        installRunner: (_) async {},
+        gateway: FakeUpdaterGateway(),
       );
       addTearDown(controller.dispose);
 
@@ -659,8 +659,7 @@ void main() {
 
       final flow = UpdateFlowController(
         updateService: service,
-        canInstallCheck: () async => true,
-        installRunner: (_) async {},
+        gateway: FakeUpdaterGateway(),
       );
       final model = AppModel(
         preferences: Preferences.inMemory(),
@@ -803,9 +802,7 @@ void main() {
       final mockService = _MockDownloadUpdateService(resolvedSha256: digest);
       final flow = UpdateFlowController(
         updateService: mockService,
-        canInstallCheck: () async => true,
-        installRunner: (_) async {},
-        openSettingsRunner: () async {},
+        gateway: FakeUpdaterGateway(),
       );
       addTearDown(flow.dispose);
       flow.setAvailableUpdate(
@@ -1416,6 +1413,731 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   });
+
+  group('Android 安装分支、平台弹窗差异与代理主机精确匹配', () {
+    test('displayProxyName 通过规范 HTTPS 根地址精确匹配预设节点，拒绝伪造端口/协议/路径/用户信息', () {
+      expect(displayProxyName(''), '直连');
+      expect(displayProxyName('   '), '直连');
+      expect(displayProxyName('https://gh-proxy.org'), '主加速节点(默认推荐)');
+      expect(displayProxyName('https://gh-proxy.org/'), '主加速节点(默认推荐)');
+      expect(displayProxyName('HTTPS://GH-PROXY.ORG'), '主加速节点(默认推荐)');
+      expect(displayProxyName('https://gh-proxy.org:443'), '主加速节点(默认推荐)');
+      expect(displayProxyName('gh-proxy.org'), '主加速节点(默认推荐)');
+      expect(displayProxyName('https://axisnow.gh-proxy.org'), '副加速节点');
+      expect(
+        displayProxyName('https://gh-proxy.com'),
+        '加速主站（最稳定但是部分网络环境下速度较慢）',
+      );
+      expect(
+        displayProxyName('https://evil-gh-proxy.org'),
+        'https://evil-gh-proxy.org',
+      );
+      expect(
+        displayProxyName('https://mirror.example.com/gh-proxy.org'),
+        'https://mirror.example.com/gh-proxy.org',
+      );
+      expect(
+        displayProxyName('https://gh-proxy.org:8443'),
+        'https://gh-proxy.org:8443',
+      );
+      expect(displayProxyName('http://gh-proxy.org'), 'http://gh-proxy.org');
+      expect(
+        displayProxyName('https://gh-proxy.org/evil'),
+        'https://gh-proxy.org/evil',
+      );
+      expect(
+        displayProxyName('https://evil.com@gh-proxy.org'),
+        'https://evil.com@gh-proxy.org',
+      );
+      expect(
+        displayProxyName('https://gh-proxy.org?x=1'),
+        'https://gh-proxy.org?x=1',
+      );
+    });
+
+    test(
+      'Android canRequestPackageInstalls 等待期间调用 cancelDownload 不会继续唤起安装',
+      () async {
+        final tempDir = Directory.systemTemp.createTempSync('cancel_perm_test');
+        addTearDown(() {
+          if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+        });
+        final fakeApk = File('${tempDir.path}/app.apk')
+          ..writeAsStringSync('apk');
+
+        const asset = ReleaseAsset(
+          name: 'qustschedule-arm64-v8a-release.apk',
+          downloadUrl: 'https://example.com/app.apk',
+          size: 1024,
+          contentType: 'application/vnd.android.package-archive',
+        );
+        const release = ReleaseInfo(
+          tagName: 'v1.6.0',
+          version: '1.6.0',
+          name: 'v1.6.0',
+          body: '',
+          publishedAt: null,
+          assets: [asset],
+          htmlUrl: 'https://example.com/release',
+        );
+
+        final permGate = Completer<bool>();
+        final gw = _GatedPermissionUpdaterGateway(permGate.future);
+        final mock = _MockDownloadUpdateService();
+        final flow = UpdateFlowController(
+          updateService: mock,
+          gateway: gw,
+          isAndroid: () => true,
+        );
+        addTearDown(flow.dispose);
+
+        flow.attachDialog();
+        flow.setAvailableUpdate(
+          result: const UpdateCheckResult(
+            status: UpdateStatus.hasUpdate,
+            release: release,
+            targetAsset: asset,
+          ),
+          selectedProxy: '',
+        );
+
+        final downloadFuture = flow.startDownload();
+        await Future<void>.delayed(Duration.zero);
+        mock.completeSuccess(fakeApk);
+        await Future<void>.delayed(Duration.zero);
+
+        // 此时正等待 canRequestPackageInstalls()，立即取消下载。
+        flow.cancelDownload();
+        expect(flow.stage, UpdateFlowStage.available);
+
+        permGate.complete(true);
+        await downloadFuture;
+
+        expect(gw.installedFiles, isEmpty);
+        expect(flow.stage, UpdateFlowStage.available);
+        expect(flow.requestCloseEvent, 0);
+      },
+    );
+
+    test(
+      'executeInstall 旧世代 finally 不得复位新世代的 isTriggeringInstall 并发锁',
+      () async {
+        final tempDir = Directory.systemTemp.createTempSync('epoch_lock_test');
+        addTearDown(() {
+          if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+        });
+        final fileV1 = File('${tempDir.path}/v1.apk')..writeAsStringSync('v1');
+        final fileV2 = File('${tempDir.path}/v2.apk')..writeAsStringSync('v2');
+
+        const assetV1 = ReleaseAsset(
+          name: 'app-v1.apk',
+          downloadUrl: 'https://example.com/v1.apk',
+          size: 1024,
+          contentType: 'application/vnd.android.package-archive',
+        );
+        const releaseV1 = ReleaseInfo(
+          tagName: 'v1.6.0',
+          version: '1.6.0',
+          name: 'v1.6.0',
+          body: '',
+          publishedAt: null,
+          assets: [assetV1],
+          htmlUrl: 'https://example.com/v1',
+        );
+        const assetV2 = ReleaseAsset(
+          name: 'app-v2.apk',
+          downloadUrl: 'https://example.com/v2.apk',
+          size: 1024,
+          contentType: 'application/vnd.android.package-archive',
+        );
+        const releaseV2 = ReleaseInfo(
+          tagName: 'v1.7.0',
+          version: '1.7.0',
+          name: 'v1.7.0',
+          body: '',
+          publishedAt: null,
+          assets: [assetV2],
+          htmlUrl: 'https://example.com/v2',
+        );
+
+        final permV1Gate = Completer<bool>();
+        final installV2Gate = Completer<void>();
+        final gw = _StagedUpdaterGateway(
+          permissionFutures: <Future<bool>>[
+            Future<bool>.value(true), // v1 startDownload
+            permV1Gate.future, // v1 executeInstall (epoch 1)
+            Future<bool>.value(true), // v2 startDownload
+            Future<bool>.value(true), // v2 executeInstall (epoch 2)
+          ],
+          installFutures: <Future<void>>[installV2Gate.future],
+        );
+        final mock = _MockDownloadUpdateService();
+        final flow = UpdateFlowController(
+          updateService: mock,
+          gateway: gw,
+          isAndroid: () => true,
+        );
+        addTearDown(flow.dispose);
+
+        // 1. 下载 v1 后进入 executeInstall()（epoch 1 挂起在权限检查）。
+        flow.setAvailableUpdate(
+          result: const UpdateCheckResult(
+            status: UpdateStatus.hasUpdate,
+            release: releaseV1,
+            targetAsset: assetV1,
+          ),
+          selectedProxy: '',
+        );
+        final dl1 = flow.startDownload();
+        await Future<void>.delayed(Duration.zero);
+        mock.completeSuccess(fileV1);
+        await dl1;
+
+        final exec1 = flow.executeInstall();
+        await Future<void>.delayed(Duration.zero);
+        expect(flow.isTriggeringInstall, isTrue);
+
+        // 2. 切到 v2（epoch 2）并下载完成，发起 v2 的 executeInstall()（挂起在 install）。
+        flow.setAvailableUpdate(
+          result: const UpdateCheckResult(
+            status: UpdateStatus.hasUpdate,
+            release: releaseV2,
+            targetAsset: assetV2,
+          ),
+          selectedProxy: '',
+        );
+        final dl2 = flow.startDownload();
+        await Future<void>.delayed(Duration.zero);
+        mock.completeSuccess(fileV2);
+        await dl2;
+
+        final exec2 = flow.executeInstall();
+        await Future<void>.delayed(Duration.zero);
+        expect(flow.isTriggeringInstall, isTrue);
+        expect(gw.installAttemptFiles, <File>[fileV2]);
+
+        // 3. epoch 1 权限检查此刻才返回：不得把 epoch 2 的 isTriggeringInstall 复位成 false。
+        permV1Gate.complete(true);
+        expect(await exec1, isFalse);
+        expect(flow.isTriggeringInstall, isTrue);
+
+        // 并发再次触发 executeInstall() 仍应被锁拦截，不会重复拉起 install(v2)。
+        expect(await flow.executeInstall(), isFalse);
+        expect(gw.installAttemptFiles, <File>[fileV2]);
+
+        // 4. epoch 2 正常完成后才释放锁。
+        installV2Gate.complete();
+        expect(await exec2, isTrue);
+        expect(flow.isTriggeringInstall, isFalse);
+        expect(gw.installedFiles, <File>[fileV2]);
+      },
+    );
+
+    test(
+      'executeInstall 挂起期间 cancelDownload 后旧权限检查抛错不得污染 errorMessage',
+      () async {
+        final tempDir = Directory.systemTemp.createTempSync('epoch_err_test');
+        addTearDown(() {
+          if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+        });
+        final fakeApk = File('${tempDir.path}/app.apk')
+          ..writeAsStringSync('apk');
+
+        const asset = ReleaseAsset(
+          name: 'qustschedule-arm64-v8a-release.apk',
+          downloadUrl: 'https://example.com/app.apk',
+          size: 1024,
+          contentType: 'application/vnd.android.package-archive',
+        );
+        const release = ReleaseInfo(
+          tagName: 'v1.6.0',
+          version: '1.6.0',
+          name: 'v1.6.0',
+          body: '',
+          publishedAt: null,
+          assets: [asset],
+          htmlUrl: 'https://example.com/release',
+        );
+
+        final permGate = Completer<bool>();
+        final gw = _StagedUpdaterGateway(
+          permissionFutures: <Future<bool>>[
+            Future<bool>.value(true), // startDownload
+            permGate.future, // executeInstall
+          ],
+        );
+        final mock = _MockDownloadUpdateService();
+        final flow = UpdateFlowController(
+          updateService: mock,
+          gateway: gw,
+          isAndroid: () => true,
+        );
+        addTearDown(flow.dispose);
+
+        flow.setAvailableUpdate(
+          result: const UpdateCheckResult(
+            status: UpdateStatus.hasUpdate,
+            release: release,
+            targetAsset: asset,
+          ),
+          selectedProxy: '',
+        );
+        final dl = flow.startDownload();
+        await Future<void>.delayed(Duration.zero);
+        mock.completeSuccess(fakeApk);
+        await dl;
+
+        final execFuture = flow.executeInstall();
+        await Future<void>.delayed(Duration.zero);
+        expect(flow.isTriggeringInstall, isTrue);
+
+        flow.cancelDownload();
+        expect(flow.stage, UpdateFlowStage.available);
+        expect(flow.errorMessage, isNull);
+        expect(flow.isTriggeringInstall, isFalse);
+
+        permGate.completeError(StateError('stale perm error'));
+        expect(await execFuture, isFalse);
+        expect(flow.errorMessage, isNull);
+        expect(flow.stage, UpdateFlowStage.available);
+        expect(flow.isTriggeringInstall, isFalse);
+      },
+    );
+
+    test('UpdateFlowController Android 权限/安装/缓存命中/外部链接完整分支', () async {
+      final tempDir = Directory.systemTemp.createTempSync('android_flow_test');
+      addTearDown(() {
+        if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+      });
+      final fakeApk = File('${tempDir.path}/app.apk')..writeAsStringSync('apk');
+
+      const asset = ReleaseAsset(
+        name: 'qustschedule-arm64-v8a-release.apk',
+        downloadUrl: 'https://example.com/app.apk',
+        size: 1024,
+        contentType: 'application/vnd.android.package-archive',
+      );
+      const release = ReleaseInfo(
+        tagName: 'v1.6.0',
+        version: '1.6.0',
+        name: 'v1.6.0',
+        body: '',
+        publishedAt: null,
+        assets: [asset],
+        htmlUrl:
+            'https://github.com/fangzi2006/QustSchedule/releases/tag/v1.6.0',
+      );
+
+      // 1. 弹窗打开 + canInstall == true：下载完成后自动执行 install 并发出关闭事件。
+      final mockAuto = _MockDownloadUpdateService();
+      final gwAuto = FakeUpdaterGateway(canInstall: true);
+      final flowAuto = UpdateFlowController(
+        updateService: mockAuto,
+        gateway: gwAuto,
+        isAndroid: () => true,
+      );
+      addTearDown(flowAuto.dispose);
+      flowAuto.attachDialog();
+      flowAuto.setAvailableUpdate(
+        result: const UpdateCheckResult(
+          status: UpdateStatus.hasUpdate,
+          release: release,
+          targetAsset: asset,
+        ),
+        selectedProxy: '',
+      );
+      final downloadAuto = flowAuto.startDownload();
+      await Future<void>.delayed(Duration.zero);
+      mockAuto.completeSuccess(fakeApk);
+      await downloadAuto;
+      expect(flowAuto.stage, UpdateFlowStage.readyToInstall);
+      expect(flowAuto.needsPermission, isFalse);
+      expect(gwAuto.installedFiles, <File>[fakeApk]);
+      expect(flowAuto.requestCloseEvent, 1);
+
+      // 再次 startDownload 命中已下载本地包且弹窗打开时，直接走 executeInstall。
+      await flowAuto.startDownload();
+      expect(gwAuto.installedFiles.length, 2);
+
+      // 2. 弹窗打开 + canInstall == false：标记 needsPermission 而不自动安装；
+      //    授权后调用 refreshInstallPermissionAndAutoInstall 自动拉起安装。
+      final mockPerm = _MockDownloadUpdateService();
+      final gwPerm = FakeUpdaterGateway(canInstall: false);
+      final flowPerm = UpdateFlowController(
+        updateService: mockPerm,
+        gateway: gwPerm,
+        isAndroid: () => true,
+      );
+      addTearDown(flowPerm.dispose);
+      flowPerm.attachDialog();
+      flowPerm.setAvailableUpdate(
+        result: const UpdateCheckResult(
+          status: UpdateStatus.hasUpdate,
+          release: release,
+          targetAsset: asset,
+        ),
+        selectedProxy: '',
+      );
+      final downloadPerm = flowPerm.startDownload();
+      await Future<void>.delayed(Duration.zero);
+      mockPerm.completeSuccess(fakeApk);
+      await downloadPerm;
+      expect(flowPerm.needsPermission, isTrue);
+      expect(gwPerm.installedFiles, isEmpty);
+
+      // 未授权时手动 executeInstall 返回 false 并保持 needsPermission == true。
+      expect(await flowPerm.executeInstall(), isFalse);
+      expect(flowPerm.needsPermission, isTrue);
+
+      // 模拟用户在系统设置开启权限后回到前台。
+      gwPerm.canInstall = true;
+      await flowPerm.refreshInstallPermissionAndAutoInstall();
+      expect(flowPerm.needsPermission, isFalse);
+      expect(gwPerm.installedFiles, <File>[fakeApk]);
+
+      // 3. 后台下载完成（isDialogOpen == false）+ canInstall == false：
+      //    只递增 backgroundReadyEvent，不直接调用 install。
+      final mockBg = _MockDownloadUpdateService();
+      final gwBg = FakeUpdaterGateway(canInstall: false);
+      final flowBg = UpdateFlowController(
+        updateService: mockBg,
+        gateway: gwBg,
+        isAndroid: () => true,
+      );
+      addTearDown(flowBg.dispose);
+      flowBg.setAvailableUpdate(
+        result: const UpdateCheckResult(
+          status: UpdateStatus.hasUpdate,
+          release: release,
+          targetAsset: asset,
+        ),
+        selectedProxy: '',
+      );
+      final downloadBg = flowBg.startDownload();
+      await Future<void>.delayed(Duration.zero);
+      mockBg.completeSuccess(fakeApk);
+      await downloadBg;
+      expect(flowBg.backgroundReadyEvent, 1);
+      expect(flowBg.needsPermission, isTrue);
+      expect(gwBg.installedFiles, isEmpty);
+
+      // 4. executeInstall 抛出异常时记录 errorMessage 且复位 isTriggeringInstall；
+      //    openExternalUrl 仅放行合法 http/https 链接。
+      final mockErr = _MockDownloadUpdateService();
+      final gwErr = FakeUpdaterGateway(
+        canInstall: true,
+        installError: StateError('apk parse error'),
+      );
+      final flowErr = UpdateFlowController(
+        updateService: mockErr,
+        gateway: gwErr,
+        isAndroid: () => true,
+      );
+      addTearDown(flowErr.dispose);
+      flowErr.setAvailableUpdate(
+        result: const UpdateCheckResult(
+          status: UpdateStatus.hasUpdate,
+          release: release,
+          targetAsset: asset,
+        ),
+        selectedProxy: '',
+      );
+      final downloadErr = flowErr.startDownload();
+      await Future<void>.delayed(Duration.zero);
+      mockErr.completeSuccess(fakeApk);
+      await downloadErr;
+      expect(await flowErr.executeInstall(), isFalse);
+      expect(flowErr.isTriggeringInstall, isFalse);
+      expect(flowErr.errorMessage, contains('apk parse error'));
+
+      expect(await flowErr.openExternalUrl(''), isFalse);
+      expect(await flowErr.openExternalUrl('ftp://example.com/a'), isFalse);
+      expect(
+        await flowErr.openExternalUrl(
+          'https://github.com/fangzi2006/QustSchedule',
+        ),
+        isTrue,
+      );
+      expect(
+        gwErr.launchedUrls.single.toString(),
+        'https://github.com/fangzi2006/QustSchedule',
+      );
+    });
+
+    testWidgets(
+      'update_dialog 按 TargetPlatform 展示 Android 权限弹窗与 Windows 重启更新文案',
+      (tester) async {
+        final tempDir = Directory.systemTemp.createTempSync('dialog_plat_test');
+        addTearDown(() {
+          if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+        });
+        final fakePkg = File('${tempDir.path}/pkg.bin')
+          ..writeAsStringSync('pkg');
+
+        const asset = ReleaseAsset(
+          name: 'qustschedule-pkg',
+          downloadUrl: 'https://example.com/pkg',
+          size: 1024,
+          contentType: 'application/octet-stream',
+        );
+        const release = ReleaseInfo(
+          tagName: 'v1.6.0',
+          version: '1.6.0',
+          name: 'v1.6.0',
+          body: '说明',
+          publishedAt: null,
+          assets: [asset],
+          htmlUrl: 'https://example.com/release',
+        );
+
+        // 1. TargetPlatform.android + canInstall == false：点「立即更新」先弹权限引导。
+        final gwAndroid = FakeUpdaterGateway(canInstall: false);
+        final mockAndroid = _MockDownloadUpdateService();
+        final flowAndroid = UpdateFlowController(
+          updateService: mockAndroid,
+          gateway: gwAndroid,
+          isAndroid: () => true,
+        );
+        addTearDown(flowAndroid.dispose);
+
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: ThemeData(platform: TargetPlatform.android),
+            home: Builder(
+              builder: (context) => ElevatedButton(
+                onPressed: () => showUpdateDialog(
+                  context,
+                  controller: flowAndroid,
+                  updateResult: const UpdateCheckResult(
+                    status: UpdateStatus.hasUpdate,
+                    release: release,
+                    targetAsset: asset,
+                  ),
+                ),
+                child: const Text('OpenAndroid'),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('OpenAndroid'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('立即更新'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('需要安装权限'), findsOneWidget);
+        expect(find.text('去开启权限'), findsOneWidget);
+        expect(find.text('直接下载'), findsOneWidget);
+
+        await tester.tap(find.text('去开启权限'));
+        await tester.pumpAndSettle();
+        expect(gwAndroid.openInstallSettingsCount, 1);
+
+        // 直接下载完成后切至 readyToInstall 且可展示「去开启权限」卡片；
+        // 授权后变为「立即安装」。
+        await tester.tap(find.text('立即更新'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('直接下载'));
+        await tester.pump();
+        mockAndroid.completeSuccess(fakePkg);
+        await tester.pumpAndSettle();
+        expect(find.text('去开启权限'), findsOneWidget);
+
+        gwAndroid.canInstall = true;
+        await flowAndroid.refreshInstallPermissionAndAutoInstall();
+        await tester.pumpAndSettle();
+        expect(gwAndroid.installedFiles, <File>[fakePkg]);
+
+        // 2. TargetPlatform.windows：下载就绪后按钮为「立即重启更新」。
+        final gwWindows = FakeUpdaterGateway(canInstall: true);
+        final mockWindows = _MockDownloadUpdateService();
+        final flowWindows = UpdateFlowController(
+          updateService: mockWindows,
+          gateway: gwWindows,
+          isAndroid: () => false,
+        );
+        addTearDown(flowWindows.dispose);
+
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: ThemeData(platform: TargetPlatform.windows),
+            home: Builder(
+              builder: (context) => ElevatedButton(
+                onPressed: () => showUpdateDialog(
+                  context,
+                  controller: flowWindows,
+                  updateResult: const UpdateCheckResult(
+                    status: UpdateStatus.hasUpdate,
+                    release: release,
+                    targetAsset: asset,
+                  ),
+                ),
+                child: const Text('OpenWindows'),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('OpenWindows'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('立即更新'));
+        await tester.pump();
+        mockWindows.completeSuccess(fakePkg);
+        await tester.pumpAndSettle();
+
+        expect(find.text('立即重启更新'), findsOneWidget);
+        expect(find.text('立即安装'), findsNothing);
+      },
+    );
+
+    test('H3-5: executeInstall 挂起期间直接调用 startDownload 不推进 epoch 也不锁死 isTriggeringInstall', () async {
+      final tempDir = Directory.systemTemp.createTempSync('h3_5_guard_test');
+      addTearDown(() {
+        if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+      });
+      final fakeApk = File('${tempDir.path}/app.apk')..writeAsStringSync('apk');
+
+      const asset = ReleaseAsset(
+        name: 'app.apk',
+        downloadUrl: 'https://example.com/app.apk',
+        size: 1024,
+        contentType: 'application/vnd.android.package-archive',
+      );
+      const release = ReleaseInfo(
+        tagName: 'v1.6.0',
+        version: '1.6.0',
+        name: 'v1.6.0',
+        body: '',
+        publishedAt: null,
+        assets: [asset],
+        htmlUrl: '',
+      );
+
+      final installGate = Completer<void>();
+      final gw = _StagedUpdaterGateway(
+        installFutures: <Future<void>>[installGate.future],
+      );
+      final mockService = _MockDownloadUpdateService();
+      final flow = UpdateFlowController(
+        updateService: mockService,
+        gateway: gw,
+        isAndroid: () => true,
+      );
+      addTearDown(flow.dispose);
+
+      flow.setAvailableUpdate(
+        result: const UpdateCheckResult(
+          status: UpdateStatus.hasUpdate,
+          release: release,
+          targetAsset: asset,
+        ),
+        selectedProxy: '',
+      );
+
+      final dlFuture = flow.startDownload();
+      await Future<void>.delayed(Duration.zero);
+      mockService.completeSuccess(fakeApk);
+      await dlFuture;
+      expect(flow.stage, UpdateFlowStage.readyToInstall);
+
+      // 挂起在 gw.install(fakeApk)
+      final firstToken = mockService.lastToken;
+      final installFuture = flow.executeInstall();
+      await Future<void>.delayed(Duration.zero);
+      expect(flow.isTriggeringInstall, isTrue);
+      expect(gw.installAttemptFiles.length, 1);
+
+      // 1) 安装文件仍存在时调用 startDownload()：必须直接返回，不能破坏 epoch。
+      await flow.startDownload();
+      expect(flow.isTriggeringInstall, isTrue);
+      expect(flow.stage, UpdateFlowStage.readyToInstall);
+      expect(mockService.lastToken, same(firstToken));
+
+      // 2) 安装文件被外部删除时调用 startDownload()：同样必须直接返回，不能开启新下载。
+      fakeApk.deleteSync();
+      await flow.startDownload();
+      expect(flow.isTriggeringInstall, isTrue);
+      expect(flow.stage, UpdateFlowStage.readyToInstall);
+      expect(mockService.lastToken, same(firstToken));
+
+      // 放行 install：finally 必须正常复位 isTriggeringInstall，且后续可重新安装。
+      installGate.complete();
+      expect(await installFuture, isTrue);
+      expect(flow.isTriggeringInstall, isFalse);
+
+      fakeApk.writeAsStringSync('apk2');
+      expect(await flow.executeInstall(), isTrue);
+      expect(gw.installedFiles.length, 2);
+    });
+
+    test('AppInstaller Android MethodChannel 契约与异常收窄验证', () async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(
+          AppInstaller.defaultChannel,
+          null,
+        ),
+      );
+
+      final tempDir = Directory.systemTemp.createTempSync('installer_mc_test');
+      addTearDown(() {
+        if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+      });
+      final apk = File('${tempDir.path}/app.apk')..writeAsStringSync('apk');
+
+      // 1. 正常通道往返
+      final calls = <MethodCall>[];
+      messenger.setMockMethodCallHandler(AppInstaller.defaultChannel, (
+        call,
+      ) async {
+        calls.add(call);
+        return switch (call.method) {
+          'canRequestPackageInstalls' => false,
+          'openInstallSettings' => true,
+          'installApk' => true,
+          _ => null,
+        };
+      });
+
+      expect(
+        await AppInstaller.canRequestPackageInstalls(isAndroid: true),
+        isFalse,
+      );
+      await AppInstaller.openInstallSettings(isAndroid: true);
+      await AppInstaller.install(apk, isAndroid: true);
+
+      expect(calls.map((c) => c.method).toList(), <String>[
+        'canRequestPackageInstalls',
+        'openInstallSettings',
+        'installApk',
+      ]);
+      expect(calls[2].arguments, <String, dynamic>{'filePath': apk.path});
+
+      // 2. MissingPluginException -> 权限检查返回 true、openInstallSettings 静默忽略
+      messenger.setMockMethodCallHandler(AppInstaller.defaultChannel, null);
+      expect(
+        await AppInstaller.canRequestPackageInstalls(isAndroid: true),
+        isTrue,
+      );
+      await AppInstaller.openInstallSettings(isAndroid: true);
+
+      // 3. PlatformException -> 权限检查 fail-open true、openInstallSettings 吞掉日志、install 向上抛出
+      messenger.setMockMethodCallHandler(AppInstaller.defaultChannel, (
+        call,
+      ) async {
+        throw PlatformException(code: 'INSTALL_FAILED', message: 'bad apk');
+      });
+      expect(
+        await AppInstaller.canRequestPackageInstalls(isAndroid: true),
+        isTrue,
+      );
+      await AppInstaller.openInstallSettings(isAndroid: true);
+      await expectLater(
+        AppInstaller.install(apk, isAndroid: true),
+        throwsA(isA<PlatformException>()),
+      );
+    });
+  });
 }
 
 class _MockDownloadUpdateService extends UpdateService {
@@ -1474,6 +2196,50 @@ class _MockDownloadUpdateService extends UpdateService {
     if (_completer != null && !_completer!.isCompleted) {
       _completer!.completeError(error);
     }
+  }
+}
+
+class _GatedPermissionUpdaterGateway extends FakeUpdaterGateway {
+  _GatedPermissionUpdaterGateway(this._permissionFuture);
+
+  final Future<bool> _permissionFuture;
+
+  @override
+  Future<bool> canRequestPackageInstalls() {
+    canInstallCheckCount++;
+    return _permissionFuture;
+  }
+}
+
+class _StagedUpdaterGateway extends FakeUpdaterGateway {
+  _StagedUpdaterGateway({
+    List<Future<bool>> permissionFutures = const <Future<bool>>[],
+    List<Future<void>> installFutures = const <Future<void>>[],
+  }) : _permissionFutures = List<Future<bool>>.of(permissionFutures),
+       _installFutures = List<Future<void>>.of(installFutures);
+
+  final List<Future<bool>> _permissionFutures;
+  final List<Future<void>> _installFutures;
+  final List<File> installAttemptFiles = <File>[];
+
+  @override
+  Future<bool> canRequestPackageInstalls() {
+    canInstallCheckCount++;
+    if (_permissionFutures.isNotEmpty) {
+      return _permissionFutures.removeAt(0);
+    }
+    return super.canRequestPackageInstalls();
+  }
+
+  @override
+  Future<void> install(File file) async {
+    installAttemptFiles.add(file);
+    if (_installFutures.isNotEmpty) {
+      await _installFutures.removeAt(0);
+      installedFiles.add(file);
+      return;
+    }
+    await super.install(file);
   }
 }
 

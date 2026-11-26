@@ -3,6 +3,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/src/academic_cache.dart';
@@ -2499,6 +2500,351 @@ void main() {
       expect(model.status, AppStatus.needLogin);
       expect(model.message, expectedBreakerText);
       expect(model.schedule, isNotNull);
+    });
+  });
+
+  group('accountKey 大小写归一化与 PreferencesController 销毁生命周期', () {
+    test(
+      '含大写自定义线路 URL 在 signIn / 冷启动 boot / changeSchool 之间共用同一规范化 accountKey',
+      () async {
+        const upperUrl = 'https://JW-CUSTOM.Example.Edu.Cn/jwglxt';
+        const upperUrl2 = 'https://JW2.Example.Edu.Cn/jwglxt';
+        final credentials = InMemoryCredentialStore();
+
+        // 1. signIn 使用大小写混合 URL 登录，session.accountKey() 必须与存储键完全一致。
+        final signInBackend = FakeBackend();
+        final signInRepo = FakeSessionRepository();
+        final signInService = ScheduleService(
+          credentials: credentials,
+          cookieStorage: signInRepo,
+          backendFactory: (_) => signInBackend,
+          baseUrl: upperUrl,
+        );
+        final signInModel = AppModel(
+          service: signInService,
+          repository: signInRepo,
+          preferences: Preferences.inMemory(),
+          scheduleCache: FakeScheduleCache(),
+          examCache: InMemoryExamCache(),
+          gradesCache: InMemoryGradesCache(),
+          schoolBaseUrl: upperUrl,
+        );
+        addTearDown(signInModel.dispose);
+
+        await signInModel.signIn('20240001', 'pw_upper');
+        expect(signInModel.status, AppStatus.ready);
+        expect(
+          signInModel.session.accountKey(),
+          buildAccountKey(upperUrl, '20240001'),
+        );
+        expect(await credentials.has(signInModel.session.accountKey()), isTrue);
+
+        // 2. 冷启动 boot（无 Cookie 快照、无课表缓存，仅 lastAccounts 与已保存凭据）：
+        //    通过 session.accountKey() 命中凭据并自动登录进入 ready。
+        late final FakeBackend bootBackend;
+        bootBackend = FakeBackend(
+          fetchBehavior: (call, termId) async {
+            if (bootBackend.loginCount == 0) {
+              throw expired();
+            }
+            return sampleSchedule(termId ?? '2026-2027-1');
+          },
+        );
+        final bootRepo = FakeSessionRepository();
+        final bootModel = AppModel(
+          service: ScheduleService(
+            credentials: credentials,
+            cookieStorage: bootRepo,
+            backendFactory: (_) => bootBackend,
+            baseUrl: upperUrl,
+          ),
+          repository: bootRepo,
+          preferences: Preferences.inMemory(
+            customSchools: <String>[upperUrl, upperUrl2],
+            customSchool: upperUrl,
+            lastAccounts: <String, String>{upperUrl: '20240001'},
+          ),
+          scheduleCache: FakeScheduleCache(),
+          examCache: InMemoryExamCache(),
+          gradesCache: InMemoryGradesCache(),
+          schoolBaseUrl: upperUrl,
+        );
+        addTearDown(bootModel.dispose);
+
+        await bootModel.boot();
+        expect(bootModel.status, AppStatus.ready);
+        expect(bootBackend.loginCount, 1);
+
+        // 3. changeSchool(relogin: true) 从大写 URL 切换时能读到已保存密码完成切校。
+        await bootModel.changeSchool(upperUrl2, relogin: true);
+        expect(bootModel.status, AppStatus.ready);
+        expect(bootModel.schoolBaseUrl, upperUrl2);
+        expect(bootBackend.loginCount, 2);
+        expect(
+          await credentials.has(buildAccountKey(upperUrl2, '20240001')),
+          isTrue,
+        );
+      },
+    );
+
+    test('末尾斜杠差异（signIn 带斜杠后 boot 无斜杠）与历史末尾斜杠凭据键回退均能命中并进入 ready', () async {
+      const slashUrl = 'https://jw.custom.edu.cn/jwglxt/';
+      const cleanUrl = 'https://jw.custom.edu.cn/jwglxt';
+      final credentials = InMemoryCredentialStore();
+
+      final signInBackend = FakeBackend();
+      final signInModel = AppModel(
+        service: ScheduleService(
+          credentials: credentials,
+          cookieStorage: FakeSessionRepository(),
+          backendFactory: (_) => signInBackend,
+          baseUrl: slashUrl,
+        ),
+        repository: FakeSessionRepository(),
+        preferences: Preferences.inMemory(),
+        scheduleCache: FakeScheduleCache(),
+        examCache: InMemoryExamCache(),
+        gradesCache: InMemoryGradesCache(),
+        schoolBaseUrl: slashUrl,
+      );
+      addTearDown(signInModel.dispose);
+
+      await signInModel.signIn('20240001', 'pw_slash');
+      expect(signInModel.status, AppStatus.ready);
+      expect(
+        signInModel.session.accountKey(),
+        buildAccountKey(cleanUrl, '20240001'),
+      );
+      expect(
+        await credentials.has('https://jw.custom.edu.cn/jwglxt|20240001'),
+        isTrue,
+      );
+
+      late final FakeBackend bootBackend;
+      bootBackend = FakeBackend(
+        fetchBehavior: (call, termId) async {
+          if (bootBackend.loginCount == 0) {
+            throw expired();
+          }
+          return sampleSchedule(termId ?? '2026-2027-1');
+        },
+      );
+      final bootModel = AppModel(
+        service: ScheduleService(
+          credentials: credentials,
+          cookieStorage: FakeSessionRepository(),
+          backendFactory: (_) => bootBackend,
+          baseUrl: cleanUrl,
+        ),
+        repository: FakeSessionRepository(),
+        preferences: Preferences.inMemory(
+          customSchools: <String>[cleanUrl],
+          customSchool: cleanUrl,
+          lastAccounts: <String, String>{slashUrl: '20240001'},
+        ),
+        scheduleCache: FakeScheduleCache(),
+        examCache: InMemoryExamCache(),
+        gradesCache: InMemoryGradesCache(),
+        schoolBaseUrl: cleanUrl,
+      );
+      addTearDown(bootModel.dispose);
+
+      await bootModel.boot();
+      expect(bootModel.status, AppStatus.ready);
+      expect(bootBackend.loginCount, 1);
+
+      // 历史版本按带末尾斜杠键存储的凭据在规范化后仍可被冷启动回退读取
+      final legacyCreds = InMemoryCredentialStore();
+      await legacyCreds.save(
+        'https://jw-legacy.edu.cn/jwglxt/|20240002',
+        const Credentials('20240002', 'pw_legacy'),
+      );
+      late final FakeBackend legacyBackend;
+      legacyBackend = FakeBackend(
+        fetchBehavior: (call, termId) async {
+          if (legacyBackend.loginCount == 0) {
+            throw expired();
+          }
+          return sampleSchedule(termId ?? '2026-2027-1');
+        },
+      );
+      final legacyModel = AppModel(
+        service: ScheduleService(
+          credentials: legacyCreds,
+          cookieStorage: FakeSessionRepository(),
+          backendFactory: (_) => legacyBackend,
+          baseUrl: 'https://jw-legacy.edu.cn/jwglxt',
+        ),
+        repository: FakeSessionRepository(),
+        preferences: Preferences.inMemory(
+          customSchools: const <String>['https://jw-legacy.edu.cn/jwglxt'],
+          customSchool: 'https://jw-legacy.edu.cn/jwglxt',
+          lastAccounts: const <String, String>{
+            'https://jw-legacy.edu.cn/jwglxt/': '20240002',
+          },
+        ),
+        scheduleCache: FakeScheduleCache(),
+        examCache: InMemoryExamCache(),
+        gradesCache: InMemoryGradesCache(),
+        schoolBaseUrl: 'https://jw-legacy.edu.cn/jwglxt',
+      );
+      addTearDown(legacyModel.dispose);
+
+      await legacyModel.boot();
+      expect(legacyModel.status, AppStatus.ready);
+      expect(legacyBackend.loginCount, 1);
+    });
+
+    test(
+      '多末尾斜杠（signIn 带 /// 后 boot 无斜杠）与 http→https 协议归一化后仍可恢复凭据进入 ready',
+      () async {
+        // 1. F2-A：3 个末尾斜杠 signIn 后以无斜杠 URL boot，Preferences.accountOf 与凭据键一致命中
+        const multiSlashUrl = 'https://jw.custom.edu.cn/jwglxt///';
+        const cleanUrl = 'https://jw.custom.edu.cn/jwglxt';
+        expect(sameSchool(multiSlashUrl, cleanUrl), isTrue);
+
+        final multiCreds = InMemoryCredentialStore();
+        final multiSignInPrefs = Preferences.inMemory();
+        final multiSignInModel = AppModel(
+          service: ScheduleService(
+            credentials: multiCreds,
+            cookieStorage: FakeSessionRepository(),
+            backendFactory: (_) => FakeBackend(),
+            baseUrl: multiSlashUrl,
+          ),
+          repository: FakeSessionRepository(),
+          preferences: multiSignInPrefs,
+          scheduleCache: FakeScheduleCache(),
+          examCache: InMemoryExamCache(),
+          gradesCache: InMemoryGradesCache(),
+          schoolBaseUrl: multiSlashUrl,
+        );
+        addTearDown(multiSignInModel.dispose);
+
+        await multiSignInModel.signIn('20240001', 'pw_multi');
+        expect(multiSignInModel.status, AppStatus.ready);
+        expect(multiSignInPrefs.accountOf(cleanUrl), '20240001');
+
+        late final FakeBackend multiBootBackend;
+        multiBootBackend = FakeBackend(
+          fetchBehavior: (call, termId) async {
+            if (multiBootBackend.loginCount == 0) {
+              throw expired();
+            }
+            return sampleSchedule(termId ?? '2026-2027-1');
+          },
+        );
+        final multiBootModel = AppModel(
+          service: ScheduleService(
+            credentials: multiCreds,
+            cookieStorage: FakeSessionRepository(),
+            backendFactory: (_) => multiBootBackend,
+            baseUrl: cleanUrl,
+          ),
+          repository: FakeSessionRepository(),
+          preferences: Preferences.inMemory(
+            customSchools: const <String>[multiSlashUrl],
+            customSchool: multiSlashUrl,
+            lastAccounts: const <String, String>{multiSlashUrl: '20240001'},
+          ),
+          scheduleCache: FakeScheduleCache(),
+          examCache: InMemoryExamCache(),
+          gradesCache: InMemoryGradesCache(),
+          schoolBaseUrl: cleanUrl,
+        );
+        addTearDown(multiBootModel.dispose);
+
+        await multiBootModel.boot();
+        expect(multiBootModel.status, AppStatus.ready);
+        expect(multiBootBackend.loginCount, 1);
+
+        // 2. F2-B：旧凭据存在 http://...|20240001，Preferences 将 currentSchool 规范化为 https://...
+        const httpQust = 'http://jwglxt.qust.edu.cn/jwglxt';
+        const httpsQust = 'https://jwglxt.qust.edu.cn/jwglxt';
+        final schemeCreds = InMemoryCredentialStore();
+        await schemeCreds.save(
+          '$httpQust|20240001',
+          const Credentials('20240001', 'pw_http'),
+        );
+        late final FakeBackend schemeBootBackend;
+        schemeBootBackend = FakeBackend(
+          fetchBehavior: (call, termId) async {
+            if (schemeBootBackend.loginCount == 0) {
+              throw expired();
+            }
+            return sampleSchedule(termId ?? '2026-2027-1');
+          },
+        );
+        final schemePrefs = Preferences.inMemory(
+          customSchool: httpQust,
+          lastAccounts: const <String, String>{httpQust: '20240001'},
+        );
+        expect(schemePrefs.currentSchool, httpsQust);
+
+        final schemeModel = AppModel(
+          service: ScheduleService(
+            credentials: schemeCreds,
+            cookieStorage: FakeSessionRepository(),
+            backendFactory: (_) => schemeBootBackend,
+          ),
+          repository: FakeSessionRepository(),
+          preferences: schemePrefs,
+          scheduleCache: FakeScheduleCache(),
+          examCache: InMemoryExamCache(),
+          gradesCache: InMemoryGradesCache(),
+        );
+        addTearDown(schemeModel.dispose);
+
+        await schemeModel.boot();
+        expect(schemeModel.schoolBaseUrl, httpsQust);
+        expect(schemeModel.status, AppStatus.ready);
+        expect(schemeBootBackend.loginCount, 1);
+      },
+    );
+
+    test('PreferencesController.dispose 取消挂起外观草稿、阻止销毁后写盘并保持幂等与正常防抖', () async {
+      final tempDir = Directory.systemTemp.createTempSync('prefs_dispose_test');
+      addTearDown(() {
+        if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+      });
+      final prefsFile = File('${tempDir.path}/prefs.json');
+      final prefs = await Preferences.openFile(prefsFile);
+
+      final model = buildRig(preferences: prefs).model;
+      model.hydrateForTest(schedule: sampleSchedule());
+
+      // 1. 销毁前：正常防抖（300ms）与显式 flushAppearance() 仍正常落盘。
+      model.setCellHeight(72.0);
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      expect(prefsFile.existsSync(), isTrue);
+      expect(prefs.cellHeight, 72.0);
+
+      model.setCourseTextScale(1.15);
+      await model.flushAppearance();
+      expect(prefs.courseTextScale, 1.15);
+
+      // 2. 留有未落盘的外观草稿时立即 dispose() 并删除目录：
+      //    不得在 dispose 后触发异步 writeJson 或 onWriteError。
+      var errorCallbackCalled = false;
+      prefs.onWriteError = (_) => errorCallbackCalled = true;
+      model.setCellHeight(96.0);
+      model.setCourseTextScale(1.30);
+      model.dispose();
+
+      // 立即删除目录；若 dispose() 仍发起了异步 flushAppearance()，后续微任务会触发写盘失败。
+      tempDir.deleteSync(recursive: true);
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+
+      expect(errorCallbackCalled, isFalse);
+      expect(model.storageNoticeEvent, 0);
+      expect(tempDir.existsSync(), isFalse);
+
+      // 3. 二次 PreferencesController.dispose 与 dispose 后调用草稿/落盘方法均为安全空操作。
+      model.setCellHeight(80.0);
+      model.setCourseTextScale(1.0);
+      await model.flushAppearance();
+      model.prefs.dispose();
+      model.prefs.dispose();
     });
   });
 }

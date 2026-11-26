@@ -6,9 +6,9 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
-import 'app_installer.dart';
 import 'update_models.dart';
 import 'update_service.dart';
+import 'updater_gateway.dart';
 
 /// 更新流程所处阶段。
 enum UpdateFlowStage {
@@ -35,19 +35,16 @@ enum UpdateFlowStage {
 class UpdateFlowController extends ChangeNotifier {
   UpdateFlowController({
     this.updateService,
-    Future<bool> Function()? canInstallCheck,
-    Future<void> Function(File file)? installRunner,
-    Future<void> Function()? openSettingsRunner,
-  }) : _canInstallCheck =
-           canInstallCheck ?? AppInstaller.canRequestPackageInstalls,
-       _installRunner = installRunner ?? AppInstaller.install,
-       _openSettingsRunner =
-           openSettingsRunner ?? AppInstaller.openInstallSettings;
+    UpdaterGateway? gateway,
+    bool Function()? isAndroid,
+  }) : _gateway = gateway ?? const MethodChannelUpdaterGateway(),
+       _isAndroid = isAndroid ?? _defaultIsAndroid;
+
+  static bool _defaultIsAndroid() => Platform.isAndroid;
 
   final UpdateService? updateService;
-  final Future<bool> Function() _canInstallCheck;
-  final Future<void> Function(File file) _installRunner;
-  final Future<void> Function() _openSettingsRunner;
+  final UpdaterGateway _gateway;
+  final bool Function() _isAndroid;
 
   UpdateService? _ownedService;
   UpdateService get _service =>
@@ -71,6 +68,7 @@ class UpdateFlowController extends ChangeNotifier {
   int _backgroundReadyEvent = 0;
   int _backgroundErrorEvent = 0;
   int _requestCloseEvent = 0;
+  int _downloadEpoch = 0;
   bool _disposed = false;
 
   UpdateCheckResult? get updateResult => _updateResult;
@@ -142,6 +140,7 @@ class UpdateFlowController extends ChangeNotifier {
       return;
     }
 
+    _downloadEpoch++;
     _cancelToken?.cancel();
     _cancelToken = null;
     _updateResult = result;
@@ -162,6 +161,7 @@ class UpdateFlowController extends ChangeNotifier {
     List<String> backupProxies = const <String>[],
   }) {
     if (_disposed) return;
+    _downloadEpoch++;
     _cancelToken?.cancel();
     _cancelToken = null;
     _allowAvailableFallback = false;
@@ -217,19 +217,69 @@ class UpdateFlowController extends ChangeNotifier {
   }
 
   /// 查询当前平台是否具备应用内安装权限。
-  Future<bool> canInstallPackages() => _canInstallCheck();
+  Future<bool> canInstallPackages() => _gateway.canRequestPackageInstalls();
 
   /// 打开系统安装权限设置页。
-  Future<void> openInstallSettings() => _openSettingsRunner();
+  Future<void> openInstallSettings() => _gateway.openInstallSettings();
+
+  /// 检查是否有新版本可用（并执行多代理自动回退）。
+  Future<UpdateCheckResult> checkForUpdates({
+    required String currentVersion,
+    required String selectedProxy,
+    List<String> backupProxies = const <String>[],
+  }) {
+    return _service.checkForUpdatesWithFallback(
+      currentVersion: currentVersion,
+      selectedProxy: selectedProxy,
+      backupProxies: backupProxies,
+    );
+  }
+
+  /// 探测单个更新代理节点的连通性与 API 支持情况。
+  Future<ProxyTestResult> testProxy(String proxyUrl) async {
+    if (_disposed) {
+      return ProxyTestResult(
+        proxyUrl: proxyUrl,
+        isUsable: false,
+        latencyMs: 0,
+        supportsApi: false,
+      );
+    }
+    return _service.testProxy(proxyUrl);
+  }
+
+  /// 静默清理旧版本更新包与残留临时切片。
+  Future<int> cleanOldUpdateFiles({
+    String? currentVersion,
+    Directory? targetDirectory,
+  }) => UpdateService.cleanOldUpdateFiles(
+    currentVersion: currentVersion,
+    targetDirectory: targetDirectory,
+  );
+
+  /// 使用外部浏览器打开合法的 http/https 链接。
+  Future<bool> openExternalUrl(String rawUrl) async {
+    if (_disposed) return false;
+    final trimmed = rawUrl.trim();
+    if (trimmed.isEmpty) return false;
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null || !uri.hasScheme) return false;
+    final scheme = uri.scheme.toLowerCase();
+    if (scheme != 'http' && scheme != 'https') return false;
+    if (uri.host.isEmpty) return false;
+    return _gateway.launchExternalUrl(uri);
+  }
 
   /// 开始（或重试）后台下载。
   Future<void> startDownload() async {
-    if (_disposed) return;
+    if (_disposed || _isTriggeringInstall) return;
     final asset = targetAsset;
     if (asset == null) return;
     if (_stage == UpdateFlowStage.downloading && _cancelToken != null) {
       return;
     }
+
+    final epoch = ++_downloadEpoch;
 
     // 若已下载完成且本地包仍存在，直接进入安装环节避免重复下载。
     final existingFile = _downloadedFile;
@@ -237,7 +287,7 @@ class UpdateFlowController extends ChangeNotifier {
       _stage = UpdateFlowStage.readyToInstall;
       _errorMessage = null;
       notifyListeners();
-      if (isDialogOpen && Platform.isAndroid) {
+      if (isDialogOpen && _isAndroid()) {
         await executeInstall();
       }
       return;
@@ -263,7 +313,12 @@ class UpdateFlowController extends ChangeNotifier {
           backupProxies: _backupProxies,
           cancelToken: token,
         );
-        if (_disposed || token.isCancelled || _cancelToken != token) return;
+        if (_disposed ||
+            epoch != _downloadEpoch ||
+            token.isCancelled ||
+            _cancelToken != token) {
+          return;
+        }
       }
 
       final file = await _service.downloadAssetWithFallback(
@@ -273,27 +328,51 @@ class UpdateFlowController extends ChangeNotifier {
         cancelToken: token,
         expectedSha256: expectedSha256,
         onProxySwitched: (proxy) {
-          if (_disposed || token.isCancelled || _cancelToken != token) return;
+          if (_disposed ||
+              epoch != _downloadEpoch ||
+              token.isCancelled ||
+              _cancelToken != token) {
+            return;
+          }
           _currentProxy = proxy;
           notifyListeners();
         },
         onProgress: (progress) {
-          if (_disposed || token.isCancelled || _cancelToken != token) return;
+          if (_disposed ||
+              epoch != _downloadEpoch ||
+              token.isCancelled ||
+              _cancelToken != token) {
+            return;
+          }
           _progress = progress;
           notifyListeners();
         },
       );
 
-      if (_disposed || token.isCancelled || _cancelToken != token) return;
+      if (_disposed ||
+          epoch != _downloadEpoch ||
+          token.isCancelled ||
+          _cancelToken != token) {
+        return;
+      }
 
       _cancelToken = null;
       _downloadedFile = file;
       _stage = UpdateFlowStage.readyToInstall;
       _errorMessage = null;
 
-      if (Platform.isAndroid) {
-        final canInstall = await _canInstallCheck();
-        if (_disposed || _cancelToken != null) return;
+      if (_isAndroid()) {
+        bool canInstall = true;
+        try {
+          canInstall = await _gateway.canRequestPackageInstalls();
+        } catch (_) {
+          canInstall = true;
+        }
+        if (_disposed ||
+            epoch != _downloadEpoch ||
+            _stage != UpdateFlowStage.readyToInstall) {
+          return;
+        }
         _needsPermission = !canInstall;
       }
 
@@ -301,7 +380,7 @@ class UpdateFlowController extends ChangeNotifier {
         notifyListeners();
         // Android 端弹窗正打开且已授权时直接唤起安装器；
         // Windows 端必须等待用户明确点击「立即重启更新」。
-        if (Platform.isAndroid && !_needsPermission) {
+        if (_isAndroid() && !_needsPermission) {
           await executeInstall();
         }
       } else {
@@ -309,7 +388,12 @@ class UpdateFlowController extends ChangeNotifier {
         notifyListeners();
       }
     } catch (err) {
-      if (_disposed || token.isCancelled || _cancelToken != token) return;
+      if (_disposed ||
+          epoch != _downloadEpoch ||
+          token.isCancelled ||
+          _cancelToken != token) {
+        return;
+      }
       _cancelToken = null;
       _stage = UpdateFlowStage.error;
       _errorMessage = '下载失败: $err';
@@ -323,10 +407,12 @@ class UpdateFlowController extends ChangeNotifier {
   /// 明确中止当前下载并回到待更新状态（仅点击「取消下载」时调用）。
   void cancelDownload() {
     if (_disposed) return;
+    _downloadEpoch++;
     _cancelToken?.cancel();
     _cancelToken = null;
     _progress = null;
     _errorMessage = null;
+    _isTriggeringInstall = false;
     if (_allowAvailableFallback && release != null) {
       _stage = UpdateFlowStage.available;
     } else {
@@ -341,14 +427,19 @@ class UpdateFlowController extends ChangeNotifier {
     final file = _downloadedFile;
     if (file == null) return false;
 
+    final epoch = _downloadEpoch;
     _isTriggeringInstall = true;
     _errorMessage = null;
     notifyListeners();
 
     try {
-      if (Platform.isAndroid) {
-        final canInstall = await _canInstallCheck();
-        if (_disposed) return false;
+      if (_isAndroid()) {
+        final canInstall = await _gateway.canRequestPackageInstalls();
+        if (_disposed ||
+            epoch != _downloadEpoch ||
+            _stage != UpdateFlowStage.readyToInstall) {
+          return false;
+        }
         if (!canInstall) {
           _needsPermission = true;
           notifyListeners();
@@ -357,8 +448,12 @@ class UpdateFlowController extends ChangeNotifier {
         _needsPermission = false;
       }
 
-      await _installRunner(file);
-      if (_disposed) return false;
+      await _gateway.install(file);
+      if (_disposed ||
+          epoch != _downloadEpoch ||
+          _stage != UpdateFlowStage.readyToInstall) {
+        return false;
+      }
 
       if (isDialogOpen) {
         _requestCloseEvent++;
@@ -366,12 +461,12 @@ class UpdateFlowController extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      if (_disposed) return false;
+      if (_disposed || epoch != _downloadEpoch) return false;
       _errorMessage = '唤起系统安装器失败: $e';
       notifyListeners();
       return false;
     } finally {
-      if (!_disposed) {
+      if (!_disposed && epoch == _downloadEpoch) {
         _isTriggeringInstall = false;
         notifyListeners();
       }
@@ -380,12 +475,22 @@ class UpdateFlowController extends ChangeNotifier {
 
   /// 从系统设置页切回前台后重新检查安装权限，若已授予则自动继续安装。
   Future<void> refreshInstallPermissionAndAutoInstall() async {
-    if (_disposed || !Platform.isAndroid) return;
+    if (_disposed || !_isAndroid()) return;
     if (_stage != UpdateFlowStage.readyToInstall || _downloadedFile == null) {
       return;
     }
-    final canInstall = await _canInstallCheck();
-    if (_disposed) return;
+    final epoch = _downloadEpoch;
+    final bool canInstall;
+    try {
+      canInstall = await _gateway.canRequestPackageInstalls();
+    } catch (_) {
+      return;
+    }
+    if (_disposed ||
+        epoch != _downloadEpoch ||
+        _stage != UpdateFlowStage.readyToInstall) {
+      return;
+    }
 
     final previous = _needsPermission;
     _needsPermission = !canInstall;
@@ -401,6 +506,7 @@ class UpdateFlowController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _downloadEpoch++;
     _cancelToken?.cancel();
     _cancelToken = null;
     _ownedService?.dispose();

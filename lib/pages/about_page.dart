@@ -6,20 +6,18 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../src/app_model.dart';
 import '../src/app_version.dart';
 import '../src/route_settled.dart';
 import '../src/updater/update_models.dart';
-import '../src/updater/update_service.dart';
+import '../widgets/app_snack_bar.dart';
+import '../widgets/page_skeleton.dart';
+import '../widgets/tactile_button.dart';
 import 'changelog_page.dart';
 import 'debug_page.dart';
 import 'update_dialog.dart';
 import 'update_proxy_page.dart';
-import '../widgets/app_snack_bar.dart';
-import '../widgets/page_skeleton.dart';
-import '../widgets/tactile_button.dart';
 
 /// 项目主页（源码与发行版）：写入「项目主页与源码」，满足 GPL 的源码获取告知要求。
 const String kProjectHomeUrl = 'https://github.com/fangzi2006/QustSchedule';
@@ -49,7 +47,7 @@ class _AboutPageState extends State<AboutPage> {
     _cleanupRouteHandle = scheduleAfterRouteSettled(
       context: context,
       isMounted: () => mounted,
-      task: () => UpdateService.cleanOldUpdateFiles(currentVersion: appVersion),
+      task: () => widget.model.cleanOldUpdateFiles(),
     );
   }
 
@@ -69,17 +67,7 @@ class _AboutPageState extends State<AboutPage> {
     });
 
     try {
-      final service = UpdateService();
-      late final UpdateCheckResult result;
-      try {
-        result = await service.checkForUpdatesWithFallback(
-          currentVersion: appVersion,
-          selectedProxy: widget.model.selectedUpdateProxy,
-          backupProxies: widget.model.allUpdateProxies,
-        );
-      } finally {
-        service.dispose();
-      }
+      final result = await widget.model.checkForUpdates();
 
       if (!mounted) return;
 
@@ -173,8 +161,7 @@ class _AboutPageState extends State<AboutPage> {
   }
 
   Future<void> _openProjectLink(BuildContext context) async {
-    final uri = Uri.parse(kProjectHomeUrl);
-    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    final opened = await widget.model.openExternalUrl(kProjectHomeUrl);
     if (!context.mounted || opened) return;
     showAppSnackBar(context, message: '无法打开链接', type: AppSnackBarType.error);
   }

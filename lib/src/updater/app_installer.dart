@@ -3,13 +3,15 @@ library;
 
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:flutter/services.dart';
 
 class AppInstaller {
   AppInstaller._();
 
-  static const _channel = MethodChannel('com.fangzi.qustschedule/updater');
+  static const MethodChannel defaultChannel = MethodChannel(
+    'com.fangzi.qustschedule/updater',
+  );
 
   static const String portableCmdFileName = 'qustschedule_updater.cmd';
   static const String portableVbsFileName = 'qustschedule_launcher.vbs';
@@ -26,14 +28,20 @@ class AppInstaller {
   ];
 
   /// 检查 Android 是否已授予安装未知应用权限。Windows 返回 true。
-  static Future<bool> canRequestPackageInstalls() async {
-    if (Platform.isAndroid) {
+  static Future<bool> canRequestPackageInstalls({
+    MethodChannel channel = defaultChannel,
+    @visibleForTesting bool? isAndroid,
+  }) async {
+    if (isAndroid ?? Platform.isAndroid) {
       try {
-        final result = await _channel.invokeMethod<bool>(
+        final result = await channel.invokeMethod<bool>(
           'canRequestPackageInstalls',
         );
         return result ?? true;
-      } catch (_) {
+      } on MissingPluginException {
+        return true;
+      } on PlatformException catch (error) {
+        debugPrint('检查安装权限失败：${error.code}');
         return true;
       }
     }
@@ -41,11 +49,18 @@ class AppInstaller {
   }
 
   /// 跳转至系统设置页授权安装权限（仅 Android）。
-  static Future<void> openInstallSettings() async {
-    if (Platform.isAndroid) {
+  static Future<void> openInstallSettings({
+    MethodChannel channel = defaultChannel,
+    @visibleForTesting bool? isAndroid,
+  }) async {
+    if (isAndroid ?? Platform.isAndroid) {
       try {
-        await _channel.invokeMethod<void>('openInstallSettings');
-      } catch (_) {}
+        await channel.invokeMethod<void>('openInstallSettings');
+      } on MissingPluginException {
+        // 非 Android 运行时或未注册通道时忽略。
+      } on PlatformException catch (error) {
+        debugPrint('打开安装授权设置失败：${error.code}');
+      }
     }
   }
 
@@ -55,13 +70,17 @@ class AppInstaller {
   /// - Windows：
   ///   - `.zip` 便携版：解压到 `.update_staging` 后等待旧进程退出再搬运替换并重启；
   ///   - `.exe` 安装版：等待旧进程退出后以静默升级模式覆盖安装并自动重启。
-  static Future<void> install(File file) async {
+  static Future<void> install(
+    File file, {
+    MethodChannel channel = defaultChannel,
+    @visibleForTesting bool? isAndroid,
+  }) async {
     if (!file.existsSync()) {
       throw FileSystemException('安装文件不存在', file.path);
     }
 
-    if (Platform.isAndroid) {
-      await _channel.invokeMethod<void>('installApk', <String, dynamic>{
+    if (isAndroid ?? Platform.isAndroid) {
+      await channel.invokeMethod<void>('installApk', <String, dynamic>{
         'filePath': file.path,
       });
       return;

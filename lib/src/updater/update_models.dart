@@ -240,12 +240,68 @@ class ProxyTestResult {
   }
 }
 
-/// 辅助函数：根据代理地址展示简洁名称。
+/// 预设加速代理节点元信息（地址、展示名与精确主机匹配规则）。
+class UpdateProxyPreset {
+  const UpdateProxyPreset({
+    required this.url,
+    required this.displayName,
+    required this.matchHost,
+  });
+
+  final String url;
+  final String displayName;
+  final String matchHost;
+}
+
+/// 检查更新与安装包下载的默认加速代理。
+const String defaultUpdateProxyUrl = 'https://gh-proxy.org';
+
+/// 预设加速代理列表：唯一真源（含 URL、展示名与主机匹配规则）。
+const List<UpdateProxyPreset> kPresetUpdateProxyEntries = <UpdateProxyPreset>[
+  UpdateProxyPreset(
+    url: 'https://gh-proxy.org',
+    displayName: '主加速节点(默认推荐)',
+    matchHost: 'gh-proxy.org',
+  ),
+  UpdateProxyPreset(
+    url: 'https://axisnow.gh-proxy.org',
+    displayName: '副加速节点',
+    matchHost: 'axisnow.gh-proxy.org',
+  ),
+  UpdateProxyPreset(
+    url: 'https://gh-proxy.com',
+    displayName: '加速主站（最稳定但是部分网络环境下速度较慢）',
+    matchHost: 'gh-proxy.com',
+  ),
+];
+
+/// 预设加速代理地址列表（默认首选、备选及旧节点）。
+final List<String> presetUpdateProxies = List<String>.unmodifiable(
+  kPresetUpdateProxyEntries.map((entry) => entry.url),
+);
+
+/// 辅助函数：按规范 HTTPS 根地址精确匹配预设节点名称，非规范节点回退展示原始地址。
 String displayProxyName(String proxyUrl) {
   final trimmed = proxyUrl.trim();
   if (trimmed.isEmpty) return '直连';
-  if (trimmed.contains('axisnow.gh-proxy.org')) return '副加速节点';
-  if (trimmed.contains('gh-proxy.org')) return '主加速节点(默认推荐)';
-  if (trimmed.contains('gh-proxy.com')) return '加速主站（最稳定但是部分网络环境下速度较慢）';
+  final normalized =
+      RegExp(r'^https?://', caseSensitive: false).hasMatch(trimmed)
+      ? trimmed
+      : 'https://$trimmed';
+  final uri = Uri.tryParse(normalized);
+  if (uri != null &&
+      uri.scheme.toLowerCase() == 'https' &&
+      (!uri.hasPort || uri.port == 443) &&
+      uri.userInfo.isEmpty &&
+      (uri.path.isEmpty || uri.path == '/') &&
+      !uri.hasQuery &&
+      !uri.hasFragment) {
+    final host = uri.host.toLowerCase();
+    for (final entry in kPresetUpdateProxyEntries) {
+      if (host.isNotEmpty && host == entry.matchHost) {
+        return entry.displayName;
+      }
+    }
+  }
   return trimmed;
 }

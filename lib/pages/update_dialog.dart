@@ -2,17 +2,14 @@
 library;
 
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
-import '../src/formatted_text_span.dart';
 import '../src/updater/update_flow_controller.dart';
 import '../src/updater/update_models.dart';
-import '../src/updater/update_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/changelog_category_badge.dart';
+import '../widgets/formatted_text_span.dart';
 import '../widgets/tactile_button.dart';
 
 /// 弹出统一的应用更新流程弹窗（同一弹窗内流转：版本说明 → 下载进度 → 准备安装）。
@@ -27,11 +24,9 @@ Future<void> showUpdateDialog(
   UpdateCheckResult? updateResult,
   String proxyPrefix = '',
   List<String> backupProxies = const <String>[],
-  UpdateService? updateService,
 }) async {
   final ownsController = controller == null;
-  final effectiveController =
-      controller ?? UpdateFlowController(updateService: updateService);
+  final effectiveController = controller ?? UpdateFlowController();
 
   if (updateResult != null) {
     effectiveController.setAvailableUpdate(
@@ -75,24 +70,29 @@ Future<void> showDownloadProgressDialog(
   required ReleaseAsset asset,
   required String selectedProxy,
   List<String> backupProxies = const <String>[],
-  UpdateService? updateService,
+  UpdateFlowController? controller,
 }) async {
-  final controller = UpdateFlowController(updateService: updateService);
-  controller.prepareDirectDownload(
+  final ownsController = controller == null;
+  final effectiveController = controller ?? UpdateFlowController();
+  effectiveController.prepareDirectDownload(
     asset: asset,
     selectedProxy: selectedProxy,
     backupProxies: backupProxies,
   );
-  unawaited(controller.startDownload());
+  unawaited(effectiveController.startDownload());
   try {
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (_) =>
-          _UpdateFlowDialog(controller: controller, cancelOnDispose: true),
+      builder: (_) => _UpdateFlowDialog(
+        controller: effectiveController,
+        cancelOnDispose: ownsController,
+      ),
     );
   } finally {
-    controller.dispose();
+    if (ownsController) {
+      effectiveController.dispose();
+    }
   }
 }
 
@@ -161,15 +161,11 @@ class _UpdateFlowDialogState extends State<_UpdateFlowDialog>
   }
 
   Future<void> _launchExternalUrl(String rawUrl) async {
-    if (rawUrl.isEmpty) return;
-    final uri = Uri.parse(rawUrl);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
+    await _controller.openExternalUrl(rawUrl);
   }
 
   Future<void> _onTapUpdateNow() async {
-    if (Platform.isAndroid) {
+    if (Theme.of(context).platform == TargetPlatform.android) {
       final canInstall = await _controller.canInstallPackages();
       if (!canInstall && mounted) {
         final action = await showDialog<String>(
@@ -494,6 +490,7 @@ class _UpdateFlowDialogState extends State<_UpdateFlowDialog>
   }
 
   Widget _buildReadyToInstallDialog(ThemeData theme) {
+    final isWindows = Theme.of(context).platform == TargetPlatform.windows;
     final asset = _controller.targetAsset;
     final errorMessage = _controller.errorMessage;
     final needsPermission = _controller.needsPermission;
@@ -588,7 +585,7 @@ class _UpdateFlowDialogState extends State<_UpdateFlowDialog>
               ),
             ] else ...[
               Text(
-                Platform.isWindows
+                isWindows
                     ? '新版本已下载就绪，点击下方按钮将自动应用更新并重新启动青科课表通。'
                     : '安装包已下载就绪，点击下方按钮即可覆盖安装。',
                 style: TextStyle(
@@ -626,7 +623,7 @@ class _UpdateFlowDialogState extends State<_UpdateFlowDialog>
                           ),
                         )
                       : Icon(
-                          Platform.isWindows
+                          isWindows
                               ? Icons.restart_alt_rounded
                               : Icons.install_mobile_rounded,
                           size: 18,
@@ -639,7 +636,7 @@ class _UpdateFlowDialogState extends State<_UpdateFlowDialog>
                   label: Text(
                     isTriggeringInstall
                         ? '正在准备更新…'
-                        : (Platform.isWindows ? '立即重启更新' : '立即安装'),
+                        : (isWindows ? '立即重启更新' : '立即安装'),
                   ),
                 ),
         ),

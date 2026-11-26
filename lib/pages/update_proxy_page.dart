@@ -1,12 +1,12 @@
 /// 软件更新代理管理页面：支持增删自定义加速代理、测速检测、可用性诊断与自动回退设置。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../src/app_model.dart';
-import '../src/preferences_repository.dart';
 import '../src/updater/update_models.dart';
-import '../src/updater/update_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_snack_bar.dart';
 import '../widgets/section_title.dart';
@@ -22,26 +22,14 @@ class UpdateProxyPage extends StatefulWidget {
 }
 
 class _UpdateProxyPageState extends State<UpdateProxyPage> {
-  final _service = UpdateService();
   final _testResults = <String, ProxyTestResult>{};
   final _testingUrls = <String>{};
-
-  @override
-  void initState() {
-    super.initState();
-  }
-
-  @override
-  void dispose() {
-    _service.dispose();
-    super.dispose();
-  }
 
   Future<void> _testProxy(String url) async {
     if (_testingUrls.contains(url)) return;
     setState(() => _testingUrls.add(url));
     try {
-      final result = await _service.testProxy(url);
+      final result = await widget.model.testUpdateProxy(url);
       if (!mounted) return;
       setState(() {
         _testResults[url] = result;
@@ -54,11 +42,7 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
   }
 
   Future<void> _testAll() async {
-    final proxies = <String>[
-      ...presetUpdateProxies,
-      ...widget.model.customUpdateProxies,
-      '',
-    ];
+    final proxies = <String>[...widget.model.allUpdateProxies, ''];
 
     await Future.wait(proxies.map(_testProxy));
   }
@@ -79,7 +63,7 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
         type: AppSnackBarType.success,
       );
       // 添加后立即进行一次测速
-      _testProxy(result);
+      unawaited(_testProxy(result));
     }
   }
 
@@ -105,9 +89,6 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
     );
 
     if (confirm == true) {
-      if (widget.model.selectedUpdateProxy == url) {
-        await widget.model.setSelectedUpdateProxy(defaultUpdateProxyUrl);
-      }
       await widget.model.removeCustomUpdateProxy(url);
       if (!mounted) return;
       setState(() {
@@ -124,11 +105,7 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
       listenable: widget.model.prefsNotifier,
       builder: (context, _) {
         final selectedProxy = widget.model.selectedUpdateProxy;
-        final proxies = <String>[
-          ...presetUpdateProxies,
-          ...widget.model.customUpdateProxies,
-          '',
-        ];
+        final proxies = <String>[...widget.model.allUpdateProxies, ''];
 
         return Scaffold(
           appBar: TactileAppBar(
@@ -231,7 +208,8 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
     final isSelected = proxy.trim() == selectedProxy.trim();
     final isTesting = _testingUrls.contains(proxy);
     final testResult = _testResults[proxy];
-    final isCustom = proxy.isNotEmpty && !presetUpdateProxies.contains(proxy);
+    final isCustom =
+        proxy.isNotEmpty && widget.model.customUpdateProxies.contains(proxy);
 
     return Card(
       shape: RoundedRectangleBorder(

@@ -10,10 +10,10 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path_provider/path_provider.dart';
 
+import '../app_version.dart';
 import 'app_installer.dart';
 import 'update_models.dart';
 import 'version_comparator.dart';
-import '../app_version.dart';
 
 /// 下载取消令牌。
 class CancelToken {

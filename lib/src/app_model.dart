@@ -1,8 +1,8 @@
 /// 应用状态协调器：串联认证会话、课表校历、学业缓存、用户设置与状态气泡五大专职控制器。
 ///
 /// UI 与测试继续通过 [AppModel] 读取状态、发送意图；高频局部状态已隔离到各自的
-/// [Listenable] 频道（[routeNotifier]、[hints]、[scheduleState]、[academic]、
-/// [prefsNotifier]、[weekNotifier]、[refreshingNotifier]），防止微小的提示或
+/// [Listenable] 频道（[routeNotifier]、[hints]、[scheduleState]、[academicNotifier]、
+/// [prefsNotifier]、[weekNotifier]、[refreshingNotifier]、[updateFlow]），防止微小的提示或
 /// 刷新转圈触发外层外壳与课表网格白刷。
 library;
 
@@ -15,6 +15,7 @@ import 'package:zf_academic/zf_academic.dart';
 
 import 'academic_cache.dart';
 import 'academic_service.dart';
+import 'app_version.dart';
 import 'preferences_repository.dart';
 import 'reminder_planner.dart';
 import 'reschedule.dart';
@@ -28,10 +29,10 @@ import 'state/hint_notice_controller.dart';
 import 'state/preferences_controller.dart';
 import 'state/schedule_controller.dart';
 import 'timetable.dart';
-import 'widget_style.dart';
 import 'updater/update_flow_controller.dart';
 import 'updater/update_models.dart';
 import 'updater/update_service.dart';
+import 'widget_style.dart';
 
 export 'state/academic_controller.dart';
 export 'state/auth_session_controller.dart';
@@ -360,6 +361,22 @@ class AppModel extends ChangeNotifier {
     updateService: updateService,
     initialDelay: initialDelay,
   );
+  Future<UpdateCheckResult> checkForUpdates() => updateFlow.checkForUpdates(
+    currentVersion: appVersion,
+    selectedProxy: selectedUpdateProxy,
+    backupProxies: allUpdateProxies,
+  );
+  Future<ProxyTestResult> testUpdateProxy(String proxyUrl) =>
+      updateFlow.testProxy(proxyUrl);
+  Future<int> cleanOldUpdateFiles({
+    String? currentVersion,
+    Directory? targetDirectory,
+  }) => updateFlow.cleanOldUpdateFiles(
+    currentVersion: currentVersion ?? appVersion,
+    targetDirectory: targetDirectory,
+  );
+  Future<bool> openExternalUrl(String rawUrl) =>
+      updateFlow.openExternalUrl(rawUrl);
   Future<void> setAutoCheckUpdate(bool value) =>
       prefs.setAutoCheckUpdate(value);
 
@@ -497,8 +514,8 @@ class AppModel extends ChangeNotifier {
       }
 
       if (snapshot == null) {
-        final saved = await session.service.credentials.get(
-          session.accountKey(),
+        final saved = await session.service.readSavedCredentials(
+          username: session.username,
         );
         if (saved != null) {
           session.username = saved.username;
@@ -1018,7 +1035,7 @@ class AppModel extends ChangeNotifier {
     try {
       final Credentials? saved = account.isEmpty
           ? null
-          : await session.service.credentials.get(session.accountKey());
+          : await session.service.readSavedCredentials(username: account);
       if (_disposed || switchToken != _schoolSwitchSeq) return;
       if (saved == null || saved.password.isEmpty || saved.username.isEmpty) {
         _pendingSchoolSwitchUrl = null;
