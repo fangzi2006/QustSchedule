@@ -1232,6 +1232,11 @@ const rawFake = r"import 'package:flutter/widgets.dart'; UpdateService();";
           root: root,
         ).map((f) => _toPosixRelative(root, f)),
         ..._listFiles(
+          Directory('${root.path}/tool'),
+          extension: '.dart',
+          root: root,
+        ).map((f) => _toPosixRelative(root, f)),
+        ..._listFiles(
           Directory('${root.path}/packages/zf_academic/lib'),
           extension: '.dart',
           root: root,
@@ -1282,7 +1287,7 @@ const rawFake = r"import 'package:flutter/widgets.dart'; UpdateService();";
       );
 
       final backtickPathPattern = RegExp(
-        r'`((?:lib|test|packages|android|windows|docs|\.github)/[^`\s]+)`',
+        r'`((?:lib|test|tool|packages|android|windows|docs|\.github)/[^`\s]+)`',
       );
       final missingPaths = <String>[];
       for (final match in backtickPathPattern.allMatches(fileMap)) {
@@ -1305,6 +1310,122 @@ const rawFake = r"import 'package:flutter/widgets.dart'; UpdateService();";
         reason:
             'Broken backticked paths in FILE_MAP.md:\n${missingPaths.join('\n')}',
       );
+    });
+  });
+
+  group('7. AppModel facade freeze, line endings & SDK/AGP upgrade audit', () {
+    test('AppModel thin controller forwarders stay frozen (<= 134)', () {
+      const kMaxAppModelForwarders = 134;
+      final appModelCode = _scanDartSource(
+        readRel('lib/src/app_model.dart'),
+        stripStrings: true,
+      );
+      final forwarderPattern = RegExp(
+        r'=>\s*(?:prefs|session|scheduleState|academic|hints|updateFlow)\.[A-Za-z_]',
+      );
+      final count = forwarderPattern.allMatches(appModelCode).length;
+      expect(
+        count,
+        lessThanOrEqualTo(kMaxAppModelForwarders),
+        reason:
+            'AppModel thin controller forwarders grew to $count '
+            '(frozen ceiling: $kMaxAppModelForwarders). '
+            'Consume model.prefs/session/scheduleState/academic/hints/updateFlow '
+            'directly instead of adding new 1:1 pass-throughs on AppModel.',
+      );
+    });
+
+    test(
+      'zf_academic example/secure_storage_flutter.dart stays on v11 API',
+      () {
+        final example = _scanDartSource(
+          readRel('packages/zf_academic/example/secure_storage_flutter.dart'),
+          stripStrings: false,
+        );
+        expect(
+          example,
+          isNot(contains('encryptedSharedPreferences:')),
+          reason:
+              'example/secure_storage_flutter.dart must not regress to '
+              'removed flutter_secure_storage v9 encryptedSharedPreferences.',
+        );
+        for (final token in const <String>[
+          'FlutterSecureStorage',
+          'IOSOptions',
+          'KeychainAccessibility.first_unlock',
+          'implements CredentialStore',
+          'credentialStoreKey(',
+          'Future<Credentials?> get(',
+          'Future<void> save(',
+          'Future<void> remove(',
+          'Future<bool> has(',
+          'Future<void> clearAll(',
+        ]) {
+          expect(
+            example,
+            contains(token),
+            reason:
+                'example/secure_storage_flutter.dart missing v11 contract '
+                'token: $token',
+          );
+        }
+      },
+    );
+
+    test('CI FLUTTER_VERSION and android/gradle.properties flags match AGENTS.md', () {
+      final workflow = readRel('.github/workflows/build-release.yml');
+      final verMatch = RegExp(r"FLUTTER_VERSION:\s*'([^']+)'")
+          .firstMatch(workflow);
+      expect(
+        verMatch,
+        isNotNull,
+        reason: 'FLUTTER_VERSION missing in build-release.yml',
+      );
+      final flutterVersion = verMatch!.group(1)!;
+
+      final agents = readRel('AGENTS.md');
+      expect(
+        agents,
+        contains(flutterVersion),
+        reason:
+            'CI FLUTTER_VERSION ($flutterVersion) changed: re-audit '
+            'android/gradle.properties compat flags & '
+            'packages/zf_academic/example/secure_storage_flutter.dart, '
+            'then sync AGENTS.md.',
+      );
+
+      final gradleProps = readRel('android/gradle.properties');
+      for (final flag in const <String>[
+        'android.newDsl=false',
+        'android.builtInKotlin=false',
+      ]) {
+        if (gradleProps.contains(flag)) {
+          expect(
+            agents,
+            contains(flag),
+            reason:
+                'android/gradle.properties keeps $flag; document it in AGENTS.md.',
+          );
+        }
+      }
+    });
+
+    test('.gitattributes enforces cross-platform LF/CRLF rules', () {
+      final attrs = readRel('.gitattributes');
+      for (final rule in const <String>[
+        '*.dart text eol=lf',
+        '*.kt text eol=lf',
+        '*.yml text eol=lf',
+        '*.cpp text eol=crlf',
+        '*.rc text eol=crlf',
+        '*.iss text eol=crlf',
+      ]) {
+        expect(
+          attrs,
+          contains(rule),
+          reason: '.gitattributes missing required line-ending rule: $rule',
+        );
+      }
     });
   });
 }
