@@ -130,7 +130,7 @@
 ## 三、Android 原生 (`android/app/src/main/kotlin/com/fangzi/qustschedule/`，30 文件)
 | 模块 | 文件 | 职责 / 专题 |
 |---|---|---|
-| 入口与更新 (2) | `MainActivity.kt`, `updater/AppUpdaterBridge.kt` | 3 条 MethodChannel；默认 `RenderMode.surface` + `popSystemNavigator` 退后台热驻留；FileProvider APK 安装 |
+| 入口与更新 (2) | `MainActivity.kt`, `updater/AppUpdaterBridge.kt` | 3 条 MethodChannel；默认 `RenderMode.surface` + `onFlutterSurfaceViewCreated` (`setZOrderOnTop(true)`) + `popSystemNavigator` 退后台热驻留；FileProvider APK 安装 |
 | 课前提醒 (13) | `reminder/Reminder{Worker,Bridge,Payload,Store,Scheduler,Receiver,DailyResyncReceiver,RestoreReceiver,Notifier,FluidRenderer,FluidService,Samples,Permissions}.kt` | 见 [`REMINDER.md`](REMINDER.md) |
 | 桌面小组件 (15) | `widget/{WidgetWorker,WidgetBridge,WidgetStore,WidgetContentResolver,WidgetThemeResolver,WidgetBackgroundRenderer,WidgetCoordinator,WidgetRefreshScheduler,WidgetRefreshReceiver,TodayWidgetProvider,TodayWidgetService,TodayItemViewBinder,NextClassWidgetProvider,WeekGridWidgetProvider,WeekGridRemoteViewsBuilder}.kt` | 见 [`WIDGET.md`](WIDGET.md) |
 

@@ -129,7 +129,7 @@
   - `_positionNotifier`（`0.0` 课表 / `1.0` 学业 / `2.0` 设置）仅由 `FloatingDock.onPillProgress` 经 `followPill(progress)` 写入：`(progress * maxPage).clamp(0, maxPage)`。
   - **按需单页懒建常驻**：首帧仅建 `_schedulePage`，其余为 `SizedBox.shrink()`；`onTargetIndexHint` / `onIndexSelected` 仅懒建目标单页（`0 <-> 2` 绝不建 `1`），建后常驻保留滚动与状态。
   - **抢跑解锁与离场锁死**：每页包裹 `Transform.translate(key: ValueKey('shell-page-$index')) -> AppMenuScope(activeListenable: _pageActiveNotifiers[index]) -> IgnorePointer(ignoring: _interactionBlocked || index != widget.index) -> TickerMode(enabled: index == widget.index) -> RepaintBoundary`。目标确定即切 `index` 解锁目标页、锁死离场页；按住 Dock 预览（`onPointerActiveChanged(true)`）时 `_interactionBlocked = true` 暂锁全内容区。
-- **`FloatingDock` 几何**：`height = 58.0`、`bottomMargin = 16.0`、`contentInset(context) = 58 + 32 + padding.bottom`；理想项宽 `74.0`、间距 `10.0`、左右内边距 `6.0`，窄屏压缩下限缩放 `0.58` / 间距 `2.0`。切页目标按等分 `1/n`（`_indexAt(x)`）判定，静态落点 `_rects` 由 `GlobalKey` + `localToGlobal` 实测（差 `>0.5px` 更新）。
+- **`FloatingDock` 几何与键盘免疫**：`height = 58.0`、`bottomMargin = 16.0`、`contentInset(context) = 58 + 32 + padding.bottom`；理想项宽 `74.0`、间距 `10.0`、左右内边距 `6.0`，窄屏压缩下限缩放 `0.58` / 间距 `2.0`。切页目标按等分 `1/n`（`_indexAt(x)`）判定，静态落点 `_rects` 由 `GlobalKey` + `localToGlobal` 实测（差 `>0.5px` 更新）。`HomeShell` 的 `Scaffold` 固定 `resizeToAvoidBottomInset: false` 且 Dock 底部边距取 `max(padding.bottom, viewPadding.bottom)`，弹窗/二级页拉起软键盘时不顶起也不下沉抖动。
 - **五大物理通道**：
 
 | 通道 | 参数 | 契约 |
