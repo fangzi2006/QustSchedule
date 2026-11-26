@@ -1569,6 +1569,35 @@ void main() {
         expect(find.text('局部菜单项'), findsNothing);
       },
     );
+
+    testWidgets('弹出软键盘（viewInsets.bottom > 0）时底部 FloatingDock 不被顶起也不下沉', (
+      tester,
+    ) async {
+      final model = _buildModel();
+      addTearDown(model.dispose);
+      tester.view.padding = const FakeViewPadding(bottom: 24);
+      tester.view.viewPadding = const FakeViewPadding(bottom: 24);
+      tester.view.viewInsets = FakeViewPadding.zero;
+      addTearDown(() {
+        tester.view.resetPadding();
+        tester.view.resetViewPadding();
+        tester.view.resetViewInsets();
+      });
+
+      await tester.pumpWidget(_wrapHome(model));
+      await tester.pumpAndSettle();
+
+      final beforeRect = tester.getRect(find.byType(FloatingDock));
+
+      // 模拟 Android 弹出软键盘：viewInsets.bottom 增大，padding.bottom 被键盘消费归零，
+      // 但物理导航栏 viewPadding.bottom 仍保持 24。
+      tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+      tester.view.padding = FakeViewPadding.zero;
+      await tester.pumpAndSettle();
+
+      final duringImeRect = tester.getRect(find.byType(FloatingDock));
+      expect(duringImeRect, beforeRect);
+    });
   });
 }
 

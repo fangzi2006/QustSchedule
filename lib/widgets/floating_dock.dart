@@ -1176,10 +1176,13 @@ class FloatingDockState extends State<FloatingDock>
     // 布局完成才知道按钮在哪：每帧补一次测量，量到就不再来。
     WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
 
+    final bottomSafeInset = math.max(
+      MediaQuery.paddingOf(context).bottom,
+      MediaQuery.viewPaddingOf(context).bottom,
+    );
     return Padding(
       padding: EdgeInsets.only(
-        bottom:
-            FloatingDock.bottomMargin + MediaQuery.paddingOf(context).bottom,
+        bottom: FloatingDock.bottomMargin + bottomSafeInset,
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {

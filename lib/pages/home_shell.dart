@@ -190,6 +190,9 @@ class _HomeShellState extends State<HomeShell> {
     final Widget? settingsPage = _settingsPage;
 
     return Scaffold(
+      // 主壳三个 Tab 均无页内输入框，输入法只在弹窗或二级页弹出；
+      // 关闭键盘避让缩放，防止弹出输入法时把底部悬浮 FloatingDock 顶到键盘上方。
+      resizeToAvoidBottomInset: false,
       body: Stack(
         children: <Widget>[
           Positioned.fill(
