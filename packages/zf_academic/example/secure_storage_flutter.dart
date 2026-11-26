@@ -3,20 +3,19 @@
 // 这个文件**不属于** zf_academic 包本身（核心包保持纯 Dart，零 Flutter 依赖），
 // 请拷进你的 Flutter 项目（例如 lib/data/credential_store.dart）使用。
 //
-// 平台行为（flutter_secure_storage v9.x）：
-//  - Android：EncryptedSharedPreferences + Tink + Android Keystore；
+// 平台行为（flutter_secure_storage v11.x）：
+//  - Android：EncryptedSharedPreferences + Tink + Android Keystore（默认行为）；
 //  - Windows：DPAPI（绑定当前 Windows 用户，换用户/换机解不开 → get() 返回 null）；
 //  - iOS/macOS：Keychain。
 //
 // 两个必配项：
 //  1. Android 要把 EncryptedSharedPreferences 排除出自动备份，否则换机恢复后密钥对不上：
-//     android/app/src/main/AndroidManifest.xml 里加
+//     android/app/src/main/AndroidManifest.xml 里配置
+//       android:allowBackup="false"
 //       android:fullBackupContent="@xml/backup_rules"
-//     并创建 android/app/src/main/res/xml/backup_rules.xml：
-//       <?xml version="1.0" encoding="utf-8"?>
-//       <full-backup-content>
-//         <exclude domain="sharedpref" path="."/>
-//       </full-backup-content>
+//       android:dataExtractionRules="@xml/data_extraction_rules"
+//     并创建对应的 res/xml/backup_rules.xml 与 res/xml/data_extraction_rules.xml
+//     （排除 sharedpref 域）。
 //  2. 读失败（换用户/换机/Keystore 损坏）必须容错为"无凭据 → 重新登录"，不能崩。
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -27,7 +26,6 @@ class FlutterSecureStorageCredentialStore implements CredentialStore {
     FlutterSecureStorage? storage,
   ]) : _storage = storage ??
             const FlutterSecureStorage(
-              aOptions: AndroidOptions(encryptedSharedPreferences: true),
               iOptions: IOSOptions(
                 accessibility: KeychainAccessibility.first_unlock,
               ),
@@ -37,10 +35,19 @@ class FlutterSecureStorageCredentialStore implements CredentialStore {
 
   @override
   Future<Credentials?> get(String accountKey) async {
-    final username = await _storage.read(key: _userKey(accountKey));
-    final password = await _storage.read(key: credentialStoreKey(accountKey));
-    if (username == null || password == null) return null;
-    return Credentials(username, password);
+    try {
+      final results = await Future.wait<String?>(<Future<String?>>[
+        _storage.read(key: _userKey(accountKey)),
+        _storage.read(key: credentialStoreKey(accountKey)),
+      ]);
+      final username = results[0];
+      final password = results[1];
+      if (username == null || password == null) return null;
+      return Credentials(username, password);
+    } catch (_) {
+      // Keystore 损坏 / 换用户 / 换机：一律按"无凭据"处理，由上层引导重新登录。
+      return null;
+    }
   }
 
   @override
@@ -60,8 +67,13 @@ class FlutterSecureStorageCredentialStore implements CredentialStore {
   }
 
   @override
-  Future<bool> has(String accountKey) async =>
-      await _storage.containsKey(key: credentialStoreKey(accountKey));
+  Future<bool> has(String accountKey) async {
+    try {
+      return await _storage.containsKey(key: credentialStoreKey(accountKey));
+    } catch (_) {
+      return false;
+    }
+  }
 
   @override
   Future<void> clearAll() async {

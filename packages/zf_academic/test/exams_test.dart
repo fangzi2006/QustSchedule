@@ -1,4 +1,6 @@
 import 'package:test/test.dart';
+import 'package:zf_academic/src/academic_query.dart';
+import 'package:zf_academic/src/urls.dart' show zfTermParams;
 import 'package:zf_academic/zf_academic_io.dart';
 
 import 'support/synthetic_zf.dart';

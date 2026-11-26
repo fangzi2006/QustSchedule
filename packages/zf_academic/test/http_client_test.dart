@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:zf_academic/src/http_client.dart';
+import 'package:zf_academic/src/respond.dart';
 import 'package:zf_academic/zf_academic_io.dart';
 
 const _origin = 'https://jw.example.edu.cn';
@@ -698,6 +701,229 @@ void main() {
       } finally {
         client.close();
       }
+    });
+  });
+
+  group('主机限速 (paceHosts)', () {
+    test('默认 AcademicHttpOptions 不硬编码 jw.cqiivc.com 限速', () async {
+      const cqRoot = 'https://jw.cqiivc.com/jwglxt';
+      final fake = FakeTransport(<RawHttpResponse>[
+        _response(200, body: 'ok1', url: '$cqRoot/a'),
+        _response(200, body: 'ok2', url: '$cqRoot/b'),
+      ]);
+      final client = AcademicHttpClient(AcademicHttpOptions(
+        cookies: CookieStore(baseUrl: cqRoot),
+        allowedHosts: const <String>['jw.cqiivc.com'],
+        protocol: SchoolProtocol.https,
+        transport: fake.call,
+      ));
+
+      final sw = Stopwatch()..start();
+      await client.get('$cqRoot/a');
+      await client.get('$cqRoot/b');
+      sw.stop();
+
+      expect(fake.seen, hasLength(2));
+      expect(sw.elapsedMilliseconds, lessThan(400));
+    });
+
+    test('显式配置 paceHosts 生效且按主机大小写规范化', () async {
+      final fake = FakeTransport(<RawHttpResponse>[
+        _response(200, body: 'ok1'),
+        _response(200, body: 'ok2'),
+      ]);
+      final client = AcademicHttpClient(AcademicHttpOptions(
+        cookies: CookieStore(baseUrl: _root),
+        allowedHosts: const <String>['jw.example.edu.cn'],
+        protocol: SchoolProtocol.https,
+        paceHosts: const <String, int>{'JW.Example.EDU.CN': 60},
+        transport: fake.call,
+      ));
+
+      final sw = Stopwatch()..start();
+      await client.get('$_root/a');
+      await client.get('$_root/b');
+      sw.stop();
+
+      expect(fake.seen, hasLength(2));
+      expect(sw.elapsedMilliseconds, greaterThanOrEqualTo(45));
+    });
+
+    test('非正数 paceHosts 间隔会被忽略', () async {
+      final fake = FakeTransport(<RawHttpResponse>[
+        _response(200, body: 'ok1'),
+        _response(200, body: 'ok2'),
+      ]);
+      final client = AcademicHttpClient(AcademicHttpOptions(
+        cookies: CookieStore(baseUrl: _root),
+        allowedHosts: const <String>['jw.example.edu.cn'],
+        protocol: SchoolProtocol.https,
+        paceHosts: const <String, int>{'jw.example.edu.cn': 0},
+        transport: fake.call,
+      ));
+
+      final sw = Stopwatch()..start();
+      await client.get('$_root/a');
+      await client.get('$_root/b');
+      sw.stop();
+
+      expect(fake.seen, hasLength(2));
+      expect(sw.elapsedMilliseconds, lessThan(200));
+    });
+
+    test('带端口与路径的 paceHosts 键（如 host:443、https://host:8443/jwglxt）仍触发限速',
+        () async {
+      const cq443Root = 'https://jw.cqiivc.com/jwglxt';
+      final fake443 = FakeTransport(<RawHttpResponse>[
+        _response(200, body: 'ok1', url: '$cq443Root/a'),
+        _response(200, body: 'ok2', url: '$cq443Root/b'),
+      ]);
+      final client443 = AcademicHttpClient(AcademicHttpOptions(
+        cookies: CookieStore(baseUrl: cq443Root),
+        allowedHosts: const <String>['jw.cqiivc.com'],
+        protocol: SchoolProtocol.https,
+        paceHosts: const <String, int>{'JW.CQIIVC.COM:443': 60},
+        transport: fake443.call,
+      ));
+
+      final sw443 = Stopwatch()..start();
+      await client443.get('$cq443Root/a');
+      await client443.get('$cq443Root/b');
+      sw443.stop();
+
+      expect(fake443.seen, hasLength(2));
+      expect(sw443.elapsedMilliseconds, greaterThanOrEqualTo(45));
+
+      const cq8443Root = 'https://jw.cqiivc.com:8443/jwglxt';
+      final fake8443 = FakeTransport(<RawHttpResponse>[
+        _response(200, body: 'ok1', url: '$cq8443Root/a'),
+        _response(200, body: 'ok2', url: '$cq8443Root/b'),
+      ]);
+      final client8443 = AcademicHttpClient(AcademicHttpOptions(
+        cookies: CookieStore(baseUrl: cq8443Root),
+        allowedHosts: const <String>['jw.cqiivc.com:8443'],
+        protocol: SchoolProtocol.https,
+        paceHosts: const <String, int>{'https://jw.cqiivc.com:8443/jwglxt': 60},
+        transport: fake8443.call,
+      ));
+
+      final sw8443 = Stopwatch()..start();
+      await client8443.get('$cq8443Root/a');
+      await client8443.get('$cq8443Root/b');
+      sw8443.stop();
+
+      expect(fake8443.seen, hasLength(2));
+      expect(sw8443.elapsedMilliseconds, greaterThanOrEqualTo(45));
+    });
+
+    test('同主机后置 0 覆盖可关闭限速', () async {
+      final fake = FakeTransport(<RawHttpResponse>[
+        _response(200, body: 'ok1'),
+        _response(200, body: 'ok2'),
+      ]);
+      final client = AcademicHttpClient(AcademicHttpOptions(
+        cookies: CookieStore(baseUrl: _root),
+        allowedHosts: const <String>['jw.example.edu.cn'],
+        protocol: SchoolProtocol.https,
+        paceHosts: const <String, int>{
+          'jw.example.edu.cn': 80,
+          'JW.EXAMPLE.EDU.CN:443': 0,
+        },
+        transport: fake.call,
+      ));
+
+      final sw = Stopwatch()..start();
+      await client.get('$_root/a');
+      await client.get('$_root/b');
+      sw.stop();
+
+      expect(fake.seen, hasLength(2));
+      expect(sw.elapsedMilliseconds, lessThan(40));
+    });
+  });
+
+  group('生命周期与释放 (close)', () {
+    test('close() 幂等仅调用一次 onDispose，且释放后请求报 cancelled', () async {
+      var disposeCalls = 0;
+      final fake = FakeTransport(<RawHttpResponse>[
+        _response(200, body: 'ok'),
+      ]);
+      final client = AcademicHttpClient(AcademicHttpOptions(
+        cookies: CookieStore(baseUrl: _root),
+        allowedHosts: const <String>['jw.example.edu.cn'],
+        protocol: SchoolProtocol.https,
+        transport: fake.call,
+        onDispose: () => disposeCalls += 1,
+      ));
+
+      client.close();
+      client.close();
+      expect(disposeCalls, 1);
+
+      await expectLater(
+        client.get('$_root/a'),
+        throwsA(
+          isA<AcademicError>().having(
+            (e) => e.code,
+            'code',
+            ErrorCode.cancelled,
+          ),
+        ),
+      );
+      expect(fake.seen, isEmpty);
+      expect(
+        () => client.allowHost('extra.example.edu.cn'),
+        throwsA(
+          isA<AcademicError>().having(
+            (e) => e.code,
+            'code',
+            ErrorCode.cancelled,
+          ),
+        ),
+      );
+      expect(client.allowedHosts, const <String>['jw.example.edu.cn']);
+    });
+
+    test('请求在途期间 close() 会立即中止并抛 cancelled', () async {
+      final entered = Completer<void>();
+      final gate = Completer<RawHttpResponse>();
+      final client = AcademicHttpClient(AcademicHttpOptions(
+        cookies: CookieStore(baseUrl: _root),
+        allowedHosts: const <String>['jw.example.edu.cn'],
+        protocol: SchoolProtocol.https,
+        transport: (RawHttpRequest req) {
+          entered.complete();
+          return gate.future;
+        },
+      ));
+
+      final future = client.get('$_root/a');
+      await entered.future;
+      client.close();
+      gate.complete(_response(200, body: 'late'));
+
+      await expectLater(
+        future,
+        throwsA(
+          isA<AcademicError>().having(
+            (e) => e.code,
+            'code',
+            ErrorCode.cancelled,
+          ),
+        ),
+      );
+    });
+
+    test('inspectResponse 按状态码识别 403 与 502', () {
+      expect(
+        inspectResponse(statusCode: 403, body: '', isAuth: true)
+            .isAccessForbidden,
+        isTrue,
+      );
+      expect(
+        inspectResponse(statusCode: 502, body: '').isServerError,
+        isTrue,
+      );
     });
   });
 }

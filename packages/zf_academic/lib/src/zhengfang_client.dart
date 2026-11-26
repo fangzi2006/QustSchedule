@@ -231,7 +231,10 @@ class ZhengfangClient {
   List<String> get allowedHosts => _http.allowedHosts;
 
   /// 运行时可放行额外主机（例如探测到的 CAS 域）。
-  void allowHost(String host) => _http.allowHost(host);
+  void allowHost(String host) {
+    assertActive();
+    _http.allowHost(host);
+  }
 
   SessionInfo get session => SessionInfo(
         username: _username,
@@ -271,19 +274,28 @@ class ZhengfangClient {
     _cookies.invalidate();
     _pending = null;
     _identity = const Identity(studentName: '', studentId: '');
+    _username = '';
     _route = null;
+    _csrfTokenLogout = null;
   }
 
-  void dispose() {
+  /// 释放客户端与底层传输（dart:io 连接池），并作废会话。幂等，可重复调用。
+  void close() {
+    if (_closed) return;
     _closed = true;
     invalidate();
-  }
-
-  /// 释放底层传输（dart:io 连接池）。注入的传输层经 `onDispose` 一并释放。
-  void close() {
-    _closed = true;
+    lastScheduleRawBody = null;
+    lastScheduleRows = const <Map<String, dynamic>>[];
+    lastTermsRawBody = null;
+    lastExamsRawBody = null;
+    lastExamsRows = const <Map<String, dynamic>>[];
+    lastGradesRawBody = null;
+    lastGradesRows = const <Map<String, dynamic>>[];
     _http.close();
   }
+
+  /// [close] 的别名。
+  void dispose() => close();
 
   // -------------------------------------------------------------------------
   // 探测与登录
@@ -309,14 +321,33 @@ class ZhengfangClient {
         requiresCas = true;
         notes.add('发现统一认证入口，登录将走正方定制 CAS（多一步票据交换）');
       }
+    } on AcademicError catch (error) {
+      if (error.code == ErrorCode.cancelled) rethrow;
+      notes.add('统一认证入口探测失败：${_describe(error)}');
     } catch (error) {
       notes.add('统一认证入口探测失败：${_describe(error)}');
     }
+    assertActive();
 
     HttpResponse page;
     try {
       page = await _http.get(
           loginPageUrl, const HttpRequestOptions(purpose: RequestPurpose.auth));
+    } on AcademicError catch (error) {
+      if (error.code == ErrorCode.cancelled) rethrow;
+      notes.add('无法打开登录页：${_describe(error)}');
+      return ZfProbeReport(
+        baseUrl: _app(''),
+        loginPageUrl: loginPageUrl,
+        reachable: false,
+        looksLikeZhengfang: false,
+        requiresCas: requiresCas,
+        casLoginUrl: casLoginUrl,
+        captchaRequired: false,
+        passwordEncryption: false,
+        hasCookies: _cookies.size > 0,
+        notes: notes,
+      );
     } catch (error) {
       notes.add('无法打开登录页：${_describe(error)}');
       return ZfProbeReport(
@@ -332,6 +363,7 @@ class ZhengfangClient {
         notes: notes,
       );
     }
+    assertActive();
     reachable = true;
     httpStatus = page.status;
 
@@ -390,6 +422,7 @@ class ZhengfangClient {
     _username = credentials.username;
 
     final casLoginUrl = await _discoverCasLoginUrl();
+    assertActive();
     if (casLoginUrl != null) {
       throw AcademicError(
         ErrorCode.unsupported,
@@ -479,6 +512,7 @@ class ZhengfangClient {
       }
       rethrow;
     }
+    assertActive();
     // 登录页 = 确证失效；非 2xx = 无法确认（学校没开这个页面/结构变了），不能驱动重登。
     if (isLoginPage(response.body)) {
       return const SessionState(
@@ -496,6 +530,7 @@ class ZhengfangClient {
     }
     var parsed = identity(response.body);
     if (parsed.studentId.isEmpty) parsed = await _menuIdentityFallback(parsed);
+    assertActive();
     final authenticated = parsed.studentId.isNotEmpty ||
         parsed.studentName.isNotEmpty ||
         const ['xsxk.aspx', 'xklc_list', '退出登录', '学期理论课表', '选课结果']
@@ -527,27 +562,34 @@ class ZhengfangClient {
     final selected = <Term>[];
     AcademicError? firstError;
 
-    final loaders = <Future<String> Function()>[
-      () async => (await _zfScheduleRequest(null)).body,
-      () async => (await _http.get(
+    var capturedRawBody = false;
+    final loaders = <Future<HttpResponse> Function()>[
+      () => _zfScheduleRequest(null),
+      () => _http.get(
             _app(withQuery(_endpoints.gradesPath,
                 <String, String>{'gnmkdm': _endpoints.gradeGnmkdm})),
             const HttpRequestOptions(),
-          ))
-              .body,
+          ),
     ];
     for (final load in loaders) {
       try {
-        final body = await load();
-        lastTermsRawBody ??= body;
+        final response = await load();
+        assertActive();
+        final body = response.body;
+        if (!capturedRawBody) {
+          lastTermsRawBody = body;
+          capturedRawBody = true;
+        }
         if (isLoginPage(body)) {
           throw AcademicError(ErrorCode.sessionExpired, '登录已失效，请重新登录');
         }
-        final diagnosis = inspectResponse(statusCode: 200, body: body);
+        final diagnosis =
+            inspectResponse(statusCode: response.status, body: body);
         if (diagnosis.isServerError) {
           throw AcademicError(
             ErrorCode.serverError,
             '教务返回了错误/维护页面，不是学期数据',
+            httpStatus: response.status >= 400 ? response.status : null,
             cause: diagnosis.detail,
           );
         }
@@ -559,11 +601,15 @@ class ZhengfangClient {
             cause: diagnosis.detail,
           );
         }
+        final beforeCount = items.length;
         final current = selectedTermFromHtml(body);
         items.addAll(termsFromHtml(body));
         if (current != null) {
           items.add(current);
           selected.add(current);
+        }
+        if (items.length > beforeCount) {
+          lastTermsRawBody = body;
         }
         // 当前页面已取到学期列表与当前活跃学期，不再请求备用页面（如成绩页）。
         if (items.isNotEmpty && selected.isNotEmpty) {
@@ -609,13 +655,18 @@ class ZhengfangClient {
     assertActive();
     final id = termId ?? (await fetchTerms()).currentId;
     final page = await _zfScheduleRequest(id);
+    assertActive();
     lastScheduleRawBody = page.body;
     // 会话过期但跳转落在同主机登录页时，拿到的是登录页 HTML 而不是 JSON。
     // 不识别的话会把"没读到"解析成"这学期没课"，进而用空课表覆盖缓存。
     if (isLoginPage(page.body)) {
       throw AcademicError(ErrorCode.sessionExpired, '登录已失效，请重新登录');
     }
-    final rows = listRows(page.body, const ['kbList', 'data']);
+    final rows = listRows(
+      page.body,
+      const ['kbList', 'data'],
+      statusCode: page.status,
+    );
     lastScheduleRows = rows;
     final entries = jsonSchedule(rows);
     // 备注：实践课程 / 其他课程（sjkList，可能没有——取不到就是空，不影响主流程）。
@@ -693,6 +744,7 @@ class ZhengfangClient {
         ajax: true,
       ),
     );
+    assertActive();
     lastExamsRawBody = response.body;
     if (isLoginPage(response.body)) {
       throw AcademicError(ErrorCode.sessionExpired, '登录已失效，请重新登录');
@@ -703,6 +755,7 @@ class ZhengfangClient {
       throw AcademicError(
         ErrorCode.serverError,
         '教务返回了错误/维护页面，不是考试数据',
+        httpStatus: response.status >= 400 ? response.status : null,
         cause: diagnosis.detail,
       );
     }
@@ -714,7 +767,11 @@ class ZhengfangClient {
         cause: diagnosis.detail,
       );
     }
-    final rows = listRows(response.body, const ['items', 'data', 'rows']);
+    final rows = listRows(
+      response.body,
+      const ['items', 'data', 'rows'],
+      statusCode: response.status,
+    );
     lastExamsRows = rows;
     final items = jsonExams(rows);
     _debug('exams:parsed', <String, Object?>{
@@ -761,6 +818,7 @@ class ZhengfangClient {
         ajax: true,
       ),
     );
+    assertActive();
     lastGradesRawBody = response.body;
     if (isLoginPage(response.body)) {
       throw AcademicError(ErrorCode.sessionExpired, '登录已失效，请重新登录');
@@ -771,6 +829,7 @@ class ZhengfangClient {
       throw AcademicError(
         ErrorCode.serverError,
         '教务返回了错误/维护页面，不是成绩数据',
+        httpStatus: response.status >= 400 ? response.status : null,
         cause: diagnosis.detail,
       );
     }
@@ -824,8 +883,11 @@ class ZhengfangClient {
 
     // 兜底：既无未评教拦截，rows 又为空，如果是畸形/无法识别的结构，通过 listRows 触发 PAGE_CHANGED 异常；
     // 如果是正常合法的空列表（如 items: []），listRows 将安全返回 []。
-    final verifiedRows =
-        listRows(response.body, const ['items', 'data', 'rows']);
+    final verifiedRows = listRows(
+      response.body,
+      const ['items', 'data', 'rows'],
+      statusCode: response.status,
+    );
     lastGradesRows = verifiedRows;
     final items = jsonGrades(verifiedRows);
     _debug('grades:parsed', <String, Object?>{
@@ -851,15 +913,21 @@ class ZhengfangClient {
     final url = _app('${_endpoints.loginPagePath}?time=${_nowMs()}');
     final page = await _http.get(
         url, const HttpRequestOptions(purpose: RequestPurpose.auth));
+    assertActive();
     final hidden = hiddenFields(page.body);
     final encryption = _readEncryptionFlag(page.body);
     if (encryption != null) hidden['mmsfjm'] = encryption;
     if (hidden['csrftoken'] == null) {
-      final diagnosis = inspectResponse(statusCode: 200, body: page.body);
+      final diagnosis = inspectResponse(
+        statusCode: page.status,
+        body: page.body,
+        isAuth: true,
+      );
       if (diagnosis.isServerError) {
         throw AcademicError(
           ErrorCode.serverError,
           '教务返回了错误/维护页面，无法打开登录页',
+          httpStatus: page.status >= 400 ? page.status : null,
           cause: diagnosis.detail,
         );
       }
@@ -871,7 +939,11 @@ class ZhengfangClient {
           cause: diagnosis.detail,
         );
       }
-      throw AcademicError(ErrorCode.pageChanged, '学校登录页缺少 csrftoken');
+      throw AcademicError(
+        ErrorCode.pageChanged,
+        '学校登录页缺少 csrftoken',
+        httpStatus: page.status >= 400 ? page.status : null,
+      );
     }
 
     // login_logoutAccount.html 需要的令牌：按 id 或 name 找，找不到就留空（与浏览器一致）。
@@ -911,6 +983,7 @@ class ZhengfangClient {
         captchaUrl: imageUrl,
       );
       final image = await _http.getImage(imageUrl, referer: page.url);
+      assertActive();
       return CaptchaState(
         continuationId: continuationId,
         imageBase64: base64.encode(image.bytes),
@@ -952,6 +1025,7 @@ class ZhengfangClient {
           _app('${_endpoints.publicKeyPath}?time=${_nowMs()}&_=${_nowMs()}');
       final response = await _http.get(
           keyUrl, const HttpRequestOptions(purpose: RequestPurpose.auth));
+      assertActive();
       if (response.status < 200 || response.status >= 300) {
         throw AcademicError(
           ErrorCode.networkRetryable,
@@ -994,6 +1068,7 @@ class ZhengfangClient {
     // 登录前清理会话：浏览器 login.js 的 yhdl() 会先 POST login_logoutAccount.html
     // （带 csrfTokenLogout），再提交登录表单。缺失该字段时按空串发送，与浏览器一致。
     await _logoutAccount(referer);
+    assertActive();
 
     // 浏览器会把 form action 追加 ?time=（缓存破坏）；登录页有两个 name=mm 的输入框
     // （可见 #mm 与隐藏 #hidMm），两者都会提交同一份密文，服务端可能校验这一点。
@@ -1021,6 +1096,7 @@ class ZhengfangClient {
       pairs,
       HttpRequestOptions(referer: referer, purpose: RequestPurpose.auth),
     );
+    assertActive();
 
     final plainPreview = stripTags(result.body).replaceAll(RegExp(r'\s+'), ' ');
     final bodyPreview = plainPreview.length > 500
@@ -1050,6 +1126,7 @@ class ZhengfangClient {
     }
 
     final identity = await _readIdentity();
+    assertActive();
     if (identity.studentName.isNotEmpty || identity.studentId.isNotEmpty) {
       _pending = null;
       _identity = identity;
@@ -1078,6 +1155,9 @@ class ZhengfangClient {
         HttpRequestOptions(
             referer: referer, purpose: RequestPurpose.auth, ajax: true),
       );
+    } on AcademicError catch (error) {
+      if (error.code == ErrorCode.cancelled) rethrow;
+      // 清理会话失败不阻断登录
     } catch (_) {
       // 清理会话失败不阻断登录
     }
@@ -1143,6 +1223,7 @@ class ZhengfangClient {
         const HttpRequestOptions(
             followRedirects: false, purpose: RequestPurpose.auth),
       );
+      assertActive();
       if (response.status < 300 || response.status > 399) {
         _cachedCasLoginUrl = null;
         _casDiscoveryDone = true;
@@ -1170,6 +1251,11 @@ class ZhengfangClient {
       _cachedCasLoginUrl = target.toString();
       _casDiscoveryDone = true;
       return _cachedCasLoginUrl;
+    } on AcademicError catch (error) {
+      if (error.code == ErrorCode.cancelled) rethrow;
+      _cachedCasLoginUrl = null;
+      _casDiscoveryDone = true;
+      return null;
     } catch (_) {
       _cachedCasLoginUrl = null;
       _casDiscoveryDone = true;
@@ -1186,11 +1272,13 @@ class ZhengfangClient {
       _app(withQuery(_endpoints.studentInfoPath, const {'gnmkdm': 'index'})),
       const HttpRequestOptions(),
     );
+    assertActive();
     if (isLoginPage(response.body)) {
       return const Identity(studentName: '', studentId: '');
     }
     var parsed = identity(response.body);
     if (parsed.studentId.isEmpty) parsed = await _menuIdentityFallback(parsed);
+    assertActive();
     return parsed;
   }
 
@@ -1201,9 +1289,13 @@ class ZhengfangClient {
     try {
       body = (await _http.get(_app(_indexMenuPath), const HttpRequestOptions()))
           .body;
+    } on AcademicError catch (error) {
+      if (error.code == ErrorCode.cancelled) rethrow;
+      return current;
     } catch (_) {
       return current;
     }
+    assertActive();
     if (isLoginPage(body)) return current;
     final fallback = identity(body);
     return Identity(

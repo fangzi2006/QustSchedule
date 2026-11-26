@@ -73,8 +73,11 @@ class AcademicError implements Exception {
 
 /// 与原项目 `changed()` 等价：把解析失败统一报成 PAGE_CHANGED，
 /// 避免用空数据覆盖有效缓存。
-Never changed([String message = '学校页面结构已变化，请在学校网页核实']) =>
-    throw AcademicError(ErrorCode.pageChanged, message);
+Never changed([
+  String message = '学校页面结构已变化，请在学校网页核实',
+  int? httpStatus,
+]) =>
+    throw AcademicError(ErrorCode.pageChanged, message, httpStatus: httpStatus);
 
 /// 把任意异常归一成 AcademicError；未识别的异常按 NETWORK_RETRYABLE 处理。
 AcademicError asAcademicError(

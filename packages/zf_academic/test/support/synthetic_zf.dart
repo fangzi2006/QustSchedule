@@ -15,7 +15,8 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:pointycastle/export.dart';
-import 'package:zf_academic/zf_academic.dart';
+import 'package:zf_academic/src/crypto.dart'
+    show bigIntToBytes, rsaDecryptPkcs1;
 
 class RecordedRequest {
   final String method;

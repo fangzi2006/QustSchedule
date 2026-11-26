@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:pointycastle/export.dart';
 import 'package:test/test.dart';
+import 'package:zf_academic/src/crypto.dart';
 import 'package:zf_academic/zf_academic.dart';
 
 // 来自 plugin-starter-v3/tests/protocol-auth.test.mjs 与主分支

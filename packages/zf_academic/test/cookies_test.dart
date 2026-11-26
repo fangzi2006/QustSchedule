@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:test/test.dart';
+import 'package:zf_academic/src/cookies.dart' show parseSetCookie;
 import 'package:zf_academic/zf_academic.dart';
 
 const _base = 'https://jw.example.edu.cn/jwglxt';

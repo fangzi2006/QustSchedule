@@ -329,7 +329,11 @@ bool isPermissionDenied(String body) {
 
 /// 从 JSON 响应里取出列表，顺序与 plugin-sdk-v3 的 `list()` 一致：
 /// 先看根对象是否显式失败，再从 root / root.data / root.result 里按 keys 找数组。
-List<Map<String, dynamic>> listRows(String body, List<String> keys) {
+List<Map<String, dynamic>> listRows(
+  String body,
+  List<String> keys, {
+  int statusCode = 200,
+}) {
   final text = body.trim().replaceFirst(RegExp(r'^\uFEFF'), '');
   if (isLoginPage(text)) {
     throw AcademicError(ErrorCode.sessionExpired, '登录已失效，请重新登录');
@@ -339,11 +343,12 @@ List<Map<String, dynamic>> listRows(String body, List<String> keys) {
     root = jsonDecode(text);
   } catch (_) {
     // 不是有效 JSON，结构化诊断是否是服务端错误页或防火墙拦截页
-    final diagnosis = inspectResponse(statusCode: 200, body: text);
+    final diagnosis = inspectResponse(statusCode: statusCode, body: text);
     if (diagnosis.isServerError) {
       throw AcademicError(
         ErrorCode.serverError,
         '教务返回了错误/维护页面，不是课表数据',
+        httpStatus: statusCode >= 400 ? statusCode : null,
         cause: diagnosis.detail,
       );
     }
@@ -355,7 +360,10 @@ List<Map<String, dynamic>> listRows(String body, List<String> keys) {
         cause: diagnosis.detail,
       );
     }
-    changed('教务返回了无法识别的列表，请重新进入页面');
+    changed(
+      '教务返回了无法识别的列表，请重新进入页面',
+      statusCode >= 400 ? statusCode : null,
+    );
   }
 
   if (root == null) {
@@ -371,12 +379,13 @@ List<Map<String, dynamic>> listRows(String body, List<String> keys) {
         (code != null && !const ['0', '200'].contains(code)) ||
         const ['false', '0'].contains(flag);
     if (rejected) {
-      final status = statusOf(text);
+      final status = statusOf(text, httpStatus: statusCode);
       throw AcademicError(
         status == ErrorCode.success || status == ErrorCode.validationFailed
             ? ErrorCode.pageChanged
             : status,
         messageOf(text),
+        httpStatus: statusCode >= 400 ? statusCode : null,
       );
     }
   }
@@ -413,7 +422,10 @@ List<Map<String, dynamic>> listRows(String body, List<String> keys) {
   }
 
   if (found == null || found.any((row) => row is! Map)) {
-    changed('教务返回了无法识别的列表，请重新进入页面');
+    changed(
+      '教务返回了无法识别的列表，请重新进入页面',
+      statusCode >= 400 ? statusCode : null,
+    );
   }
   return found.cast<Map<String, dynamic>>();
 }
@@ -484,10 +496,11 @@ void requireQueryPage(String body, int httpStatus) {
         httpStatus: httpStatus);
   }
   if (RegExp(r'class="(?:error_v5|error_con|error_text)"').hasMatch(body)) {
-    final status = statusOf(body);
+    final status = statusOf(body, httpStatus: httpStatus);
     throw AcademicError(
       status == ErrorCode.notOpen ? ErrorCode.notOpen : ErrorCode.pageChanged,
       messageOf(body),
+      httpStatus: httpStatus >= 400 ? httpStatus : null,
     );
   }
 }

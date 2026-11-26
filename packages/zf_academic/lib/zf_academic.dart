@@ -18,111 +18,23 @@
 /// 在 `zf_academic_io.dart` 入口里导出。
 library zf_academic;
 
-export 'src/cookies.dart'
-    show
-        CookieRecord,
-        CookieStore,
-        CookieStoreSnapshot,
-        formatCookieDate,
-        parseCookieDate,
-        parseSetCookie;
+export 'src/cookies.dart' show CookieRecord, CookieStore, CookieStoreSnapshot;
 export 'src/credential_store.dart'
     show
         CredentialStore,
         Credentials,
         InMemoryCredentialStore,
         credentialStoreKey;
-export 'src/crypto.dart'
-    show
-        base64FromBytes,
-        bigIntFromBytes,
-        bigIntToBytes,
-        bytesFromBase64,
-        bytesToHex,
-        hexToBytes,
-        rsaDecryptPkcs1,
-        rsaEncryptPkcs1,
-        rsaEncryptPkcs1Bytes,
-        rsaPublicKeyFromBase64,
-        rsaPublicKeyFromHex,
-        zfCasEncryptPassword,
-        zfFormEncryptPassword;
-export 'src/errors.dart'
-    show AcademicError, ErrorCode, asAcademicError, changed;
-export 'src/html.dart'
-    show
-        CaptchaControl,
-        CaptchaScan,
-        Identity,
-        LoginForm,
-        SelectOptions,
-        TagMatch,
-        allTags,
-        closingIndex,
-        decodeEntities,
-        detectCaptcha,
-        elementText,
-        findById,
-        findByClass,
-        findInputByName,
-        formValues,
-        hasClass,
-        hasPasswordInput,
-        hiddenFields,
-        identity,
-        innerOf,
-        isLoginPage,
-        isVoid,
-        loginForm,
-        selectOptions,
-        selectedOptionText,
-        stripTags,
-        textOf;
-export 'src/http_client.dart'
-    show
-        AcademicHttpClient,
-        AcademicHttpOptions,
-        HttpRequestOptions,
-        HttpResponse,
-        ImageResponse,
-        encodeForm,
-        firstHeader,
-        sniffMimeType;
-export 'src/respond.dart'
-    show
-        ResponseDiagnosis,
-        ResponseKind,
-        extractHtmlTitle,
-        hasSuccess,
-        inspectResponse,
-        isPermissionDenied,
-        listRows,
-        looksLikeAccessForbidden,
-        looksLikeServerError,
-        messageOf,
-        requireQueryPage,
-        statusOf;
-export 'src/academic_query.dart' show jsonExams, jsonGrades, parseExamTime;
-export 'src/schedule.dart'
-    show
-        defaultMaxWeeks,
-        jsonSchedule,
-        looksLikeTimetable,
-        maxWeeksOf,
-        periods,
-        selectedTermFromHtml,
-        termsFromHtml,
-        tryParseWeeks,
-        weeks;
+export 'src/crypto.dart' show zfCasEncryptPassword, zfFormEncryptPassword;
+export 'src/errors.dart' show AcademicError, ErrorCode, asAcademicError;
+export 'src/schedule.dart' show defaultMaxWeeks, maxWeeksOf;
 export 'src/types.dart'
     show
-        AcademicSystemId,
         AuthState,
         AuthenticatedState,
         CaptchaState,
         ExamItem,
         GradeItem,
-        Page,
         RawHttpRequest,
         RawHttpResponse,
         RequestLog,
@@ -143,21 +55,5 @@ export 'src/types.dart'
         ZfHttpTransport,
         ZfProbeReport,
         qustZfEndpoints;
-export 'src/urls.dart'
-    show
-        calendarTerm,
-        isAllowedUrl,
-        normalizeEndpoints,
-        normalizeHost,
-        originOf,
-        parseAcademicAddress,
-        parseTerm,
-        resolveAppUrl,
-        resolveUrl,
-        semesterCodes,
-        withQuery,
-        zfCodeToSemester,
-        zfSemesterCodes,
-        zfTermParams;
-export 'src/util.dart' show delay, field, firstOf, isBlank, number, rowKey, str;
+export 'src/urls.dart' show calendarTerm, parseTerm;
 export 'src/zhengfang_client.dart' show SessionInfo, ZhengfangClient;

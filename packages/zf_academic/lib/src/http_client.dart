@@ -35,7 +35,6 @@ const String _defaultUa =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
 const int _defaultMaxBodyBytes = 5 * 1024 * 1024;
 const int _defaultMaxRedirects = 12;
-const Map<String, int> _defaultPaceHosts = <String, int>{'jw.cqiivc.com': 1200};
 
 /// Content-Type 里的 charset 声明。`\x22` 是双引号（raw string 里不能直接写 `\"`）。
 final RegExp _charsetPattern = RegExp(
@@ -175,6 +174,7 @@ class AcademicHttpClient {
 
   String _userAgent;
   String _pageCharset;
+  bool _closed = false;
 
   AcademicHttpClient(AcademicHttpOptions options)
       : _cookies = options.cookies,
@@ -183,10 +183,7 @@ class AcademicHttpClient {
         _maxRedirects = options.maxRedirects ?? _defaultMaxRedirects,
         _maxBodyBytes = options.maxBodyBytes ?? _defaultMaxBodyBytes,
         _timeoutMs = options.timeoutMs ?? 10000,
-        _paceHosts = <String, int>{
-          ..._defaultPaceHosts,
-          ...(options.paceHosts ?? const <String, int>{}),
-        },
+        _paceHosts = _buildPaceHosts(options.paceHosts),
         _onRequest = options.onRequest,
         _disposeTransport = options.onDispose,
         _userAgent = options.userAgent?.trim().isNotEmpty == true
@@ -212,6 +209,7 @@ class AcademicHttpClient {
 
   /// 运行时放行新主机：CAS 统一认证域在发现后加入，与原项目的做法一致。
   void allowHost(String host) {
+    _assertActive();
     final normalized = normalizeHost(host);
     if (normalized.isNotEmpty) _allowed.add(normalized);
   }
@@ -220,9 +218,15 @@ class AcademicHttpClient {
 
   String get ua => _userAgent;
 
-  /// 关闭底层传输（例如 dart:io 的连接池）。注入的传输层也应在此释放。
+  /// 关闭底层传输（例如 dart:io 的连接池）。注入的传输层也应在此释放。幂等，可重复调用。
   void close() {
+    if (_closed) return;
+    _closed = true;
     _disposeTransport?.call();
+  }
+
+  void _assertActive() {
+    if (_closed) throw AcademicError(ErrorCode.cancelled, '客户端已释放');
   }
 
   void setUserAgent(String value) {
@@ -296,8 +300,10 @@ class AcademicHttpClient {
     var retries = 0;
 
     for (;;) {
+      _assertActive();
       _ensureAllowed(url);
       await _pace(url);
+      _assertActive();
       final headers = _buildHeaders(url, options, currentMethod);
       // 必须显式声明表单类型：否则服务端解析不到任何表单参数
       // （登录会变成"空账号空密码"——TS 版实测过的 bug）。
@@ -315,12 +321,15 @@ class AcademicHttpClient {
           body: currentMethod == 'POST' ? body : null,
         )).timeout(Duration(milliseconds: _timeoutMs));
       } on TimeoutException catch (error) {
+        _assertActive();
         throw AcademicError(ErrorCode.timeout, '请求超时，请稍后重试', cause: error);
       } on AcademicError {
         rethrow;
       } catch (error) {
+        _assertActive();
         if (!write && retries++ < 1) {
           await delay(250);
+          _assertActive();
           continue;
         }
         throw AcademicError(
@@ -329,6 +338,7 @@ class AcademicHttpClient {
           cause: error,
         );
       }
+      _assertActive();
 
       if (raw.bytes.length > _maxBodyBytes) {
         throw AcademicError(ErrorCode.pageChanged, '教务响应过大，已中止');
@@ -535,16 +545,43 @@ class AcademicHttpClient {
     return headers;
   }
 
+  static String _paceHostKey(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '';
+    final uri = Uri.tryParse(
+      trimmed.contains('://') ? trimmed : 'https://$trimmed',
+    );
+    return uri?.host.toLowerCase() ?? '';
+  }
+
+  static Map<String, int> _buildPaceHosts(Map<String, int>? paceHosts) {
+    final map = <String, int>{};
+    if (paceHosts == null) return map;
+    for (final entry in paceHosts.entries) {
+      final key = _paceHostKey(entry.key);
+      if (key.isEmpty) continue;
+      if (entry.value > 0) {
+        map[key] = entry.value;
+      } else {
+        map.remove(key);
+      }
+    }
+    return map;
+  }
+
   Future<void> _pace(String url) async {
-    final host = Uri.tryParse(url)?.host.toLowerCase();
-    if (host == null) return;
+    final host = _paceHostKey(url);
+    if (host.isEmpty) return;
     final interval = _paceHosts[host];
     if (interval == null) return;
     final previous = _lastRequestAt[host];
     final now = DateTime.now().millisecondsSinceEpoch;
     if (previous != null) {
       final remaining = interval - (now - previous);
-      if (remaining > 0) await delay(remaining);
+      if (remaining > 0) {
+        await delay(remaining);
+        _assertActive();
+      }
     }
     _lastRequestAt[host] = DateTime.now().millisecondsSinceEpoch;
   }
@@ -614,6 +651,7 @@ class AcademicHttpClient {
     var currentUrl = targetUrl;
     final probeTimeout = _timeoutMs < 5000 ? _timeoutMs : 5000;
     for (var hop = 0; hop < 2; hop++) {
+      _assertActive();
       final uri = Uri.tryParse(currentUrl);
       if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
         return;
@@ -630,8 +668,10 @@ class AcademicHttpClient {
           },
         )).timeout(Duration(milliseconds: probeTimeout));
       } catch (_) {
+        _assertActive();
         return;
       }
+      _assertActive();
 
       if (probeRaw.status == raw.status &&
           probeRaw.url == raw.url &&

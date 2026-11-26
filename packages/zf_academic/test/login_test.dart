@@ -1,7 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:test/test.dart';
+import 'package:zf_academic/src/html.dart';
+import 'package:zf_academic/src/respond.dart' show listRows;
+import 'package:zf_academic/src/schedule.dart';
+import 'package:zf_academic/src/urls.dart' show normalizeEndpoints;
 import 'package:zf_academic/zf_academic_io.dart';
 
 import 'support/synthetic_zf.dart';
@@ -649,6 +654,554 @@ void main() {
           '<select name="xqm"><option value="3" selected></option></select>';
       expect(() => selectedTermFromHtml(html), returnsNormally);
       expect(selectedTermFromHtml(html), isNull);
+    });
+  });
+
+  group('生命周期、缓存刷新与状态码诊断', () {
+    RawHttpResponse htmlResp(int status, String url, String body) {
+      return RawHttpResponse(
+        status: status,
+        url: url,
+        bytes: utf8.encode(body),
+        headers: const <String, List<String>>{
+          'content-type': <String>['text/html; charset=utf-8'],
+        },
+      );
+    }
+
+    RawHttpResponse jsonResp(int status, String url, Object data) {
+      return RawHttpResponse(
+        status: status,
+        url: url,
+        bytes: utf8.encode(jsonEncode(data)),
+        headers: const <String, List<String>>{
+          'content-type': <String>['application/json; charset=utf-8'],
+        },
+      );
+    }
+
+    test('dispose() 与 close() 行为一致：幂等释放传输并作废会话，释放后抛 cancelled', () async {
+      const base = 'https://jw.example.edu.cn/jwglxt';
+      final snapshot = CookieStoreSnapshot(
+        version: 1,
+        baseUrl: base,
+        savedAt: 1,
+        cookies: const <CookieRecord>[
+          CookieRecord(
+            name: 'JSESSIONID',
+            value: 's1',
+            domain: 'jw.example.edu.cn',
+            path: '/',
+            hostOnly: true,
+            secure: true,
+            httpOnly: true,
+            expiresAt: null,
+            createdAt: 1,
+            setByHost: 'jw.example.edu.cn',
+            setByPort: 443,
+          ),
+        ],
+      );
+
+      var disposeCount1 = 0;
+      final client1 = ZhengfangClient(ZfClientConfig(
+        baseUrl: base,
+        cookies: snapshot,
+        transport: (_) async => htmlResp(200, base, 'ok'),
+        onDispose: () => disposeCount1 += 1,
+      ));
+      final gen1 = client1.generation;
+      client1.dispose();
+      client1.close();
+      expect(disposeCount1, 1);
+      expect(client1.cookieHeader, isEmpty);
+      expect(client1.session.authenticated, isFalse);
+      expect(client1.generation, greaterThan(gen1));
+
+      var disposeCount2 = 0;
+      final client2 = ZhengfangClient(ZfClientConfig(
+        baseUrl: base,
+        cookies: snapshot,
+        transport: (_) async => htmlResp(200, base, 'ok'),
+        onDispose: () => disposeCount2 += 1,
+      ));
+      final gen2 = client2.generation;
+      client2.close();
+      client2.dispose();
+      expect(disposeCount2, 1);
+      expect(client2.cookieHeader, isEmpty);
+      expect(client2.session.authenticated, isFalse);
+      expect(client2.generation, greaterThan(gen2));
+
+      for (final Future<Object?> Function() op in <Future<Object?> Function()>[
+        () => client2.probe(),
+        () => client2.login(const Credentials('20240001', 'pw')),
+        () => client2.checkSession(),
+        () => client2.fetchTerms(),
+        () => client2.fetchSchedule('2025-2026-1'),
+        () => client2.fetchExams('2025-2026-1'),
+        () => client2.fetchGrades('2025-2026-1'),
+        () async {
+          client2.importCookies(snapshot);
+          return null;
+        },
+        () async {
+          client2.importCookieHeader('JSESSIONID=abc');
+          return null;
+        },
+      ]) {
+        await expectLater(
+          op(),
+          throwsA(
+            isA<AcademicError>().having(
+              (e) => e.code,
+              'code',
+              ErrorCode.cancelled,
+            ),
+          ),
+        );
+      }
+    });
+
+    test('probe() 在途期间 close() 抛出 cancelled 而非吞成 reachable: false', () async {
+      const base = 'https://jw.example.edu.cn/jwglxt';
+      final entered = Completer<void>();
+      final gate = Completer<RawHttpResponse>();
+      final client = ZhengfangClient(ZfClientConfig(
+        baseUrl: base,
+        transport: (RawHttpRequest req) {
+          if (!entered.isCompleted) entered.complete();
+          return gate.future;
+        },
+      ));
+
+      final future = client.probe();
+      await entered.future;
+      client.close();
+      gate.complete(htmlResp(404, '$base/sso/zfiotlogin', 'not found'));
+
+      await expectLater(
+        future,
+        throwsA(
+          isA<AcademicError>().having(
+            (e) => e.code,
+            'code',
+            ErrorCode.cancelled,
+          ),
+        ),
+      );
+    });
+
+    test('lastTermsRawBody 在每次 fetchTerms() 调用时刷新（含回退页面）', () async {
+      const base = 'https://jw.example.edu.cn/jwglxt';
+      const html1 = '''
+        <html><body>
+          <select name="xnm"><option value="2025" selected>2025-2026</option></select>
+          <select name="xqm"><option value="3" selected>1</option></select>
+        </body></html>
+      ''';
+      const htmlNoTerms = '<html><body><div>课表页未包含学期下拉框</div></body></html>';
+      const html2 = '''
+        <html><body>
+          <select name="xnm"><option value="2026" selected>2026-2027</option></select>
+          <select name="xqm"><option value="12" selected>2</option></select>
+        </body></html>
+      ''';
+      final responses = <RawHttpResponse>[
+        htmlResp(200, '$base/kbcx/xskbcx_cxXskbcxIndex.html', html1),
+        htmlResp(200, '$base/kbcx/xskbcx_cxXskbcxIndex.html', htmlNoTerms),
+        htmlResp(200, '$base/cjcx/cjcx_cxDgXscj.html', html2),
+      ];
+      var idx = 0;
+      final client = ZhengfangClient(ZfClientConfig(
+        baseUrl: base,
+        transport: (_) async => responses[idx++],
+      ));
+      addTearDown(client.close);
+
+      final t1 = await client.fetchTerms();
+      expect(t1.currentId, '2025-2026-1');
+      expect(client.lastTermsRawBody, html1);
+
+      final t2 = await client.fetchTerms();
+      expect(t2.currentId, '2026-2027-2');
+      expect(client.lastTermsRawBody, html2);
+    });
+
+    test('lastExamsRawBody 与 lastGradesRawBody 连续查询均刷新为最新响应', () async {
+      const base = 'https://jw.example.edu.cn/jwglxt';
+      var call = 0;
+      final client = ZhengfangClient(ZfClientConfig(
+        baseUrl: base,
+        transport: (RawHttpRequest req) async {
+          call += 1;
+          if (req.url.path.contains('kwgl')) {
+            return jsonResp(200, req.url.toString(), <String, Object?>{
+              'items': <Map<String, Object?>>[
+                <String, Object?>{
+                  'kcmc': '考试$call',
+                  'kssj': '2026-01-08 09:00-11:00'
+                },
+              ],
+            });
+          }
+          return jsonResp(200, req.url.toString(), <String, Object?>{
+            'items': <Map<String, Object?>>[
+              <String, Object?>{'kcmc': '成绩$call', 'cj': '90', 'xf': '2.0'},
+            ],
+          });
+        },
+      ));
+      addTearDown(client.close);
+
+      await client.fetchExams('2025-2026-1');
+      final examBody1 = client.lastExamsRawBody;
+      await client.fetchExams('2025-2026-2');
+      expect(client.lastExamsRawBody, isNot(equals(examBody1)));
+      expect(client.lastExamsRawBody, contains('考试2'));
+
+      await client.fetchGrades('2025-2026-1');
+      final gradeBody1 = client.lastGradesRawBody;
+      await client.fetchGrades('2025-2026-2');
+      expect(client.lastGradesRawBody, isNot(equals(gradeBody1)));
+      expect(client.lastGradesRawBody, contains('成绩4'));
+    });
+
+    test('_loginViaForm() 与 fetchTerms() 透传真实 HTTP statusCode 给响应诊断', () async {
+      const base = 'https://jw.example.edu.cn/jwglxt';
+
+      // 1. 登录页 HTTP 404（缺少 csrftoken）→ pageChanged 且保留 httpStatus: 404
+      final client404 = ZhengfangClient(ZfClientConfig(
+        baseUrl: base,
+        transport: (RawHttpRequest req) async {
+          if (req.url.path.endsWith('/sso/zfiotlogin')) {
+            return htmlResp(404, req.url.toString(), 'no cas');
+          }
+          return htmlResp(
+              404, req.url.toString(), '<html><title>404</title></html>');
+        },
+      ));
+      addTearDown(client404.close);
+      await expectLater(
+        client404.login(const Credentials('20240001', 'pw')),
+        throwsA(
+          isA<AcademicError>()
+              .having((e) => e.code, 'code', ErrorCode.pageChanged)
+              .having((e) => e.httpStatus, 'httpStatus', 404),
+        ),
+      );
+
+      // 2. 登录页 HTTP 200 维护页 → serverError
+      final clientMaint = ZhengfangClient(ZfClientConfig(
+        baseUrl: base,
+        transport: (RawHttpRequest req) async {
+          if (req.url.path.endsWith('/sso/zfiotlogin')) {
+            return htmlResp(404, req.url.toString(), 'no cas');
+          }
+          return htmlResp(
+            200,
+            req.url.toString(),
+            '<html><title>系统维护</title><body>系统正在维护中</body></html>',
+          );
+        },
+      ));
+      addTearDown(clientMaint.close);
+      await expectLater(
+        clientMaint.login(const Credentials('20240001', 'pw')),
+        throwsA(
+          isA<AcademicError>()
+              .having((e) => e.code, 'code', ErrorCode.serverError),
+        ),
+      );
+
+      // 3. 登录页 HTTP 200 WAF 403 提示 → accessForbidden
+      final clientWaf = ZhengfangClient(ZfClientConfig(
+        baseUrl: base,
+        transport: (RawHttpRequest req) async {
+          if (req.url.path.endsWith('/sso/zfiotlogin')) {
+            return htmlResp(404, req.url.toString(), 'no cas');
+          }
+          return htmlResp(
+            200,
+            req.url.toString(),
+            '<html><title>访问出错-403</title><body>请通过校园网访问</body></html>',
+          );
+        },
+      ));
+      addTearDown(clientWaf.close);
+      await expectLater(
+        clientWaf.login(const Credentials('20240001', 'pw')),
+        throwsA(
+          isA<AcademicError>()
+              .having((e) => e.code, 'code', ErrorCode.accessForbidden),
+        ),
+      );
+
+      // 4. fetchTerms() 收到 HTTP 200 维护页 → serverError 且保留 lastTermsRawBody
+      const maintHtml = '<html><title>系统维护</title><body>系统正在维护中</body></html>';
+      final clientTermsMaint = ZhengfangClient(ZfClientConfig(
+        baseUrl: base,
+        transport: (RawHttpRequest req) async =>
+            htmlResp(200, req.url.toString(), maintHtml),
+      ));
+      addTearDown(clientTermsMaint.close);
+      await expectLater(
+        clientTermsMaint.fetchTerms(),
+        throwsA(
+          isA<AcademicError>()
+              .having((e) => e.code, 'code', ErrorCode.serverError),
+        ),
+      );
+      expect(clientTermsMaint.lastTermsRawBody, maintHtml);
+    });
+
+    test('ZfClientConfig.paceHosts 透传到内部 HTTP 客户端限速', () async {
+      const base = 'https://jw.example.edu.cn/jwglxt';
+      const html = '''
+        <html><body>
+          <select name="xnm"><option value="2025" selected>2025-2026</option></select>
+          <select name="xqm"><option value="3" selected>1</option></select>
+        </body></html>
+      ''';
+      final client = ZhengfangClient(ZfClientConfig(
+        baseUrl: base,
+        paceHosts: const <String, int>{'jw.example.edu.cn': 60},
+        transport: (RawHttpRequest req) async =>
+            htmlResp(200, req.url.toString(), html),
+      ));
+      addTearDown(client.close);
+
+      final sw = Stopwatch()..start();
+      await client.fetchTerms();
+      await client.fetchTerms();
+      sw.stop();
+
+      expect(sw.elapsedMilliseconds, greaterThanOrEqualTo(45));
+    });
+
+    test(
+        'checkSession() 在 _menuIdentityFallback 在途期间 dispose() 抛 cancelled 且不复活会话',
+        () async {
+      const base = 'https://jw.example.edu.cn/jwglxt';
+      final snapshot = CookieStoreSnapshot(
+        version: 1,
+        baseUrl: base,
+        savedAt: 1,
+        cookies: const <CookieRecord>[
+          CookieRecord(
+            name: 'JSESSIONID',
+            value: 's1',
+            domain: 'jw.example.edu.cn',
+            path: '/',
+            hostOnly: true,
+            secure: true,
+            httpOnly: true,
+            expiresAt: null,
+            createdAt: 1,
+            setByHost: 'jw.example.edu.cn',
+            setByPort: 443,
+          ),
+        ],
+      );
+      final enteredMenu = Completer<void>();
+      final gateMenu = Completer<RawHttpResponse>();
+      final client = ZhengfangClient(ZfClientConfig(
+        baseUrl: base,
+        cookies: snapshot,
+        transport: (RawHttpRequest req) {
+          if (req.url.path.endsWith('/xtgl/index_initMenu.html')) {
+            if (!enteredMenu.isCompleted) enteredMenu.complete();
+            return gateMenu.future;
+          }
+          return Future<RawHttpResponse>.value(htmlResp(
+            200,
+            req.url.toString(),
+            '<h4 class="media-heading">张三</h4>',
+          ));
+        },
+      ));
+
+      final future = client.checkSession();
+      await enteredMenu.future;
+      client.dispose();
+      gateMenu.complete(htmlResp(
+        200,
+        '$base/xtgl/index_initMenu.html',
+        '<input type="hidden" id="sessionUserKey" value="20240001">',
+      ));
+
+      await expectLater(
+        future,
+        throwsA(
+          isA<AcademicError>().having(
+            (e) => e.code,
+            'code',
+            ErrorCode.cancelled,
+          ),
+        ),
+      );
+      expect(client.session.authenticated, isFalse);
+      expect(client.session.studentId, isEmpty);
+      expect(client.session.studentName, isEmpty);
+    });
+
+    test('login() 在 _menuIdentityFallback 在途期间 dispose() 抛 cancelled 且不复活会话',
+        () async {
+      const base = 'https://jw.example.edu.cn/jwglxt';
+      final enteredMenu = Completer<void>();
+      final gateMenu = Completer<RawHttpResponse>();
+      final client = ZhengfangClient(ZfClientConfig(
+        baseUrl: base,
+        transport: (RawHttpRequest req) {
+          final path = req.url.path;
+          if (path.endsWith('/sso/zfiotlogin')) {
+            return Future<RawHttpResponse>.value(
+              htmlResp(404, req.url.toString(), 'no cas'),
+            );
+          }
+          if (path.endsWith('/xtgl/login_slogin.html') && req.method == 'GET') {
+            return Future<RawHttpResponse>.value(htmlResp(
+              200,
+              req.url.toString(),
+              '<form><input type="hidden" name="csrftoken" value="tok"><input type="hidden" name="mmsfjm" value="0"></form>',
+            ));
+          }
+          if (path.endsWith('/xtgl/login_logoutAccount.html')) {
+            return Future<RawHttpResponse>.value(
+              htmlResp(200, req.url.toString(), 'null'),
+            );
+          }
+          if (path.endsWith('/xtgl/login_slogin.html') &&
+              req.method == 'POST') {
+            return Future<RawHttpResponse>.value(
+              htmlResp(200, req.url.toString(), '<html><body>ok</body></html>'),
+            );
+          }
+          if (path.endsWith('/xtgl/index_cxYhxxIndex.html')) {
+            return Future<RawHttpResponse>.value(htmlResp(
+              200,
+              req.url.toString(),
+              '<h4 class="media-heading">李四</h4>',
+            ));
+          }
+          if (path.endsWith('/xtgl/index_initMenu.html')) {
+            if (!enteredMenu.isCompleted) enteredMenu.complete();
+            return gateMenu.future;
+          }
+          return Future<RawHttpResponse>.value(
+            htmlResp(404, req.url.toString(), 'unexpected'),
+          );
+        },
+      ));
+
+      final future = client.login(const Credentials('20240001', 'pw'));
+      await enteredMenu.future;
+      client.dispose();
+      gateMenu.complete(htmlResp(
+        200,
+        '$base/xtgl/index_initMenu.html',
+        '<input type="hidden" id="sessionUserKey" value="20240001">',
+      ));
+
+      await expectLater(
+        future,
+        throwsA(
+          isA<AcademicError>().having(
+            (e) => e.code,
+            'code',
+            ErrorCode.cancelled,
+          ),
+        ),
+      );
+      expect(client.session.authenticated, isFalse);
+      expect(client.session.studentId, isEmpty);
+      expect(client.session.studentName, isEmpty);
+      expect(
+        () => client.allowHost('extra.example.edu.cn'),
+        throwsA(
+          isA<AcademicError>().having(
+            (e) => e.code,
+            'code',
+            ErrorCode.cancelled,
+          ),
+        ),
+      );
+      expect(client.allowedHosts, const <String>['jw.example.edu.cn']);
+    });
+
+    test('fetchExams()/fetchGrades()/listRows() 在 HTTP 404 时透传 httpStatus',
+        () async {
+      const base = 'https://jw.example.edu.cn/jwglxt';
+      const maintHtml =
+          '<html><head><title>系统维护</title></head><body>系统维护中</body></html>';
+
+      final clientMaint = ZhengfangClient(ZfClientConfig(
+        baseUrl: base,
+        transport: (RawHttpRequest req) async =>
+            htmlResp(404, req.url.toString(), maintHtml),
+      ));
+      addTearDown(clientMaint.close);
+
+      await expectLater(
+        clientMaint.fetchExams('2025-2026-1'),
+        throwsA(
+          isA<AcademicError>()
+              .having((e) => e.code, 'code', ErrorCode.serverError)
+              .having((e) => e.httpStatus, 'httpStatus', 404),
+        ),
+      );
+      await expectLater(
+        clientMaint.fetchGrades('2025-2026-1'),
+        throwsA(
+          isA<AcademicError>()
+              .having((e) => e.code, 'code', ErrorCode.serverError)
+              .having((e) => e.httpStatus, 'httpStatus', 404),
+        ),
+      );
+
+      final clientRejectedJson = ZhengfangClient(ZfClientConfig(
+        baseUrl: base,
+        transport: (RawHttpRequest req) async => jsonResp(
+          404,
+          req.url.toString(),
+          <String, Object?>{'success': false, 'message': '请求失败'},
+        ),
+      ));
+      addTearDown(clientRejectedJson.close);
+
+      await expectLater(
+        clientRejectedJson.fetchSchedule('2025-2026-1'),
+        throwsA(
+          isA<AcademicError>()
+              .having((e) => e.code, 'code', ErrorCode.pageChanged)
+              .having((e) => e.httpStatus, 'httpStatus', 404),
+        ),
+      );
+
+      expect(
+        () => listRows(
+          '{"success":false,"message":"failed"}',
+          const <String>['kbList'],
+          statusCode: 404,
+        ),
+        throwsA(
+          isA<AcademicError>()
+              .having((e) => e.code, 'code', ErrorCode.pageChanged)
+              .having((e) => e.httpStatus, 'httpStatus', 404),
+        ),
+      );
+      expect(
+        () => listRows(
+          'Not Found',
+          const <String>['kbList'],
+          statusCode: 404,
+        ),
+        throwsA(
+          isA<AcademicError>()
+              .having((e) => e.code, 'code', ErrorCode.pageChanged)
+              .having((e) => e.httpStatus, 'httpStatus', 404),
+        ),
+      );
     });
   });
 }
