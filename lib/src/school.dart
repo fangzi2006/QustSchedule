@@ -51,6 +51,11 @@ final List<String> presetSchoolUrls = <String>[
 /// 当前默认使用的学校。
 const SchoolProfile defaultSchool = qustProfile;
 
+/// 按主机名配置的最小请求间隔（毫秒），兼容对高频请求存在风控的第三方教务站点。
+const Map<String, int> defaultAcademicPaceHosts = <String, int>{
+  'jw.cqiivc.com': 1200,
+};
+
 /// 地址的展示名：命中已知线路就用它的名字，否则退回地址本身。
 String schoolLabel(String baseUrl) {
   for (final SchoolProfile profile in knownSchools) {
@@ -64,12 +69,21 @@ String schoolLabel(String baseUrl) {
 /// 换地址后旧的 Cookie 快照必须丢弃：快照与主机绑定，且 `CookieStore.import`
 /// 会用快照里的 baseUrl 覆盖当前配置。
 bool sameSchool(String a, String b) {
-  String key(String value) {
-    var text = value.trim().toLowerCase();
-    if (text.endsWith('/')) text = text.substring(0, text.length - 1);
-    text = text.replaceFirst(RegExp(r'^https?://'), '');
-    return text;
-  }
+  String key(String value) =>
+      normalizeSchoolKeyUrl(value).replaceFirst(RegExp(r'^https?://'), '');
 
   return key(a) == key(b);
 }
+
+/// 规范化教务地址用于凭据键拼接（忽略首尾空白、大小写与末尾斜杠）。
+String normalizeSchoolKeyUrl(String baseUrl) {
+  var text = baseUrl.trim().toLowerCase();
+  while (text.endsWith('/')) {
+    text = text.substring(0, text.length - 1);
+  }
+  return text;
+}
+
+/// 构造凭据存储使用的规范化账号键（忽略 `baseUrl` 首尾空白、大小写与末尾斜杠差异）。
+String buildAccountKey(String baseUrl, String username) =>
+    '${normalizeSchoolKeyUrl(baseUrl)}|$username';

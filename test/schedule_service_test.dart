@@ -5,6 +5,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/src/schedule_service.dart';
+import 'package:qustschedule/src/school.dart';
 import 'package:zf_academic/zf_academic_io.dart';
 
 import 'support/fake_backend.dart';
@@ -58,6 +59,8 @@ void main() {
       expect(h1.backend.fetchCount, 1);
       expect(h1.backend.loginCount, 0);
       expect(h1.config?.requestTimeoutMs, 10000);
+      expect(h1.config?.paceHosts, defaultAcademicPaceHosts);
+      expect(h1.config?.paceHosts?['jw.cqiivc.com'], 1200);
 
       // 不保存任何凭据时同样能直接用有效 Cookie 取课表
       final h2 = _Harness();
@@ -827,6 +830,48 @@ void main() {
       );
       expect(h.backend.loginCount, 2);
       expect(h.service.breakerOpen, isTrue);
+    });
+
+    test('switchSchool 指向同校但大小写或末尾斜杠（含多斜杠）不同时更新 baseUrl 且保留现有会话', () async {
+      final h = _Harness(baseUrl: 'https://JW.Example.Edu.Cn/jwglxt');
+      await h.service.getSchedule();
+      expect(h.service.hasCookies, isTrue);
+
+      h.service.switchSchool('https://jw.example.edu.cn/jwglxt///');
+      expect(h.service.baseUrl, 'https://jw.example.edu.cn/jwglxt///');
+      expect(h.service.hasCookies, isTrue);
+      expect(sameSchool(h.service.baseUrl, _baseUrl), isTrue);
+      expect(
+        buildAccountKey(h.service.baseUrl, '20240001'),
+        'https://jw.example.edu.cn/jwglxt|20240001',
+      );
+    });
+
+    test('http 登录后同校切换至 https 时仍可读取已保存凭据，且 signOut 连同旧 http 凭据一并清理', () async {
+      const httpUrl = 'http://jwglxt.qust.edu.cn/jwglxt';
+      const httpsUrl = 'https://jwglxt.qust.edu.cn/jwglxt';
+      final h = _Harness(baseUrl: httpUrl);
+
+      await h.service.signIn('20240001', 'pw_http', remember: true);
+      expect(await h.credentials.has('$httpUrl|20240001'), isTrue);
+
+      // 模拟历史末尾斜杠遗留键一并存在时也应被 signOut 清理。
+      await h.credentials.save(
+        '$httpUrl/|20240001',
+        const Credentials('20240001', 'pw_http_slash'),
+      );
+
+      h.service.switchSchool(httpsUrl);
+      expect(h.service.baseUrl, httpsUrl);
+
+      final saved = await h.service.readSavedCredentials();
+      expect(saved?.username, '20240001');
+      expect(saved?.password, 'pw_http');
+
+      await h.service.signOut(forgetCredentials: true);
+      expect(await h.credentials.has('$httpUrl|20240001'), isFalse);
+      expect(await h.credentials.has('$httpUrl/|20240001'), isFalse);
+      expect(await h.credentials.has('$httpsUrl|20240001'), isFalse);
     });
   });
 }

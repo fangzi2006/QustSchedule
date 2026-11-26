@@ -575,3 +575,19 @@ int daysInMonth(int year, int month) {
   if (month == 12) return 31;
   return DateTime(year, month + 1, 0).day;
 }
+
+/// 按节次号查找对应节次配置；找不到返回 null。
+SectionTime? sectionOfPeriod(List<SectionTime> sections, int period) {
+  for (final section in sections) {
+    if (section.period == period) return section;
+  }
+  return null;
+}
+
+/// 按节次号查找上课开始时间（分钟数）；找不到返回 null。
+int? sectionStartMinutes(List<SectionTime> sections, int period) =>
+    sectionOfPeriod(sections, period)?.startMinutes;
+
+/// 按节次号查找下课结束时间（分钟数）；找不到返回 null。
+int? sectionEndMinutes(List<SectionTime> sections, int period) =>
+    sectionOfPeriod(sections, period)?.endMinutes;

@@ -14,6 +14,10 @@ import 'package:zf_academic/zf_academic.dart';
 DateTime dayOnly(DateTime value) =>
     DateTime(value.year, value.month, value.day);
 
+/// 当天从 00:00 起算第 [minutes] 分钟对应的本地时刻。
+DateTime dateAtMinutes(DateTime date, int minutes) =>
+    DateTime(date.year, date.month, date.day, minutes ~/ 60, minutes % 60);
+
 /// 该日期所在周的周一（周一为一周之始，与国际标准一致）。
 DateTime mondayOf(DateTime value) => DateTime(
   value.year,

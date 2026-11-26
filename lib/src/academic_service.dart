@@ -3,8 +3,6 @@
 /// 负责考试查询、成绩查询、未评教状态流转、统计指标计算及离线缓存持久化。
 library;
 
-import 'dart:ui';
-
 import 'package:zf_academic/zf_academic.dart';
 
 import 'academic_cache.dart';
@@ -148,7 +146,7 @@ class AcademicService {
   /// 独立捕获异常，绝不向上抛出阻碍课表主流程。
   Future<void> syncCurrentTermAsync({
     required String termId,
-    VoidCallback? onDataUpdated,
+    void Function()? onDataUpdated,
     bool Function()? shouldCache,
   }) async {
     if (termId.isEmpty) return;

@@ -35,11 +35,15 @@ class ScheduleService {
     this.autoLoginLimit = 2,
     this.autoLoginWindow = const Duration(minutes: 10),
     this.backendFactory = defaultBackendFactory,
+    this.paceHosts = defaultAcademicPaceHosts,
     String? baseUrl,
   }) : _baseUrl = baseUrl ?? defaultSchool.baseUrl;
 
   /// 客户端工厂（测试注入假实现）。
   final ScheduleBackend Function(ZfClientConfig config) backendFactory;
+
+  /// 按主机名配置的最小请求间隔（毫秒）。
+  final Map<String, int> paceHosts;
 
   /// 账密来源（安全存储）。回退登录的原料。
   final CredentialStore credentials;
@@ -143,7 +147,10 @@ class ScheduleService {
 
   /// 用户换了学校：丢掉旧客户端与旧 Cookie（快照与主机绑定，不能跨校复用）。
   void switchSchool(String baseUrl) {
-    if (sameSchool(_baseUrl, baseUrl)) return;
+    if (sameSchool(_baseUrl, baseUrl)) {
+      _baseUrl = baseUrl;
+      return;
+    }
     _baseUrl = baseUrl;
     _client?.close();
     _client = null;
@@ -235,8 +242,7 @@ class ScheduleService {
 
   Future<int> _loginWithSavedCredentials() async {
     final client = await _ensureClient();
-    final accountKey = _accountKey();
-    final saved = await credentials.get(accountKey);
+    final saved = await readSavedCredentials();
     if (saved == null) {
       throw AcademicError(ErrorCode.sessionExpired, '会话已过期，且没有保存账号密码，请重新登录');
     }
@@ -466,6 +472,10 @@ class ScheduleService {
     // 先算 key：关掉客户端后 sessionInfo 就取不到用户名了。
     final key = _accountKey();
     final keyByName = _accountKey(username: sessionInfo?.username ?? '');
+    final fallbackKeys = _fallbackAccountKeys();
+    final fallbackKeysByName = _fallbackAccountKeys(
+      username: sessionInfo?.username ?? '',
+    );
     _client?.close();
     _client = null;
     _clientFlight = null;
@@ -475,9 +485,28 @@ class ScheduleService {
     accountHint = null;
     await cookieStorage.clear();
     if (forgetCredentials) {
-      await credentials.remove(key);
-      if (keyByName != key) await credentials.remove(keyByName);
+      final keysToRemove = <String>{
+        key,
+        keyByName,
+        ...fallbackKeys,
+        ...fallbackKeysByName,
+      };
+      for (final targetKey in keysToRemove) {
+        await credentials.remove(targetKey);
+      }
     }
+  }
+
+  /// 读取当前学校与账号保存的凭据；若规范化键未命中，依次回退兼容协议切换与历史末尾斜杠键。
+  Future<Credentials?> readSavedCredentials({String? username}) async {
+    final canonicalKey = _accountKey(username: username);
+    final direct = await credentials.get(canonicalKey);
+    if (direct != null) return direct;
+    for (final fallbackKey in _fallbackAccountKeys(username: username)) {
+      final fallback = await credentials.get(fallbackKey);
+      if (fallback != null) return fallback;
+    }
+    return null;
   }
 
   // -------------------------------------------------------------------------
@@ -487,9 +516,37 @@ class ScheduleService {
   String _accountKey({String? username}) {
     // accountKey 只用"地址 + 账号"：同一账号换学校不共享凭据。
     // 账号的优先级：显式传入 > app 恢复的本地账号 > 当前会话里的用户名。
-    final base = _baseUrl.toLowerCase();
     final account = username ?? accountHint ?? sessionInfo?.username ?? '';
-    return '$base|$account';
+    return buildAccountKey(_baseUrl, account);
+  }
+
+  List<String> _fallbackAccountKeys({String? username}) {
+    final account = username ?? accountHint ?? sessionInfo?.username ?? '';
+    final normalizedBase = normalizeSchoolKeyUrl(_baseUrl);
+    if (normalizedBase.isEmpty) return const <String>[];
+    final canonicalKey = buildAccountKey(_baseUrl, account);
+    final String? alternateBase;
+    if (normalizedBase.startsWith('https://')) {
+      alternateBase = 'http://${normalizedBase.substring('https://'.length)}';
+    } else if (normalizedBase.startsWith('http://')) {
+      alternateBase = 'https://${normalizedBase.substring('http://'.length)}';
+    } else {
+      alternateBase = null;
+    }
+    final candidates = <String>[
+      if (alternateBase != null && alternateBase.isNotEmpty)
+        '$alternateBase|$account',
+      '$normalizedBase/|$account',
+      if (alternateBase != null && alternateBase.isNotEmpty)
+        '$alternateBase/|$account',
+    ];
+    final result = <String>[];
+    for (final key in candidates) {
+      if (key != canonicalKey && !result.contains(key)) {
+        result.add(key);
+      }
+    }
+    return result;
   }
 
   Future<ScheduleBackend> _ensureClient({bool loadCookies = true}) {
@@ -512,6 +569,7 @@ class ScheduleService {
         endpoints: qustZfEndpoints,
         cookies: snapshot,
         requestTimeoutMs: 10000,
+        paceHosts: paceHosts,
         onRequest: _recordRequest,
       ),
     );

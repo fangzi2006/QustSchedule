@@ -9,6 +9,8 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../src/stable_hash.dart';
+
 /// 一组课程配色。
 class CourseColor {
   /// 格子背景（浅）。
@@ -26,7 +28,7 @@ class CourseColor {
 class CoursePalette {
   const CoursePalette._();
 
-  /// 10 组色相。改动颜色时保持"底浅字深"这一条，否则文字会糊。
+  /// 9 组色相。改动颜色时保持"底浅字深"这一条，否则文字会糊。
   static const List<CourseColor> colors = <CourseColor>[
     CourseColor(Color(0xFFE6F1FB), Color(0xFF0C447C)), // 蓝
     CourseColor(Color(0xFFE1F5EE), Color(0xFF085041)), // 青
@@ -55,14 +57,8 @@ class CoursePalette {
   /// 按课程名计算稳定色板索引（与客户端 / 原生桌面小组件共享）。
   ///
   /// 用乘加哈希而不是求和：求和会让"数学""学数"这类同字异序的课撞到一起。
-  static int indexOf(String courseName) {
-    if (courseName.isEmpty) return 0;
-    var hash = 2166136261;
-    for (final unit in courseName.codeUnits) {
-      hash = (hash ^ unit) * 16777619 & 0x7fffffff;
-    }
-    return hash % colors.length;
-  }
+  static int indexOf(String courseName) =>
+      courseColorIndex(courseName, colorCount: colors.length);
 
   /// 按课程名稳定取色（浅色主题）。
   static CourseColor of(String courseName) => colors[indexOf(courseName)];

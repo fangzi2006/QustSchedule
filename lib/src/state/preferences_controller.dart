@@ -11,10 +11,10 @@ import '../reminder_planner.dart';
 import '../reschedule.dart';
 import '../school.dart';
 import '../timetable.dart';
-import '../widget_style.dart';
 import '../updater/update_flow_controller.dart';
 import '../updater/update_models.dart';
 import '../updater/update_service.dart';
+import '../widget_style.dart';
 import 'hint_notice_controller.dart';
 
 /// 管理用户设置持久化、外观滑块草稿防抖、存储故障温和提示以及更新代理配置。
@@ -64,7 +64,9 @@ class PreferencesController {
   }
 
   void attachStorageMonitor() {
+    if (_disposed) return;
     _preferences.onWriteSuccess = () {
+      if (_disposed) return;
       _reportedWriteFailure = false;
     };
     _preferences.onWriteError = (_) {
@@ -74,11 +76,18 @@ class PreferencesController {
     };
   }
 
+  void _detachStorageMonitor(Preferences preferences) {
+    preferences.onWriteSuccess = null;
+    preferences.onWriteError = null;
+  }
+
   void rebindOpened(Preferences loaded) {
+    if (_disposed) return;
     _appearanceTimer?.cancel();
     _appearanceTimer = null;
     _cellHeightDraft = null;
     _courseTextScaleDraft = null;
+    _detachStorageMonitor(_preferences);
     _preferences = loaded;
     attachStorageMonitor();
     if (_preferences.didResetFromCorruption) {
@@ -88,6 +97,7 @@ class PreferencesController {
   }
 
   void markLoaded() {
+    if (_disposed) return;
     _preferencesLoaded = true;
   }
 
@@ -96,6 +106,7 @@ class PreferencesController {
     bool syncProxy = false,
     bool notifyPrefsChanged = true,
   }) async {
+    if (_disposed) return;
     final flushing = write();
     if (syncProxy) syncUpdateProxy();
     _onStateChanged();
@@ -312,6 +323,7 @@ class PreferencesController {
       _courseTextScaleDraft ?? _preferences.courseTextScale;
 
   void setCellHeight(double value) {
+    if (_disposed) return;
     final safe = clampCellHeight(value);
     if (safe == cellHeight) return;
     _cellHeightDraft = safe;
@@ -321,6 +333,7 @@ class PreferencesController {
   }
 
   void setCourseTextScale(double value) {
+    if (_disposed) return;
     final safe = clampCourseTextScale(value);
     if (safe == courseTextScale) return;
     _courseTextScaleDraft = safe;
@@ -332,24 +345,26 @@ class PreferencesController {
   Future<void> flushAppearance() async {
     _appearanceTimer?.cancel();
     _appearanceTimer = null;
+    if (_disposed) {
+      _cellHeightDraft = null;
+      _courseTextScaleDraft = null;
+      return;
+    }
     final height = _cellHeightDraft;
     final textScale = _courseTextScaleDraft;
     if (height == null && textScale == null) return;
     final prefs = _preferences;
     _cellHeightDraft = null;
     _courseTextScaleDraft = null;
-    if (height != null) {
-      await prefs.setCellHeight(height);
-    }
-    if (textScale != null) {
-      await prefs.setCourseTextScale(textScale);
-    }
+    await prefs.setAppearance(cellHeight: height, courseTextScale: textScale);
   }
 
   void _flushAppearanceSoon() {
+    if (_disposed) return;
     _appearanceTimer?.cancel();
     _appearanceTimer = Timer(const Duration(milliseconds: 300), () {
       _appearanceTimer = null;
+      if (_disposed) return;
       unawaited(flushAppearance());
     });
   }
@@ -364,6 +379,7 @@ class PreferencesController {
   bool get autoCheckUpdate => _preferences.autoCheckUpdate;
 
   void syncUpdateProxy() {
+    if (_disposed) return;
     _updateFlow.updateProxySelection(
       selectedProxy: selectedUpdateProxy,
       backupProxies: allUpdateProxies,
@@ -410,14 +426,18 @@ class PreferencesController {
 
     Future<void> executeCheck() async {
       if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
-      UpdateService? ownedService;
       try {
-        final service = updateService ?? (ownedService = UpdateService());
-        final result = await service.checkForUpdatesWithFallback(
-          currentVersion: appVersion,
-          selectedProxy: selectedUpdateProxy,
-          backupProxies: allUpdateProxies,
-        );
+        final result = updateService != null
+            ? await updateService.checkForUpdatesWithFallback(
+                currentVersion: appVersion,
+                selectedProxy: selectedUpdateProxy,
+                backupProxies: allUpdateProxies,
+              )
+            : await _updateFlow.checkForUpdates(
+                currentVersion: appVersion,
+                selectedProxy: selectedUpdateProxy,
+                backupProxies: allUpdateProxies,
+              );
         if (_hasCheckedAutoUpdate || !autoCheckUpdate || _disposed) return;
 
         if (result.status == UpdateStatus.hasUpdate) {
@@ -450,12 +470,11 @@ class PreferencesController {
         } else {
           _hasCheckedAutoUpdate = true;
         }
-      } finally {
-        ownedService?.dispose();
       }
     }
 
     scheduleCheck = (Duration delay) {
+      if (_disposed || _hasCheckedAutoUpdate || !autoCheckUpdate) return;
       _autoUpdateTimer?.cancel();
       if (delay == Duration.zero) {
         unawaited(executeCheck());
@@ -484,10 +503,14 @@ class PreferencesController {
       _commitPref(() => _preferences.removeSchool(url));
 
   void dispose() {
+    if (_disposed) return;
     _disposed = true;
     cancelAutoUpdate();
     _appearanceTimer?.cancel();
-    unawaited(flushAppearance());
+    _appearanceTimer = null;
+    _cellHeightDraft = null;
+    _courseTextScaleDraft = null;
+    _detachStorageMonitor(_preferences);
     prefsNotifier.dispose();
   }
 }

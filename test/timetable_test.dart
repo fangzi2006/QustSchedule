@@ -7,12 +7,12 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/src/course_text.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
 import 'package:qustschedule/src/reminder_planner.dart';
 import 'package:qustschedule/src/school.dart';
 import 'package:qustschedule/src/timetable.dart';
-import 'package:flutter_test/flutter_test.dart';
 
 /// 构造一份可控的快捷设置（**不含节数**：节数是全局设置）。
 QuickSetup setup({

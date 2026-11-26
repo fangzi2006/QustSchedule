@@ -31,19 +31,13 @@ import 'reschedule.dart';
 import 'safe_json_file.dart';
 import 'school.dart';
 import 'timetable.dart';
+import 'updater/update_models.dart';
 import 'widget_style.dart';
 
+export 'updater/update_models.dart'
+    show defaultUpdateProxyUrl, presetUpdateProxies;
+
 const int preferencesSchema = 15;
-
-/// 检查更新与安装包下载的默认加速代理。
-const String defaultUpdateProxyUrl = 'https://gh-proxy.org';
-
-/// 预设加速代理列表：默认首选、备选及旧节点。
-const List<String> presetUpdateProxies = <String>[
-  'https://gh-proxy.org',
-  'https://axisnow.gh-proxy.org',
-  'https://gh-proxy.com',
-];
 
 /// 启动时是否自动检查更新（默认开启）。
 const bool defaultAutoCheckUpdate = true;
@@ -354,7 +348,7 @@ class Preferences {
     bool didResetFromCorruption = false,
   }) {
     var termStarts = <String, String>{};
-    var timetables = <Timetable>[];
+    final timetables = <Timetable>[];
     QuickSetup? quickSetup;
     var sectionCounts = <PeriodGroup, int>{...defaultSectionCounts};
     var customSchools = <String>[];
@@ -367,7 +361,7 @@ class Preferences {
     var courseTextScale = defaultCourseTextScale;
     var autoRefresh = true;
     var autoRefreshIntervalMinutes = defaultAutoRefreshIntervalMinutes;
-    var reschedules = <RescheduleRule>[];
+    final reschedules = <RescheduleRule>[];
     var showScheduleRemarks = true;
     var reminderEnabled = false;
     var reminderLeadMinutes = defaultReminderLeadMinutes;
@@ -783,6 +777,30 @@ class Preferences {
     final safe = clampCourseTextScale(value);
     if (safe == _courseTextScale) return;
     _courseTextScale = safe;
+    await _flush();
+  }
+
+  /// 合并保存外观草稿（格子高度与课程字号缩放），有变更时只执行一次落盘。
+  Future<void> setAppearance({
+    double? cellHeight,
+    double? courseTextScale,
+  }) async {
+    var changed = false;
+    if (cellHeight != null) {
+      final safeHeight = clampCellHeight(cellHeight);
+      if (safeHeight != _cellHeight) {
+        _cellHeight = safeHeight;
+        changed = true;
+      }
+    }
+    if (courseTextScale != null) {
+      final safeScale = clampCourseTextScale(courseTextScale);
+      if (safeScale != _courseTextScale) {
+        _courseTextScale = safeScale;
+        changed = true;
+      }
+    }
+    if (!changed) return;
     await _flush();
   }
 

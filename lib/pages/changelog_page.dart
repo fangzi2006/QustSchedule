@@ -13,9 +13,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../src/app_version.dart';
-import '../src/formatted_text_span.dart';
+import '../src/formatted_text.dart';
 import '../src/route_settled.dart';
 import '../widgets/changelog_category_badge.dart';
+import '../widgets/formatted_text_span.dart';
 import '../widgets/page_skeleton.dart';
 import '../widgets/tactile_button.dart';
 

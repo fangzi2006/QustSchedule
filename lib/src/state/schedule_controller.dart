@@ -276,20 +276,13 @@ class ScheduleController extends ChangeNotifier {
 
   bool get hasSectionsBeyondTimetable => _dataMaxPeriod > _prefs.sectionCount;
 
-  SectionTime? _sectionOf(int period) {
-    for (final section in _prefs.activeSections) {
-      if (section.period == period) return section;
-    }
-    return null;
-  }
-
   String startLabelOf(int period) {
-    final section = _sectionOf(period);
+    final section = sectionOfPeriod(_prefs.activeSections, period);
     return section == null ? '' : formatClock(section.startMinutes);
   }
 
   String endLabelOf(int period) {
-    final section = _sectionOf(period);
+    final section = sectionOfPeriod(_prefs.activeSections, period);
     return section == null ? '' : formatClock(section.endMinutes);
   }
 

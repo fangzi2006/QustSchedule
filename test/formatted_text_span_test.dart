@@ -6,8 +6,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/pages/changelog_page.dart';
 import 'package:qustschedule/src/app_version.dart';
-import 'package:qustschedule/src/formatted_text_span.dart';
+import 'package:qustschedule/src/formatted_text.dart';
 import 'package:qustschedule/theme/app_theme.dart';
+import 'package:qustschedule/widgets/formatted_text_span.dart';
 
 void main() {
   group('buildFormattedTextSpan 单元测试', () {

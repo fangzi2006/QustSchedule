@@ -72,7 +72,7 @@ class AuthSessionController {
   }
 
   String accountKey({String? username}) =>
-      '$_schoolBaseUrl|${username ?? _username}';
+      buildAccountKey(_schoolBaseUrl, username ?? _username);
 
   void rebindRepository(SessionRepository repository) {
     service.rebindCookieStorage(repository);
