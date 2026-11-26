@@ -1,0 +1,44 @@
+# 统一跨平台文本换行符，避免 Windows (core.autocrlf=true) 与 Linux CI 产生无意义 diff。
+* text=auto
+
+# Dart / Flutter / Kotlin / Gradle / CI / Docs / JSON / XML / Shell 统一使用 LF
+*.dart text eol=lf
+*.kt text eol=lf
+*.kts text eol=lf
+*.java text eol=lf
+*.gradle text eol=lf
+*.properties text eol=lf
+*.xml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.cmake text eol=lf
+CMakeLists.txt text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# Windows 源码、资源脚本与 Inno Setup 安装脚本保留 CRLF（不改 BOM/编码）
+*.cpp text eol=crlf
+*.h text eol=crlf
+*.rc text eol=crlf
+*.manifest text eol=crlf
+*.iss text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制资源明确标记，防止 Git 误判文本并破坏字节
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.ttf binary
+*.otf binary
+*.jks binary
+*.keystore binary
+*.apk binary
+*.zip binary
+*.exe binary
