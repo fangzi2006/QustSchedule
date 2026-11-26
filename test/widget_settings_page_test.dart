@@ -17,7 +17,6 @@ import 'package:qustschedule/src/preferences_repository.dart';
 import 'package:qustschedule/src/reschedule.dart';
 import 'package:qustschedule/src/schedule_service.dart';
 import 'package:qustschedule/src/timetable.dart';
-import 'package:qustschedule/src/widget_gateway.dart';
 import 'package:qustschedule/src/widget_planner.dart';
 import 'package:qustschedule/src/widget_service.dart';
 import 'package:qustschedule/src/widget_style.dart';
@@ -26,28 +25,9 @@ import 'package:qustschedule/widgets/desktop_widget_preview.dart';
 import 'package:zf_academic/zf_academic_io.dart';
 
 import 'support/fake_backend.dart';
+import 'support/fake_widget_gateway.dart';
 
 const String _baseUrl = 'https://jw.example.edu.cn/jwglxt';
-
-class _FakeGateway implements DesktopWidgetGateway {
-  int syncCount = 0;
-
-  @override
-  Future<bool> syncSnapshot(String payloadJson) async {
-    syncCount++;
-    return true;
-  }
-
-  @override
-  Future<void> clearSnapshot() async {}
-
-  @override
-  Future<bool> requestPinWidget(DesktopWidgetKind kind) async => true;
-
-  @override
-  Future<Map<DesktopWidgetKind, int>> getPinnedCounts() async =>
-      const <DesktopWidgetKind, int>{};
-}
 
 class _CountingWidgetService extends DesktopWidgetService {
   _CountingWidgetService({
@@ -701,7 +681,7 @@ void main() {
   group('WidgetSettingsPage 配置逻辑、缓存与交互', () {
     testWidgets('各小组件配置项精准按需显示、0%透明隐藏圆角、恢复默认支持撤销', (tester) async {
       final model = _createModel();
-      final gateway = _FakeGateway();
+      final gateway = FakeDesktopWidgetGateway();
       final service = _CountingWidgetService(
         model: model,
         gateway: gateway,
@@ -881,7 +861,7 @@ void main() {
       });
 
       final model = _createModel();
-      final gateway = _FakeGateway();
+      final gateway = FakeDesktopWidgetGateway();
       final service = _CountingWidgetService(
         model: model,
         gateway: gateway,
@@ -1208,6 +1188,274 @@ void main() {
       final rangeRect = tester.getRect(find.text('9/7–9/13'));
       expect(rangeRect.left - weekRect.right, lessThanOrEqualTo(12.0));
       expect(rangeRect.left, greaterThan(weekRect.right));
+    });
+
+    testWidgets(
+      'WidgetSettingsPage 通过 widgetService.livePinnedCounts 实时刷新并在销毁时解绑监听',
+      (tester) async {
+        final model = _createModel();
+        final gateway = FakeDesktopWidgetGateway(
+          pinnedCounts: const <DesktopWidgetKind, int>{
+            DesktopWidgetKind.today: 1,
+          },
+        );
+        final widgetService = DesktopWidgetService(
+          model: model,
+          gateway: gateway,
+          debounce: const Duration(milliseconds: 5),
+        );
+        addTearDown(() {
+          widgetService.dispose();
+          gateway.dispose();
+          model.dispose();
+        });
+
+        await tester.pumpWidget(
+          _wrapApp(
+            WidgetSettingsPage(model: model, widgetService: widgetService),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(gateway.ensureLiveUpdatesCount, 1);
+        expect(find.textContaining('桌面上已有 1 个'), findsOneWidget);
+
+        gateway.emitLivePinnedCounts(const <DesktopWidgetKind, int>{
+          DesktopWidgetKind.today: 4,
+        });
+        await tester.pump();
+        expect(find.textContaining('桌面上已有 4 个'), findsOneWidget);
+
+        // 卸载页面后再次推送计数变化，不应抛出已销毁或监听泄漏异常。
+        await tester.pumpWidget(const SizedBox.shrink());
+        gateway.emitLivePinnedCounts(const <DesktopWidgetKind, int>{
+          DesktopWidgetKind.today: 9,
+        });
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets('本周预览卡片与 Android 原生对齐：底部圆角留白、日期范围修剪、行高倍率与标题行数上限', (
+      tester,
+    ) async {
+      final now = DateTime(2026, 9, 9, 10, 0);
+
+      WidgetSnapshot buildWeekSnap({
+        required List<String> dayLabels,
+        required List<WidgetWeekBlock> blocks,
+        int maxSection = 10,
+      }) => WidgetSnapshot(
+        signedIn: true,
+        termId: '2026-2027-1',
+        termStartIso: '2026-09-07',
+        maxWeek: 18,
+        generatedAtMs: now.millisecondsSinceEpoch,
+        fingerprint: 'parity-test',
+        days: const <WidgetDayPlan>[],
+        upcomingExams: const <WidgetUpcomingExam>[],
+        weeks: <WidgetWeekPlan>[
+          WidgetWeekPlan(
+            week: 1,
+            startDateIso: '2026-09-07',
+            dayLabels: dayLabels,
+            maxSection: maxSection,
+            sectionStarts: List<String>.generate(
+              maxSection,
+              (i) => '${8 + i}:00',
+            ),
+            sectionEnds: List<String>.generate(
+              maxSection,
+              (i) => '${8 + i}:50',
+            ),
+            blocks: blocks,
+          ),
+        ],
+        styles: DesktopWidgetConfigSet.defaults(),
+      );
+
+      final sampleSnap = buildWeekSnap(
+        dayLabels: const <String>[
+          ' 9/7 ',
+          '9/8',
+          '9/9',
+          '9/10',
+          '9/11',
+          '9/12',
+          ' 9/13 ',
+        ],
+        blocks: const <WidgetWeekBlock>[
+          WidgetWeekBlock(
+            id: 'b1',
+            name: '高等数学',
+            location: 'M1-101',
+            teacher: '张老师',
+            day: 1,
+            startPeriod: 1,
+            endPeriod: 2,
+            conflictIndex: 0,
+            conflictTotal: 1,
+            colorIndex: 0,
+          ),
+        ],
+      );
+
+      Future<EdgeInsets> pumpWeekAndReadShellPadding(
+        DesktopWidgetStyle style, {
+        WidgetSnapshot? snapshot,
+      }) async {
+        await tester.pumpWidget(
+          _wrapApp(
+            Scaffold(
+              body: Center(
+                child: DesktopWidgetPreview(
+                  kind: DesktopWidgetKind.week,
+                  style: style,
+                  snapshot: snapshot,
+                  useSampleData: false,
+                  now: now,
+                ),
+              ),
+            ),
+          ),
+        );
+        final shellPadding = tester.widget<Padding>(
+          find
+              .descendant(
+                of: find.byType(DesktopWidgetPreview),
+                matching: find.byWidgetPredicate(
+                  (w) =>
+                      w is Padding && (w.child is Column || w.child is Center),
+                ),
+              )
+              .first,
+        );
+        return shellPadding.padding as EdgeInsets;
+      }
+
+      // 1) 底部内边距与 Kotlin WeekGridRemoteViewsBuilder 一致：
+      //    hasVisibleCard ? max(4.0, clearance * 0.55) : 0.0
+      final padR20 = await pumpWeekAndReadShellPadding(
+        const DesktopWidgetStyle(backgroundOpacity: 1.0, cornerRadius: 20.0),
+        snapshot: sampleSnap,
+      );
+      expect(padR20.bottom, closeTo(4.0, 1e-6));
+
+      final padR28 = await pumpWeekAndReadShellPadding(
+        const DesktopWidgetStyle(backgroundOpacity: 1.0, cornerRadius: 28.0),
+        snapshot: sampleSnap,
+      );
+      expect(padR28.bottom, closeTo(4.62, 1e-6));
+
+      final padTransparent = await pumpWeekAndReadShellPadding(
+        const DesktopWidgetStyle(backgroundOpacity: 0.0, cornerRadius: 28.0),
+        snapshot: sampleSnap,
+      );
+      expect(padTransparent.bottom, 0.0);
+
+      // 空态/未登录分支也应使用一致的底部内边距。
+      final padEmptyR28 = await pumpWeekAndReadShellPadding(
+        const DesktopWidgetStyle(backgroundOpacity: 1.0, cornerRadius: 28.0),
+        snapshot: null,
+      );
+      expect(padEmptyR28.bottom, closeTo(4.62, 1e-6));
+
+      // 2) dateRange 修剪空白且任一端为空时不渲染 '–'，同时校验课程块行高倍率 1.12 / 1.10 / 1.10。
+      await tester.pumpWidget(
+        _wrapApp(
+          Scaffold(
+            body: Center(
+              child: DesktopWidgetPreview(
+                kind: DesktopWidgetKind.week,
+                style: const DesktopWidgetStyle(
+                  showTeacher: true,
+                  showLocation: true,
+                ),
+                snapshot: sampleSnap,
+                useSampleData: false,
+                now: now,
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(find.text('9/7–9/13'), findsOneWidget);
+      expect(tester.widget<Text>(find.text('高等数学')).style?.height, 1.12);
+      expect(tester.widget<Text>(find.text('张老师')).style?.height, 1.10);
+      expect(tester.widget<Text>(find.text('M1-101')).style?.height, 1.10);
+
+      for (final badLabels in const <List<String>>[
+        <String>[' ', '9/13'],
+        <String>['9/7', '  '],
+      ]) {
+        await tester.pumpWidget(
+          _wrapApp(
+            Scaffold(
+              body: Center(
+                child: DesktopWidgetPreview(
+                  kind: DesktopWidgetKind.week,
+                  style: DesktopWidgetStyle.defaultsFor(DesktopWidgetKind.week),
+                  snapshot: buildWeekSnap(
+                    dayLabels: badLabels,
+                    blocks: const <WidgetWeekBlock>[],
+                  ),
+                  useSampleData: false,
+                  now: now,
+                ),
+              ),
+            ),
+          ),
+        );
+        expect(find.textContaining('–'), findsNothing);
+      }
+
+      // 3) 跨 6 节大色块仅显示课程名时，盈余行数分配不超过 12 行。
+      await tester.pumpWidget(
+        _wrapApp(
+          Scaffold(
+            body: Center(
+              child: DesktopWidgetPreview(
+                kind: DesktopWidgetKind.week,
+                style: const DesktopWidgetStyle(
+                  showTeacher: false,
+                  showLocation: false,
+                  fontScale: 0.75,
+                ),
+                snapshot: buildWeekSnap(
+                  dayLabels: const <String>[
+                    '9/7',
+                    '9/8',
+                    '9/9',
+                    '9/10',
+                    '9/11',
+                  ],
+                  maxSection: 6,
+                  blocks: const <WidgetWeekBlock>[
+                    WidgetWeekBlock(
+                      id: 'tall',
+                      name: '高数',
+                      location: '',
+                      teacher: '',
+                      day: 1,
+                      startPeriod: 1,
+                      endPeriod: 6,
+                      conflictIndex: 0,
+                      conflictTotal: 1,
+                      colorIndex: 0,
+                    ),
+                  ],
+                ),
+                useSampleData: false,
+                now: now,
+              ),
+            ),
+          ),
+        ),
+      );
+      final tallMaxLines = tester.widget<Text>(find.text('高数')).maxLines;
+      expect(tallMaxLines, isNotNull);
+      expect(tallMaxLines, greaterThan(1));
+      expect(tallMaxLines, lessThanOrEqualTo(12));
     });
   });
 }

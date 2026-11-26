@@ -15,7 +15,6 @@ import 'package:flutter/services.dart';
 import '../src/app_model.dart';
 import '../src/route_settled.dart';
 import '../src/timetable.dart';
-import '../src/widget_gateway.dart';
 import '../src/widget_planner.dart';
 import '../src/widget_service.dart';
 import '../src/widget_style.dart';
@@ -93,13 +92,24 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
 
     widget.model.addListener(_onSourceDataChanged);
     widget.model.academicNotifier.addListener(_onSourceDataChanged);
-    widget.widgetService.ensureLivePinnedUpdates();
-    MethodChannelDesktopWidgetGateway.livePinnedCounts.addListener(
-      _onLivePinnedCounts,
-    );
+    unawaited(widget.widgetService.ensureLivePinnedUpdates());
+    widget.widgetService.livePinnedCounts.addListener(_onLivePinnedCounts);
 
     // 立即并行发起后台线程查询已添加的小组件数量，与 260ms 路由滑入动画并行不阻塞。
     unawaited(_refreshPinnedCounts());
+  }
+
+  @override
+  void didUpdateWidget(covariant WidgetSettingsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.widgetService != widget.widgetService) {
+      oldWidget.widgetService.livePinnedCounts.removeListener(
+        _onLivePinnedCounts,
+      );
+      unawaited(widget.widgetService.ensureLivePinnedUpdates());
+      widget.widgetService.livePinnedCounts.addListener(_onLivePinnedCounts);
+      unawaited(_refreshPinnedCounts());
+    }
   }
 
   @override
@@ -165,9 +175,7 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
   void dispose() {
     widget.model.removeListener(_onSourceDataChanged);
     widget.model.academicNotifier.removeListener(_onSourceDataChanged);
-    MethodChannelDesktopWidgetGateway.livePinnedCounts.removeListener(
-      _onLivePinnedCounts,
-    );
+    widget.widgetService.livePinnedCounts.removeListener(_onLivePinnedCounts);
     WidgetsBinding.instance.removeObserver(this);
     _pinnedCounts.dispose();
     super.dispose();
@@ -297,7 +305,7 @@ class _WidgetSettingsPageState extends State<WidgetSettingsPage>
   }
 
   void _onLivePinnedCounts() {
-    final latest = MethodChannelDesktopWidgetGateway.livePinnedCounts.value;
+    final latest = widget.widgetService.livePinnedCounts.value;
     if (latest != null && mounted) {
       _pinnedEpoch++;
       _commitOrQueuePinnedCounts(latest);

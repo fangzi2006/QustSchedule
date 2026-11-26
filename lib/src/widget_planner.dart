@@ -10,9 +10,9 @@ import 'dart:math' as math;
 
 import 'package:zf_academic/zf_academic.dart';
 
-import '../theme/course_palette.dart';
 import 'course_text.dart';
 import 'reschedule.dart';
+import 'stable_hash.dart';
 import 'term_calendar.dart';
 import 'timetable.dart';
 import 'widget_style.dart';
@@ -363,14 +363,14 @@ WidgetSnapshot buildWidgetSnapshot({
       for (final entry in view.entries) {
         if (entry.day != date.weekday) continue;
         if (!occursInWeek(entry, week)) continue;
-        final startMinutes = _minutesOf(sections, entry.startPeriod);
+        final startMinutes = sectionStartMinutes(sections, entry.startPeriod);
         if (startMinutes == null) continue;
-        final rawEndMinutes = _endMinutesOf(sections, entry.endPeriod);
+        final rawEndMinutes = sectionEndMinutes(sections, entry.endPeriod);
         final endMinutes = rawEndMinutes == null || rawEndMinutes < startMinutes
             ? startMinutes
             : rawEndMinutes;
-        final startAt = _at(date, startMinutes);
-        final endAt = _at(date, endMinutes);
+        final startAt = dateAtMinutes(date, startMinutes);
+        final endAt = dateAtMinutes(date, endMinutes);
         final isMoved = !_hasOriginalMatch(rawEntries, entry);
         final normalizedName = entry.name.trim();
         items.add(
@@ -386,11 +386,11 @@ WidgetSnapshot buildWidgetSnapshot({
             endPeriod: entry.endPeriod < entry.startPeriod
                 ? entry.startPeriod
                 : entry.endPeriod,
-            startLabel: _formatMinutes(startMinutes),
-            endLabel: _formatMinutes(endMinutes),
+            startLabel: formatClock(startMinutes),
+            endLabel: formatClock(endMinutes),
             startMs: startAt.millisecondsSinceEpoch,
             endMs: endAt.millisecondsSinceEpoch,
-            colorIndex: CoursePalette.indexOf(normalizedName),
+            colorIndex: courseColorIndex(normalizedName),
             rescheduled: isMoved,
           ),
         );
@@ -419,7 +419,7 @@ WidgetSnapshot buildWidgetSnapshot({
           endLabel: _formatHm(end),
           startMs: start.millisecondsSinceEpoch,
           endMs: end.millisecondsSinceEpoch,
-          colorIndex: CoursePalette.indexOf(courseName),
+          colorIndex: courseColorIndex(courseName),
         ),
       );
     }
@@ -474,7 +474,7 @@ WidgetSnapshot buildWidgetSnapshot({
         location: _examLocationOf(exam),
         seatNumber: exam.seatNumber.trim(),
         examForm: exam.examForm.trim(),
-        colorIndex: CoursePalette.indexOf(courseName),
+        colorIndex: courseColorIndex(courseName),
       ),
     );
   }
@@ -533,7 +533,7 @@ WidgetSnapshot buildWidgetSnapshot({
           endPeriod: entry.endPeriod,
           conflictIndex: layout.index,
           conflictTotal: layout.total,
-          colorIndex: CoursePalette.indexOf(entry.name),
+          colorIndex: courseColorIndex(entry.name),
           rescheduled: !_hasOriginalMatch(rawEntries, entry),
         ),
       );
@@ -561,15 +561,15 @@ WidgetSnapshot buildWidgetSnapshot({
         sectionStarts: <String>[
           for (var p = 1; p <= maxSection; p++)
             () {
-              final m = _minutesOf(sections, p);
-              return m == null ? '' : _formatMinutes(m);
+              final m = sectionStartMinutes(sections, p);
+              return m == null ? '' : formatClock(m);
             }(),
         ],
         sectionEnds: <String>[
           for (var p = 1; p <= maxSection; p++)
             () {
-              final m = _endMinutesOf(sections, p);
-              return m == null ? '' : _formatMinutes(m);
+              final m = sectionEndMinutes(sections, p);
+              return m == null ? '' : formatClock(m);
             }(),
         ],
         blocks: List<WidgetWeekBlock>.unmodifiable(blocks),
@@ -623,7 +623,7 @@ String _computeSnapshotFingerprint({
     'weeks': <Object?>[for (final week in weeks) week.toJson()],
     'styles': styles.toJson(),
   });
-  return _fnv1a(canonical).toRadixString(16).padLeft(8, '0');
+  return fnv1a32Hex(canonical);
 }
 
 bool _hasOriginalMatch(
@@ -655,51 +655,19 @@ String _examLocationOf(ExamItem exam) {
 
 String _stableCourseId(String entryId, DateTime date, int startPeriod) {
   final stamp = formatIsoDate(date);
-  return 'c_${_fnv1a('$entryId|$stamp|$startPeriod').toRadixString(16).padLeft(8, '0')}';
+  return 'c_${fnv1a32Hex('$entryId|$stamp|$startPeriod')}';
 }
 
 String _stableExamId(ExamItem exam) {
   final startMs = exam.startTime?.millisecondsSinceEpoch ?? 0;
-  return 'x_${_fnv1a('${exam.courseName}|$startMs|${exam.classroom}').toRadixString(16).padLeft(8, '0')}';
+  return 'x_${fnv1a32Hex('${exam.courseName}|$startMs|${exam.classroom}')}';
 }
 
 bool _isSameDay(DateTime a, DateTime b) =>
     a.year == b.year && a.month == b.month && a.day == b.day;
 
-int? _minutesOf(List<SectionTime> sections, int period) {
-  for (final section in sections) {
-    if (section.period == period) return section.startMinutes;
-  }
-  return null;
-}
-
-int? _endMinutesOf(List<SectionTime> sections, int period) {
-  for (final section in sections) {
-    if (section.period == period) return section.endMinutes;
-  }
-  return null;
-}
-
-DateTime _at(DateTime date, int minutes) =>
-    DateTime(date.year, date.month, date.day, minutes ~/ 60, minutes % 60);
-
-String _formatMinutes(int minutes) {
-  final h = (minutes ~/ 60).toString().padLeft(2, '0');
-  final m = (minutes % 60).toString().padLeft(2, '0');
-  return '$h:$m';
-}
-
 String _formatHm(DateTime dt) {
   final h = dt.hour.toString().padLeft(2, '0');
   final m = dt.minute.toString().padLeft(2, '0');
   return '$h:$m';
-}
-
-int _fnv1a(String text) {
-  var hash = 0x811C9DC5;
-  for (final byte in utf8.encode(text)) {
-    hash ^= byte;
-    hash = (hash * 0x01000193) & 0xFFFFFFFF;
-  }
-  return hash;
 }

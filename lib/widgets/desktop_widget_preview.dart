@@ -1132,6 +1132,7 @@ class _WeekPreviewCard extends StatelessWidget {
     final clearance = _cornerClearance(style);
     final padX = math.max(compact ? 6.0 : 9.0, clearance);
     final padTop = math.max(compact ? 5.5 : 8.5, clearance);
+    final padBottom = hasVisibleCard ? math.max(4.0, clearance * 0.55) : 0.0;
     final resolved = _resolveWeekForPreview(snapshot, style, now);
 
     if (!resolved.signedIn ||
@@ -1155,7 +1156,7 @@ class _WeekPreviewCard extends StatelessWidget {
         colors: colors,
         width: 316,
         height: 316,
-        padding: EdgeInsets.symmetric(horizontal: padX, vertical: padTop),
+        padding: EdgeInsets.fromLTRB(padX, padTop, padX, padBottom),
         child: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1193,13 +1194,13 @@ class _WeekPreviewCard extends StatelessWidget {
         : 0.0;
     final headerLeftPad = hasVisibleCard ? 2.5 : 0.0;
 
-    // 4×4 整周网格保持 1:1 正方形（316×316），底部内边距归零消除下方白边。
+    // 4×4 整周网格保持 1:1 正方形（316×316），可见卡片底部保留圆角安全内边距以对齐原生端。
     return _WidgetShellFrame(
       style: style,
       colors: colors,
       width: 316,
       height: 316,
-      padding: EdgeInsets.fromLTRB(padX, padTop, padX, 0),
+      padding: EdgeInsets.fromLTRB(padX, padTop, padX, padBottom),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -1420,7 +1421,7 @@ class _WeekPreviewBlockTile extends StatelessWidget {
     final titleStyle = baseStyle.merge(
       TextStyle(
         fontSize: (compact ? 8.0 : 8.8) * scale,
-        height: 1.15,
+        height: 1.12,
         fontWeight: FontWeight.w600,
         letterSpacing: 0,
         color: chip.foreground,
@@ -1429,7 +1430,7 @@ class _WeekPreviewBlockTile extends StatelessWidget {
     final teacherStyle = baseStyle.merge(
       TextStyle(
         fontSize: (compact ? 6.8 : 7.4) * scale,
-        height: 1.12,
+        height: 1.10,
         letterSpacing: 0,
         color: chip.foreground.withValues(alpha: 0.74),
       ),
@@ -1437,7 +1438,7 @@ class _WeekPreviewBlockTile extends StatelessWidget {
     final locationStyle = baseStyle.merge(
       TextStyle(
         fontSize: (compact ? 6.8 : 7.4) * scale,
-        height: 1.12,
+        height: 1.10,
         letterSpacing: 0,
         color: chip.foreground.withValues(alpha: 0.78),
       ),
@@ -1653,10 +1654,13 @@ class _WeekPreviewBlockTile extends StatelessWidget {
     }
   }
 
-  if (titleLines > 0 && titleLines >= titleM.lines && titleM.lineH > 0) {
+  if (titleLines > 0 &&
+      titleLines >= titleM.lines &&
+      titleLines < 12 &&
+      titleM.lineH > 0) {
     final rem = height - used();
     if (rem > titleM.lineH) {
-      titleLines += (rem / titleM.lineH).floor();
+      titleLines = math.min(12, titleLines + (rem / titleM.lineH).floor());
     }
   }
 
@@ -2346,9 +2350,14 @@ _resolveWeekForPreview(
     WeekendColumnMode.hide => false,
     WeekendColumnMode.auto => hasWeekendClass,
   };
-  final dateRange = weekPlan.dayLabels.length >= 2
-      ? '${weekPlan.dayLabels.first}–${weekPlan.dayLabels.last}'
-      : '';
+  final String dateRange;
+  if (weekPlan.dayLabels.length >= 2) {
+    final first = weekPlan.dayLabels.first.trim();
+    final last = weekPlan.dayLabels.last.trim();
+    dateRange = first.isNotEmpty && last.isNotEmpty ? '$first–$last' : '';
+  } else {
+    dateRange = '';
+  }
   return (
     signedIn: true,
     isStale: false,

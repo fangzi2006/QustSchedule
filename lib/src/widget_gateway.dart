@@ -26,32 +26,53 @@ abstract class DesktopWidgetGateway {
 
   /// 查询各形态小组件当前已添加到桌面的实例数量。
   Future<Map<DesktopWidgetKind, int>> getPinnedCounts();
+
+  /// 原生广播/Pin 成功回调实时推送的最新桌面实例数量。
+  ValueListenable<Map<DesktopWidgetKind, int>?> get livePinnedCounts;
+
+  /// 幂等挂载推送监听，接收原生侧推送的实时桌面实例数量变化。
+  Future<void> ensureLivePinnedUpdates();
 }
 
 class MethodChannelDesktopWidgetGateway implements DesktopWidgetGateway {
-  const MethodChannelDesktopWidgetGateway([
+  MethodChannelDesktopWidgetGateway([
     this.channel = const MethodChannel('qustschedule/widget'),
   ]);
 
   final MethodChannel channel;
 
-  /// 原生广播/Pin 成功回调实时推送的最新桌面实例数量。
-  static final ValueNotifier<Map<DesktopWidgetKind, int>?> livePinnedCounts =
+  final ValueNotifier<Map<DesktopWidgetKind, int>?> _livePinnedCounts =
       ValueNotifier<Map<DesktopWidgetKind, int>?>(null);
+  bool _pushHandlerInstalled = false;
+  bool _disposed = false;
 
-  static final Set<String> _installedChannels = <String>{};
+  @override
+  ValueListenable<Map<DesktopWidgetKind, int>?> get livePinnedCounts =>
+      _livePinnedCounts;
 
-  /// 幂等挂载通道反向回调，接收 Android 侧推送的 `onPinnedCountsChanged`。
-  void ensurePushHandlerInstalled() {
-    if (!_installedChannels.add(channel.name)) return;
+  @override
+  Future<void> ensureLivePinnedUpdates() async {
+    if (_disposed || _pushHandlerInstalled) return;
+    _pushHandlerInstalled = true;
     channel.setMethodCallHandler((call) async {
+      if (_disposed) return;
       if (call.method == 'onPinnedCountsChanged') {
         final raw = call.arguments;
         if (raw is Map<Object?, Object?>) {
-          livePinnedCounts.value = _parseCountsMap(raw);
+          _livePinnedCounts.value = _parseCountsMap(raw);
         }
       }
     });
+  }
+
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    if (_pushHandlerInstalled) {
+      channel.setMethodCallHandler(null);
+      _pushHandlerInstalled = false;
+    }
+    _livePinnedCounts.dispose();
   }
 
   static Map<DesktopWidgetKind, int> _parseCountsMap(
@@ -60,7 +81,7 @@ class MethodChannelDesktopWidgetGateway implements DesktopWidgetGateway {
     final counts = <DesktopWidgetKind, int>{};
     for (final kind in DesktopWidgetKind.values) {
       final v = raw[kind.wireName];
-      if (v is num) counts[kind] = v.toInt();
+      if (v is num && v.isFinite) counts[kind] = v.toInt();
     }
     return counts;
   }

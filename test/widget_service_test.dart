@@ -4,6 +4,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qustschedule/src/app_model.dart';
 import 'package:qustschedule/src/preferences_repository.dart';
@@ -14,48 +15,10 @@ import 'package:qustschedule/src/widget_style.dart';
 import 'package:zf_academic/zf_academic_io.dart';
 
 import 'support/fake_backend.dart';
+import 'support/fake_widget_gateway.dart';
 
 const String _baseUrl = 'https://jw.example.edu.cn/jwglxt';
 final DateTime _now = DateTime(2026, 9, 7, 8, 30);
-
-class FakeDesktopWidgetGateway implements DesktopWidgetGateway {
-  int syncCount = 0;
-  int clearCount = 0;
-  String? lastPayloadJson;
-  DesktopWidgetKind? lastPinnedKind;
-  bool pinResult = true;
-  Map<DesktopWidgetKind, int> pinnedCounts = const <DesktopWidgetKind, int>{};
-  Completer<void>? syncGate;
-  final List<String> ops = <String>[];
-
-  @override
-  Future<bool> syncSnapshot(String payloadJson) async {
-    ops.add('sync:start');
-    if (syncGate != null) {
-      await syncGate!.future;
-    }
-    syncCount++;
-    lastPayloadJson = payloadJson;
-    ops.add('sync:end');
-    return true;
-  }
-
-  @override
-  Future<void> clearSnapshot() async {
-    clearCount++;
-    lastPayloadJson = null;
-    ops.add('clear');
-  }
-
-  @override
-  Future<bool> requestPinWidget(DesktopWidgetKind kind) async {
-    lastPinnedKind = kind;
-    return pinResult;
-  }
-
-  @override
-  Future<Map<DesktopWidgetKind, int>> getPinnedCounts() async => pinnedCounts;
-}
 
 AppModel _buildModel({Preferences? preferences}) => AppModel(
   service: ScheduleService(
@@ -206,4 +169,60 @@ void main() {
     expect(gateway.ops, <String>['sync:start', 'sync:end', 'clear']);
     expect(service.lastSnapshot, isNull);
   });
+
+  testWidgets(
+    'MethodChannelDesktopWidgetGateway 隔离实例 livePinnedCounts 并在 dispose 清理反向处理器',
+    (tester) async {
+      const channelName = 'qustschedule/widget_test_isolated';
+      const channel = MethodChannel(channelName);
+      final gwA = MethodChannelDesktopWidgetGateway(channel);
+      final gwB = MethodChannelDesktopWidgetGateway(channel);
+      addTearDown(gwB.dispose);
+
+      await gwA.ensureLivePinnedUpdates();
+      expect(gwA.livePinnedCounts.value, isNull);
+      expect(gwB.livePinnedCounts.value, isNull);
+
+      final encoded = const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('onPinnedCountsChanged', <String, Object?>{
+          'today': 2,
+          'week': 1,
+        }),
+      );
+      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .handlePlatformMessage(channelName, encoded, (_) {});
+
+      expect(gwA.livePinnedCounts.value, <DesktopWidgetKind, int>{
+        DesktopWidgetKind.today: 2,
+        DesktopWidgetKind.week: 1,
+      });
+      expect(gwB.livePinnedCounts.value, isNull);
+
+      // dispose 后注销反向处理器并支持新实例重新挂载。
+      gwA.dispose();
+      await gwB.ensureLivePinnedUpdates();
+      final encoded2 = const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('onPinnedCountsChanged', <String, Object?>{'next': 3}),
+      );
+      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .handlePlatformMessage(channelName, encoded2, (_) {});
+      expect(gwB.livePinnedCounts.value, <DesktopWidgetKind, int>{
+        DesktopWidgetKind.next: 3,
+      });
+
+      // 含 NaN / Infinity 的异常数值条目会被安全跳过，不丢弃同映射内的有效整数计数。
+      final encodedMalformed = const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('onPinnedCountsChanged', <String, Object?>{
+          'today': double.nan,
+          'next': double.infinity,
+          'week': 2,
+        }),
+      );
+      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .handlePlatformMessage(channelName, encodedMalformed, (_) {});
+      expect(gwB.livePinnedCounts.value, <DesktopWidgetKind, int>{
+        DesktopWidgetKind.week: 2,
+      });
+    },
+  );
 }

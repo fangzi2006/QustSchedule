@@ -789,7 +789,7 @@ internal object WeekGridRemoteViewsBuilder {
         if (titleLines in titleNeeded until 12 && titleLines > 0 && titleSingleLineH > 0f) {
             val remaining = availH - usedHeight()
             if (remaining > titleSingleLineH) {
-                titleLines += (remaining / titleSingleLineH).toInt()
+                titleLines = (titleLines + (remaining / titleSingleLineH).toInt()).coerceAtMost(12)
             }
         }
 

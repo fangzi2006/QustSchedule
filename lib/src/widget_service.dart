@@ -8,6 +8,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:zf_academic/zf_academic.dart';
 
 import 'app_model.dart';
@@ -81,7 +82,8 @@ class DesktopWidgetService {
     DesktopWidgetGateway? gateway,
     Duration debounce = const Duration(milliseconds: 300),
     DateTime Function()? now,
-  }) : _gateway = gateway ?? const MethodChannelDesktopWidgetGateway(),
+  }) : _ownsGateway = gateway == null,
+       _gateway = gateway ?? MethodChannelDesktopWidgetGateway(),
        // ignore: prefer_initializing_formals
        _debounce = debounce,
        _nowOverride = now {
@@ -91,6 +93,7 @@ class DesktopWidgetService {
   }
 
   final AppModel model;
+  final bool _ownsGateway;
   final DesktopWidgetGateway _gateway;
   final Duration _debounce;
   final DateTime Function()? _nowOverride;
@@ -242,13 +245,13 @@ class DesktopWidgetService {
   Future<Map<DesktopWidgetKind, int>> getPinnedCounts() =>
       _gateway.getPinnedCounts();
 
-  /// 若底层为原生 MethodChannel，确保已挂载桌面实例变更推送处理器。
-  void ensureLivePinnedUpdates() {
-    final gateway = _gateway;
-    if (gateway is MethodChannelDesktopWidgetGateway) {
-      gateway.ensurePushHandlerInstalled();
-    }
-  }
+  /// 原生广播/Pin 成功回调实时推送的最新桌面实例数量。
+  ValueListenable<Map<DesktopWidgetKind, int>?> get livePinnedCounts =>
+      _gateway.livePinnedCounts;
+
+  /// 确保已挂载桌面实例变更推送处理器。
+  Future<void> ensureLivePinnedUpdates() =>
+      _disposed ? Future<void>.value() : _gateway.ensureLivePinnedUpdates();
 
   void dispose() {
     _disposed = true;
@@ -257,5 +260,11 @@ class DesktopWidgetService {
     model.removeListener(_onChanged);
     model.academicNotifier.removeListener(_onChanged);
     model.prefsNotifier.removeListener(_onChanged);
+    if (_ownsGateway) {
+      final gateway = _gateway;
+      if (gateway is MethodChannelDesktopWidgetGateway) {
+        gateway.dispose();
+      }
+    }
   }
 }
