@@ -10,32 +10,34 @@
 | 认证会话 | `lib/src/state/auth_session_controller.dart` | `AuthSessionController` | `ScheduleService`/`schoolBaseUrl`/`username`/`studentId`/`studentName`/验证码 `Completer`/请求日志 |
 | 课表周历 | `lib/src/state/schedule_controller.dart` | `ScheduleController`, `WeekNotifier` | `Schedule`/`Terms`/`week`/`weekNotifier`/`refreshingNotifier`/校历/调课与冲突缓存 (`_dataRevision`) |
 | 学业数据 | `lib/src/state/academic_controller.dart` | `AcademicController` | `exams`/`grades`/`gradeStats`（引用记忆化）/`isNotEvaluated`/`_academicLoadSeq`/静默同步与变更比对 |
-| 偏好防抖 | `lib/src/state/preferences_controller.dart` | `PreferencesController` | `Preferences` 读写、滑块 300ms 草稿防抖 (`_cellHeightDraft`/`_courseTextScaleDraft`)、启动自动查更 |
+| 偏好防抖 | `lib/src/state/preferences_controller.dart` | `PreferencesController` | `Preferences` 读写、滑块 300ms 草稿防抖（`dispose()` 清理不落盘）、启动自动查更 |
 | 提示气泡 | `lib/src/state/hint_notice_controller.dart` | `HintNoticeController`, `HintScope` | `global`/`schedule`/`academic` 三域提示、`storageNoticeEvent`、`humanizeError` |
-| 课表服务 | `lib/src/schedule_service.dart` | `ScheduleService` | Cookie 优先抓取；`SESSION_EXPIRED` 单 flight 重登 (`_reloginFlight`)、旧 Cookie 回滚、10m/2次熔断 |
+| 课表服务 | `lib/src/schedule_service.dart` | `ScheduleService` | Cookie 优先抓取；`SESSION_EXPIRED` 单 flight 重登 (`_reloginFlight`)、旧 Cookie 回滚、10m/2次熔断、`readSavedCredentials()`/`_fallbackAccountKeys()` |
 | 测试门面 | `lib/src/backends.dart` | `ScheduleBackend`, `ZfBackend`, `defaultBackendFactory` | 收窄 `ZhengfangClient` 供 DI 与单测替换 |
 | 学业服务 | `lib/src/academic_service.dart` | `AcademicService`, `GradeStats` | 抓取/缓存考试与成绩；`notEvaluated` 保留旧成绩；原生 `jd` 加权 GPA |
 | 课表缓存 | `lib/src/schedule_cache.dart` | `CachedSchedule`, `ScheduleCache`, `FileScheduleCache`, `LateScheduleCache` | `zf-schedule-cache.json` (`baseUrl`/`fetchedAt`/`schedule`/`remarks`) |
 | 学业缓存 | `lib/src/academic_cache.dart` | `CachedTermExams`, `ExamCache`, `FileExamCache`, `CachedTermGrades`, `GradesCache`, `FileGradesCache`, `InMemory*`, `Late*` | 按 `termId` 分桶持久化 `zf-exam-cache.json` / `zf-grades-cache.json` (`SafeJsonFile.updateJson`) |
 | 学期筛选 | `lib/src/term_selector_helper.dart` | `parseEnrollmentYear`, `estimateCurrentAcademicYear`, `filterTerms`, `resolveSemesterCode`, `formatTermPrimaryLabel` | 学号推入学年；过滤入学前/未来/短学期 (`xqm=16`)；映射「大一~大五 上/下学期」 |
-| 学校线路 | `lib/src/school.dart` | `SchoolProfile`, `qustProfile`, `qustLines`, `knownSchools`, `presetSchoolUrls`, `defaultSchool`, `schoolLabel`, `sameSchool` | 青科大默认线路 `https://jwglxt.qust.edu.cn/jwglxt` 与 URL 归一化比对 |
-| 作息表 | `lib/src/timetable.dart` | `PeriodGroup`, `SectionTime`, `BigBreak`, `Timetable`, `QuickSetup`, `buildSections`, `activeTimetableAt`, `reconcileSections` | 多套作息表按月日 (`month*100+day`) 跨年循环切换；三段节数逐段对齐 |
-| 校历换算 | `lib/src/term_calendar.dart` | `dayOnly`, `mondayOf`, `estimateTermStart`, `weekOf`, `dateOf`, `termStartFromWeek`, `weekRangeLabel`, `conflictLayout` | 开学日估算/反推、周次互转、同天重叠课程并列槽位 (`index, total`) |
+| 学校线路 | `lib/src/school.dart` | `SchoolProfile`, `qustProfile`, `qustLines`, `knownSchools`, `presetSchoolUrls`, `defaultSchool`, `defaultAcademicPaceHosts`, `schoolLabel`, `sameSchool`, `normalizeSchoolKeyUrl`, `buildAccountKey` | 青科大默认线路、站点降频配置、URL 规范化与凭据键拼接 |
+| 作息表 | `lib/src/timetable.dart` | `PeriodGroup`, `SectionTime`, `BigBreak`, `Timetable`, `QuickSetup`, `buildSections`, `activeTimetableAt`, `reconcileSections`, `sectionOfPeriod`, `sectionStartMinutes`, `sectionEndMinutes` | 多套作息表按月日 (`month*100+day`) 跨年循环切换；三段节数对齐与节次时刻推导 |
+| 校历换算 | `lib/src/term_calendar.dart` | `dayOnly`, `dateAtMinutes`, `mondayOf`, `estimateTermStart`, `weekOf`, `dateOf`, `termStartFromWeek`, `weekRangeLabel`, `conflictLayout` | 开学日估算/反推、周次互转、同天重叠课程并列槽位 (`index, total`) |
 | 按日调课 | `lib/src/reschedule.dart` | `RescheduleRule`, `RescheduleConflict`, `RescheduleWeekView`, `rescheduleWeekView` | 纯渲染层按实例调课叠加，不改原 `Schedule`；冲突时调入课优先 |
 | 地点短名 | `lib/src/course_text.dart` | `roomOnly` | 取空白分隔末段并剥离 `^.*?校区` 前缀 |
-| 轻量富文本 | `lib/src/formatted_text_span.dart` | `FormattedSegmentKind`, `FormattedSegment`, `parseFormattedSegments`, `buildTextSpanFromSegments`, `buildFormattedTextSpan` | 零依赖解析 `**加粗**` 与 `` `行内代码` ``，支持后台 Isolate 预解析 |
+| 轻量分词 | `lib/src/formatted_text.dart` | `FormattedSegmentKind`, `FormattedSegment`, `parseFormattedSegments` | 纯 Dart 解析 `**加粗**` 与 `` `行内代码` ``（供 Isolate 与 `widgets/formatted_text_span.dart` 消费） |
+| 稳定哈希 | `lib/src/stable_hash.dart` | `coursePaletteColorCount`, `fnv1a32`, `fnv1a32Hex`, `courseColorIndex` | 纯 Dart FNV-1a 32 位哈希与 9 色板索引（供主题/提醒/小组件共享） |
 | 路由落稳 | `lib/src/route_settled.dart` | `runInBackground`, `RouteSettledHandle`, `scheduleAfterRouteSettled`, `RouteSettledStateMixin`, `RouteSettledGate` | 入场与后台 Isolate 并行；重子树在非 `offstage` 且 `completed` 时粘性挂载 |
 | 动态版本 | `lib/src/app_version.dart` | `appVersion`, `appVersionFull`, `loadAppVersion` | 从 `pubspec.yaml` 资产解析版本 |
-| 偏好存储 | `lib/src/preferences_repository.dart` | `Preferences`, `preferencesSchema` (15), `presetUpdateProxies` | `app_prefs.json` Schema 15 读写、迁移、`didResetFromCorruption` |
+| 偏好存储 | `lib/src/preferences_repository.dart` | `Preferences`, `preferencesSchema` (15), `defaultUpdateProxyUrl`, `presetUpdateProxies`, `setAppearance` | `app_prefs.json` Schema 15 读写、迁移、合并外观落盘、`didResetFromCorruption` |
 | 安全凭据 | `lib/src/credentials_repository.dart` | `SecureCredentialStore` | `flutter_secure_storage` v11 (Keystore/DPAPI)，SHA-256 键名存账密 |
 | 会话快照 | `lib/src/session_repository.dart` | `SessionRepository`, `FileSessionRepository`, `LateSessionRepository` | `zf-session.json` Cookie 持久化 |
 | 安全 JSON | `lib/src/safe_json_file.dart` | `SafeJsonFile`, `SafeJsonReadResult`, `isolateJsonDecodeThreshold` (16KB) | 路径串行队列、写合并、`.tmp` 原子替换、`.bak` 自愈、`>=16KB` Isolate 解码 |
-| 更新状态机 | `lib/src/updater/update_flow_controller.dart` | `UpdateFlowController`, `UpdateFlowStage` | 全局更新状态机：版本复用、后台下载、SHA-256、Android 权限续装 |
+| 更新状态机 | `lib/src/updater/update_flow_controller.dart` | `UpdateFlowController`, `UpdateFlowStage` | 全局更新状态机：注入 `UpdaterGateway`/`isAndroid`、`_downloadEpoch`/`_isTriggeringInstall` 防竞态、后台下载与权限续装 |
 | 更新服务 | `lib/src/updater/update_service.dart` | `UpdateService`, `CancelToken` | Release 检查、代理轮询、Range 探测、`>=4MB` 3 线程分块与单流降级、旧包清理 |
-| 更新模型 | `lib/src/updater/update_models.dart` | `ReleaseAsset`, `ReleaseInfo`, `UpdateStatus`, `UpdateCheckResult`, `DownloadProgress`, `ProxyTestResult`, `displayProxyName`, `cleanReleaseBody` | Release 解析、CI 表清洗、进度/测速模型 |
-| 安装器 | `lib/src/updater/app_installer.dart` | `AppInstaller` | Android MethodChannel；Windows 便携 `.update_staging` + VBS/CMD + `robocopy` / 安装版静默升级 |
+| 更新模型 | `lib/src/updater/update_models.dart` | `ReleaseAsset`, `ReleaseInfo`, `UpdateStatus`, `UpdateCheckResult`, `DownloadProgress`, `ProxyTestResult`, `UpdateProxyPreset`, `defaultUpdateProxyUrl`, `kPresetUpdateProxyEntries`, `presetUpdateProxies`, `displayProxyName`, `cleanReleaseBody` | Release 解析、预设代理真源、CI 表清洗、进度/测速模型 |
+| 更新网关 | `lib/src/updater/updater_gateway.dart` | `UpdaterGateway`, `MethodChannelUpdaterGateway` | 隔离 `AppInstaller` 通道与 `url_launcher` 外部浏览器调用 |
+| 安装器 | `lib/src/updater/app_installer.dart` | `AppInstaller` | Android MethodChannel (`defaultChannel`/`isAndroid`)；Windows 便携 `.update_staging` + VBS/CMD + `robocopy` / 安装版静默升级 |
 | 版本比对 | `lib/src/updater/version_comparator.dart` | `compareSemanticVersions`, `isVersionNewer` | 支持 `v`/`V`、`+build`、`-alpha/-beta/-rc` |
-| Android 桥 | `android/.../updater/AppUpdaterBridge.kt` | `AppUpdaterBridge` | `com.fangzi.qustschedule/updater`：权限检查/设置页/`FileProvider` 装 APK |
+| Android 桥 | `android/.../updater/AppUpdaterBridge.kt` | `AppUpdaterBridge`, `UpdaterWorker` | `com.fangzi.qustschedule/updater`：`UpdaterWorker` 校验文件/`FileProvider` + `postReply` (`@Volatile disposed`) |
 | Windows 壳 | `windows/runner/*`, `windows/packaging/setup.iss` | `wWinMain`, `FlutterWindow`, `Win32Window` | 单实例 Mutex（30×100ms 退避）、最小 `360×520`、深色标题栏 |
 | 正方协议包 | `packages/zf_academic/lib/*` | `ZhengfangClient`, `AcademicHttpClient`, `CookieStore`, `FileCookieStorage`, `ErrorCode`, `AcademicError` | 纯 Dart 零 Flutter 依赖：RSA 表单登录、验证码、课表/学期/考试/成绩、主机白名单与重定向策略 |
 
@@ -101,6 +103,11 @@ class AppModel extends ChangeNotifier {
   Future<void> calibrateCurrentWeek(int week);
   Future<void> resetCalendar();
   void setAcademicTerm(String termId);
+  Future<UpdateCheckResult> checkForUpdates();
+  Future<ProxyTestResult> testUpdateProxy(String proxyUrl);
+  Future<int> cleanOldUpdateFiles({String? currentVersion, Directory? targetDirectory});
+  Future<bool> openExternalUrl(String rawUrl);
+  Future<void> setAutoCheckUpdate(bool value);
   Future<void> loadAcademicData({String? termId, bool forceRefresh = false, bool showHint = false});
   Future<void> refreshAcademicData({bool showHint = true});
   Future<void> clearAcademicDataForDebug();
@@ -114,12 +121,12 @@ class AppModel extends ChangeNotifier {
 4. `session.restoreSavedSchoolIfNeeded()`（同步 `service.switchSchool`）与 `session.restoreAccount()`（从 `accountOf`/`studentNameOf` 恢复 `_username`/`_studentId`/`_studentName`/`service.accountHint`）。
 5. 并发执行 `session.service.bootstrap()` 与 `scheduleState.scheduleCache.load()`。
 6. **分支 A（`cached != null && sameSchool(cached.baseUrl, schoolBaseUrl)`）**：`_restoreCachedSchedule(cached)` 直达 `ready`（0 延迟）；`Timer(Duration.zero)` 恢复 `academic.restoreCachedData(termId)`；若 `snapshot != null` 且姓名/学号空则 `unawaited(session.syncIdentityQuietly())`；若 `snapshot != null && prefs.autoRefresh && scheduleState.shouldSilentRefresh(cached.fetchedAt)` 则 `unawaited(syncSilently())`；直接返回。
-7. **分支 B（无缓存）**：`snapshot == null` 时查 `credentials.get(session.accountKey())`，有则恢复 `session.username` 并 `_loadSchedule()`，无则置 `needLogin`；`snapshot != null` 直接 `await _loadSchedule()`。
+7. **分支 B（无缓存）**：`snapshot == null` 时调 `session.service.readSavedCredentials()`（含规范化键与兼容键回退），有则恢复 `session.username` 并 `_loadSchedule()`，无则置 `needLogin`；`snapshot != null` 直接 `await _loadSchedule()`。
 
 ### 1.4 五大子控制器契约 (`lib/src/state/*`)
 
 - **`AuthSessionController` (`auth_session_controller.dart`)**：
-  - `accountKey({String? username}) => '$_schoolBaseUrl|${username ?? _username}'`（`ScheduleService._accountKey` 将 `_baseUrl` `.toLowerCase()`，账号回退：`显式 > accountHint > sessionInfo?.username ?? ''`）。
+  - `accountKey({String? username}) => buildAccountKey(_schoolBaseUrl, username ?? _username)`（`ScheduleService._accountKey` 同调 `buildAccountKey(_baseUrl, account)`，账号回退：`显式 > accountHint > sessionInfo?.username ?? ''`）。
   - **空 `username` 兜底**：免登冷启动必须经 `restoreAccount()` 将 `accountOf` 写入 `service.accountHint`，否则重登时 `accountKey` 缺账号导致取不到密码。
   - **改密账号解析 (`_resolveAccountForPasswordChange`)**：`service.sessionInfo?.username` -> `username` -> `service.accountHint` -> `studentId`。
   - **重登验证码挂起**：`handleCaptcha` 建 `_captchaCompleter`（旧未完成先 `complete(null)`）切 `needCaptcha`，`hasPendingReloginCaptcha == true`；`submitCaptcha` 走 `completePendingCaptcha` 唤醒原 `_reloginFlight`。
@@ -134,8 +141,8 @@ class AppModel extends ChangeNotifier {
   - 错误处理：考试 `ErrorCode.notOpen` 静默；成绩 `ErrorCode.notEvaluated` 置 `_isNotEvaluated = true`、保留 `existingGrades` 并写回 `GradesCache`、不写 `_academicError`；其余经 `humanizeError` 写 `_academicError`，若 `sessionExpired`/`invalidCredentials` 置 `_academicNeedsRelogin = true`。
   - `_diffChangeMessage`：原有缓存 (`hasOldExams || hasOldGrades`) 或 `_academicDataClearedForDebug` 且 `!listEquals` 时弹 2s 全局提示（`isAcademicUpdate: true`）。
 - **`PreferencesController` (`preferences_controller.dart`)**：
-  - 300ms 防抖草稿：`setCellHeight` / `setCourseTextScale` 仅更 `_cellHeightDraft` / `_courseTextScaleDraft` 并重置 `_appearanceTimer`，到期或 `flushAppearance()` / `dispose()` 落盘。
-  - `checkAutoUpdate`：`!_hasCheckedAutoUpdate && autoCheckUpdate && !_disposed` 时延迟 `initialDelay = 1s` 执行；遇 `UpdateStatus.networkError`/异常重试 2 次（间隔 2s）；`hasUpdate` 调 `_updateFlow.setAvailableUpdate` + `onHasUpdate`。
+  - 300ms 防抖草稿：`setCellHeight` / `setCourseTextScale` 仅更 `_cellHeightDraft` / `_courseTextScaleDraft` 并重置 `_appearanceTimer`，到期或 `flushAppearance()` 合并调 `Preferences.setAppearance()` 落盘；`dispose()` 置 `_disposed = true`、取消定时器并清空草稿（**不触发落盘**）。
+  - `checkAutoUpdate`：`!_hasCheckedAutoUpdate && autoCheckUpdate && !_disposed` 时延迟 `initialDelay = 1s` 执行（`updateService == null` 时委托 `_updateFlow.checkForUpdates`）；遇 `UpdateStatus.networkError`/异常重试 2 次（间隔 2s）；`hasUpdate` 调 `_updateFlow.setAvailableUpdate` + `onHasUpdate`。
 - **`HintNoticeController` (`hint_notice_controller.dart`)**：
   - 优先级 `global > schedule > academic`；`isGlobalPopupActive`：`AppStatus` 为 `booting`/`loading`/`signingIn`/`failed` 或 `_globalHint.isNotEmpty`。
   - `humanizeError(AcademicError)` 映射：
@@ -182,7 +189,7 @@ class AppModel extends ChangeNotifier {
 
 - **常量**：`autoLoginLimit = 2`，`autoLoginWindow = Duration(minutes: 10)`，`requestTimeoutMs = 10000`，`_requestLogLimit = 120`，`stageRelogin = 'relogin'`，`stageFetchingSchedule = 'fetching_schedule'`。
 - **自动重登与熔断 (`_loginWithSavedCredentials`)**：
-  1. 用 `_accountKey()` (`baseUrl.toLowerCase()|account`) 读凭据；无则抛 `SESSION_EXPIRED`（未保存密码）。
+  1. 调 `readSavedCredentials()`（先查规范化 `_accountKey()` `buildAccountKey(_baseUrl, account)`，未命中再遍历 `_fallbackAccountKeys()` 兼容 `http↔https` 与历史末尾 `/` 键，均在 `signOut()` 同步清理）；无则抛 `SESSION_EXPIRED`（未保存密码）。
   2. `_breakerOpen || !_autoLoginAllowed()`（10m 内有效失败 >= 2）置 `_breakerOpen = true` 并抛 `SESSION_EXPIRED`（自动登录次数过多）。
   3. 备份 `rollback = client.exportCookies()`（`client.login()` 入口会 `_cookies.invalidate()`）。
   4. `client.login(saved)` 错误分类：
@@ -213,7 +220,7 @@ class AppModel extends ChangeNotifier {
 - **`parseEnrollmentYear(studentId, {now})`**：合法区间 `[currentYear - 15, currentYear + 1]`；取首个连续数字串 `digits`（长 `<2` 或 `==3` 返 `null`）：① 8 位且 `19`/`20` 开头 -> 前 4 位；② 4 位 -> 直接取；③ 10 位本科号 -> 前 2 位 `y2 >= 80 ? 1900+y2 : 2000+y2`；④ 其他 `>=4` 位先试前 4 位再试前 2 位。
 - **`filterTerms`**：① 无条件保留/补入 `currentTermId`；② 过滤 `termSemester > 2` (`xqm=16`)；③ 过滤 `< resolvedEnrollmentYear`；④ 过滤 `> maxYear/maxSemester`；⑤ 输入空且已知入学年时逆序生成 `[resolvedEnrollmentYear..maxYear]`。
 - **`formatTermPrimaryLabel`**：`offset = termYear - resolvedEnrollmentYear`，`0..4` 映射 `大一..大五 + 上/下/第N学期`，否则 `'$termYear-${termYear+1} 第$semester学期'`。
-- **`school.dart`**：`defaultSchool`/`qustProfile`/`qustLines`/`presetSchoolUrls` 仅保留外网可登默认线路 `https://jwglxt.qust.edu.cn/jwglxt`（`青岛科技大学`）。`sameSchool(a, b)`：trim + 小写 + 剥末尾 `/` + 剥 `^https?://` 比对。
+- **`school.dart`**：`defaultSchool`/`qustProfile`/`qustLines`/`presetSchoolUrls` 仅保留外网可登默认线路 `https://jwglxt.qust.edu.cn/jwglxt`（`青岛科技大学`）；`defaultAcademicPaceHosts = {'jw.cqiivc.com': 1200}` 经 `ScheduleService.paceHosts` 注入协议包。`normalizeSchoolKeyUrl(baseUrl)` 剥首尾空白、转小写并去除末尾 `/`；`buildAccountKey(baseUrl, username)` 构造规范化凭据键；`sameSchool(a, b)` 基于 `normalizeSchoolKeyUrl()` 再剥 `^https?://` 比对。
 
 ---
 
@@ -275,8 +282,8 @@ class AppModel extends ChangeNotifier {
 | `reminderLeadMinutes` | `int` | `10` (`defaultReminderLeadMinutes`) | `clampReminderLead`: `1..60` | Schema 9：提前提醒分钟 |
 | `reminderStyle` | `String` | `'banner'` (`ReminderStyle.banner`) | `ReminderStyle.parse`: `'banner'`\|`'fluid'` | Schema 10：横幅 / 流体云 |
 | `reminderFluidUntilEnd` | `bool` | `false` (`defaultReminderFluidUntilEnd`) | `bool` | Schema 11：流体云持续至下课 |
-| `selectedUpdateProxy` | `String` | `'https://gh-proxy.org'` (`defaultUpdateProxyUrl`) | 兼容旧键 `updateProxyUrl`；`''` 为直连 | Schema 12：当前更新代理 |
-| `customUpdateProxies` | `List<String>` | `[]` | 过滤空串与 `presetUpdateProxies` | Schema 12：自定义代理（删当前选中回退默认） |
+| `selectedUpdateProxy` | `String` | `'https://gh-proxy.org'` (`defaultUpdateProxyUrl`) | 兼容旧键 `updateProxyUrl`；`''` 为直连（真源归 `update_models.dart`，由 `preferences_repository.dart` 再导出） | Schema 12：当前更新代理 |
+| `customUpdateProxies` | `List<String>` | `[]` | 过滤空串与 `presetUpdateProxies`（`update_models.dart`） | Schema 12：自定义代理（删当前选中回退默认） |
 | `autoCheckUpdate` | `bool` | `true` (`defaultAutoCheckUpdate`) | `bool` | Schema 12：启动自动查更 |
 | `widgetConfig` | `Map<String,dynamic>` | `DesktopWidgetConfigSet.defaults()` | 按 `DesktopWidgetKind` (`today`/`week`/`next`) 存储 | Schema 14：桌面小组件样式（见 `WIDGET.md`） |
 | `timetables` | `List<Map>` | `[defaultTimetable(), defaultSummerTimetable()]` | `_withBuiltinSummerTable` 自动补春夏表；上限 20，传空抛 `ArgumentError` | 作息时间表列表（至少 1 张） |
@@ -297,24 +304,26 @@ class AppModel extends ChangeNotifier {
 
 ## 6. 应用内更新与跨平台安装器
 
-### 6.1 `UpdateFlowController` (`lib/src/updater/update_flow_controller.dart`)
+### 6.1 `UpdateFlowController` (`lib/src/updater/update_flow_controller.dart`) & `UpdaterGateway`
 
+- **依赖注入与对外能力**：构造注入 `UpdaterGateway? gateway`（默认 `MethodChannelUpdaterGateway`）与 `@visibleForTesting bool Function()? isAndroid`，并向 `AppModel`/UI 暴露 `checkForUpdates`、`testProxy`、`cleanOldUpdateFiles`、`openExternalUrl`（页面层禁直建 `UpdateService()` 或 `MethodChannel`）。
 - `UpdateFlowStage`：`idle` -> `available` -> `downloading` -> `readyToInstall` / `error`。
 - 事件计数器：`backgroundReadyEvent` / `backgroundErrorEvent`（`!isDialogOpen` 后台终态时 `++`）；`requestCloseEvent`（`executeInstall()` 成功且 `isDialogOpen` 时 `++`）。
 - 同版本保持：`setAvailableUpdate` 若 `release.version` + `targetAsset.name` 相同且处于 `downloading`/`readyToInstall`，保留进度/文件不重置。
-- 下载与安装：已有 `_downloadedFile` 直接 `readyToInstall`；下载前经 `_service.fetchExpectedSha256` 拉取 `SHA256SUMS`（需 `release != null && _allowAvailableFallback`）。**Android**：下载完查 `canInstallPackages()` 置 `_needsPermission`，弹窗打开且已授权立即 `executeInstall()`，未授权则切回前台经 `refreshInstallPermissionAndAutoInstall()` 续装。**Windows**：进 `readyToInstall` 绝不自动退出，须用户点击触发 `executeInstall()`。
+- **竞态与权限防线**：`startDownload()` 在 `_isTriggeringInstall == true` 时直接拦截；`cancelDownload()` 重置 `_isTriggeringInstall = false` 并递增 `_downloadEpoch`；已有 `_downloadedFile` 直接 `readyToInstall`；下载前经 `_service.fetchExpectedSha256` 拉取 `SHA256SUMS`（需 `release != null && _allowAvailableFallback`）。**Android**：下载完查 `_gateway.canRequestPackageInstalls()`（异常按 `false` 处理）置 `_needsPermission`，弹窗打开且已授权立即 `executeInstall()`，未授权则切回前台经 `refreshInstallPermissionAndAutoInstall()` 续装；`executeInstall()` 的 `catch`/`finally` 严格校验 `epoch == _downloadEpoch && !_disposed` 后才写状态。**Windows**：进 `readyToInstall` 绝不自动退出，须用户点击触发 `executeInstall()`。
 
-### 6.2 `UpdateService` (`lib/src/updater/update_service.dart`)
+### 6.2 `UpdateService` (`lib/src/updater/update_service.dart`) & `update_models.dart`
 
 - 常量：`repoOwner = 'fangzi2006'`，`repoName = 'QustSchedule'`；`probeTimeout = 5s`，`apiTimeout = 6s`，`downloadConnectTimeout = 15s`，`downloadIdleTimeout = 30s`；`maxConcurrentChunks = 3`，`minChunkingBytes = 4 * 1024 * 1024`；`browserUserAgent`（Chrome 130 + `QustSchedule/App` 防限流）。
-- 预设代理 (`presetUpdateProxies`)：① `'https://gh-proxy.org'` (`主加速节点(默认推荐)`)；② `'https://axisnow.gh-proxy.org'` (`副加速节点`)；③ `'https://gh-proxy.com'` (`加速主站（最稳定但是部分网络环境下速度较慢）`)。`_buildCandidates` 构造 `[selectedProxy, ...其余 backupProxies, '']`（末项直连）。
+- 预设代理真源（`update_models.dart` `kPresetUpdateProxyEntries` / `presetUpdateProxies`）：① `'https://gh-proxy.org'` (`主加速节点(默认推荐)`)；② `'https://axisnow.gh-proxy.org'` (`副加速节点`)；③ `'https://gh-proxy.com'` (`加速主站（最稳定但是部分网络环境下速度较慢）`)。`displayProxyName()` 按规范 HTTPS 根地址（无端口/无路径/无用户info）精确匹配 `matchHost`。`_buildCandidates` 构造 `[selectedProxy, ...其余 backupProxies, '']`（末项直连）。
 - 产物匹配 (`findTargetAsset` & `isWindowsPortable`)：`isWindowsPortable()` 检查 `File(Platform.resolvedExecutable).parent` 下无 `unins000.exe` 为 `true`。Windows 便携：`windows-x64` `.zip` -> 任意 `.zip` -> `.exe`/`.zip`；Windows 安装：`setup` `.exe` -> 任意 `.exe` -> `.exe`/`.zip`；Android：`Abi.current()` (`arm64-v8a`/`armeabi-v7a`) 匹配 `archKey` `.apk` -> `arm64` `.apk` -> 任意 `.apk`。
 - `downloadAssetWithFallback`：① 本地同名文件 `length == asset.size > 0` 且 SHA-256 通过直接复用；② Range `bytes=0-0` 探测：`206` 且 `totalBytes >= 4MB` 走 `_downloadMultiChunk`（3 切片 `.part0`~`.part2`，独立 30s 空闲看门狗与边界校验，350ms 测速 EMA `0.7*instant + 0.3*prev`，非取消失败同节点回退 `_downloadSingleUrl`，完后流式合并删片）；`200` 零额外握手直接将 `probeRes` 传 `_downloadSingleStream`；③ 落盘后若 `expectedSha256` 非空校验不通过删文件抛 `StateError`。
 - `cleanOldUpdateFiles`：查更启动时异步清理 `QustSchedule_*.part*`、版本 `<= currentVersion` 旧包及 `AppInstaller.cleanLegacyUpdaterScriptAsync`（残余 `.cmd`/`.vbs`/`.update_staging`）。
 
 ### 6.3 `AppInstaller` & `AppUpdaterBridge.kt`
 
-- **Android MethodChannel**：`"com.fangzi.qustschedule/updater"`
+- **Android MethodChannel**：`"com.fangzi.qustschedule/updater"`（`AppInstaller.defaultChannel`，支持 `@visibleForTesting bool? isAndroid`，仅捕获 `MissingPluginException`/`PlatformException`）。
+- **`AppUpdaterBridge.kt` 线程契约**：`installApk` 经 `UpdaterWorker`（`"qust-updater-worker"` 单线程池）异步校验 `File.exists()` 与 `FileProvider.getUriForFile`，`appContext` + `@Volatile disposed` + `postReply` 回主线程 `startActivity`（防 Flutter 3.29+ 主线程 I/O 阻塞与分离后空回调）。
 
 | Method | 参数 | 返回 / 错误码 | 原生行为 (`AppUpdaterBridge.kt`) |
 | :--- | :--- | :--- | :--- |
@@ -344,9 +353,9 @@ class AppModel extends ChangeNotifier {
 
 ## 8. `packages/zf_academic` 协议层
 
-### 8.1 双入口与 `ZfEndpoints` (`types.dart`)
+### 8.1 双入口、最小导出与 `ZfEndpoints` (`types.dart`)
 
-- `package:zf_academic/zf_academic.dart`：100% 纯 Dart（无 `dart:io`/Flutter）。
+- `package:zf_academic/zf_academic.dart`：100% 纯 Dart（无 `dart:io`/Flutter），仅经 8 个 `show` 子句收窄导出 **43 项公开符号**（禁暴露 `Page` 及内部 HTML/RSA/HTTP 工具）；`example/secure_storage_flutter.dart` 对齐 `flutter_secure_storage` v11。
 - `package:zf_academic/zf_academic_io.dart`：额外导出 `FileCookieStorage`、`DartIoTransport`、`vmZhengfangClient(ZfClientConfig, {DartIoTransport?})`。
 
 | 字段 | 默认值 | `qustZfEndpoints` | 用途 |
@@ -366,20 +375,22 @@ class AppModel extends ChangeNotifier {
 
 ### 8.2 `ZhengfangClient` (`zhengfang_client.dart`)
 
-1. **表单登录 (`login` -> `_loginViaForm` -> `_submitFormLogin`)**：
+1. **生命周期与取消保护**：`close()` 幂等置 `_closed = true`、清空 `_username`/`_csrfTokenLogout`/`last*RawBody`/`last*Rows` 并调用 `_http.close()`；`dispose() => close()`；每个公开请求入口及关键 `await` 后调用 `assertActive()`，关闭后统一抛 `ErrorCode.cancelled`。
+2. **表单登录 (`login` -> `_loginViaForm` -> `_submitFormLogin`)**：
    - 入口 `_cookies.invalidate()` 递增 `generation`；探测 `/sso/zfiotlogin` (`followRedirects: false`)，遇 CAS 跳抛 `ErrorCode.unsupported`。
    - GET 登录页提 `input[type=hidden]`（缺 `csrftoken` 先 `inspectResponse` 否则 `PAGE_CHANGED`）、`mmsfjm`（须唯一且为 `'0'`/`'1'` 否则 `PAGE_CHANGED`）、`csrfTokenLogout`。
    - `detectCaptcha` 扫 `RANDOMCODE`/`yzm`/`authcode`/`captcha`：命中存 `FormPendingLogin`（`_pendingTtlMs = 300000` 5m，绑 `generation`），拉图经 `sniffMimeType` 验 PNG/GIF/JPEG/BMP/WEBP 魔数返 `CaptchaState`。
    - `mmsfjm == '1'` 时每次针对新 `JSESSIONID` 实时 GET `publicKeyPath`（**禁跨登录缓存 RSA 公钥**），`zfFormEncryptPassword` 执行 `RSA/ECB/PKCS1Padding` + base64。
    - 先 POST `/xtgl/login_logoutAccount.html` (`csrfTokenLogout`，忽略异常)；POST `login_slogin.html?time=<ms>` 用 `postPairs` 发双同名 `('mm', mm)`（`#mm` + `#hidMm`）。
    - 仍为 `isLoginPage` 时 `_classifyLoginFailure` 区分 `invalidCredentials` / `captchaRequired`（`submitCaptcha` 错码自动 `refreshCaptcha()`）；成功调 `_readIdentity()` 返 `AuthenticatedState`。
-2. **三态会话 (`checkSession()`)**：返 `SessionState(status, studentId, studentName)`：`authenticated`（读到身份或已登录词）/ `expired`（无 Cookie、`SESSION_EXPIRED` 或 `isLoginPage`）/ `unknown`（非 2xx 或无特征非登录页，**绝不当过期触发重登**）。
-3. **课表路由发现 (`_discoverScheduleRoute`)**：遇 `"没有访问权限"`/`"无访问权限"` (`isPermissionDenied`) 查 `/xtgl/index_initMenu.html` 扫 `clickMenu('N...', '/kbcx/...', ...)` 提取 `gnmkdm`/路径重试。
-4. **成绩查询 (`fetchGrades`)**：先 `listRowsOrEmpty(body, ['items','data','rows'])`，**`rows.isNotEmpty` 直接返回**；仅 `rows.isEmpty` 时查 `messageOf` 含 `'评价'`/`'评教'` 或正文含 `'教学质量评价'`/`'请先评教'` 抛 `ErrorCode.notEvaluated`。
+3. **三态会话 (`checkSession()`)**：返 `SessionState(status, studentId, studentName)`：`authenticated`（读到身份或已登录词）/ `expired`（无 Cookie、`SESSION_EXPIRED` 或 `isLoginPage`）/ `unknown`（非 2xx 或无特征非登录页，**绝不当过期触发重登**）。
+4. **课表路由发现 (`_discoverScheduleRoute`)**：遇 `"没有访问权限"`/`"无访问权限"` (`isPermissionDenied`) 查 `/xtgl/index_initMenu.html` 扫 `clickMenu('N...', '/kbcx/...', ...)` 提取 `gnmkdm`/路径重试；`fetchTerms()` 每次刷新 `lastTermsRawBody`。
+5. **成绩查询 (`fetchGrades`)**：先 `listRowsOrEmpty(body, ['items','data','rows'])`，**`rows.isNotEmpty` 直接返回**；仅 `rows.isEmpty` 时查 `messageOf` 含 `'评价'`/`'评教'` 或正文含 `'教学质量评价'`/`'请先评教'` 抛 `ErrorCode.notEvaluated`；`listRows()`/`requireQueryPage()` 与 `changed(..., httpStatus)` 透传真实 HTTP 状态码。
 
 ### 8.3 `AcademicHttpClient` & `respond.dart`
 
 - `DartIoTransport` 固定 `followRedirects = false`，客户端手动逐跳（`_defaultMaxRedirects = 12`），每跳 `_ensureAllowed` 校白名单并收 `Set-Cookie`。
+- 站点降频表由 `ZfClientConfig.paceHosts` 注入，客户端经 `_paceHostKey()`/`_buildPaceHosts()` 归一化，内部不硬编码学校域名；`close()` 幂等置 `_closed = true` 并调用 `_assertActive()`（触发 `ErrorCode.cancelled`）。
 - `_upgradeDowngrade`：同主机默认 80 端口 `http` 302 自动升级回 `https`（沿用原端口）。
 - `_looksLikeAuthRedirect`：302 到白名单外 `cas.`/`sso.`/`auth.`/`idp.` 或含 `service=`/`ticket=` 直接转 `ErrorCode.sessionExpired`（不访问外域）。
 - `_reclassifyUntrustedRedirect`：非白名单拦截跳发最多 2 跳无 Cookie 纯 GET 探测，重分类为 `accessForbidden` (403) 或 `serverError` (5xx)。

@@ -9,9 +9,9 @@
 
 | 文件 | 核心类 / 函数 | 职责与关键符号 |
 | --- | --- | --- |
-| `lib/src/reminder_planner.dart` | `ReminderStyle`, `CourseReminderEvent`, `ReminderPlan`, `planCourseReminders` | 纯函数规划（未来 14 天毫秒事件 + FNV-1a）：`reminderPayloadVersion=1`, `reminderHorizonDays=14`, `reminderMaxEvents=120`, `reminderMinLeadMinutes=1`, `reminderMaxLeadMinutes=60`, `defaultReminderLeadMinutes=10`, `reminderLeadOptions=[5,10,15,20,30]`, `clampReminderLead()`, `reminderEventId()`, `reminderFingerprint()` |
-| `lib/src/reminder_gateway.dart` | `ReminderGateway`, `MethodChannelReminderGateway`, `ReminderSyncResult`, `ReminderRuntimeStatus` | `MethodChannel('qustschedule/reminder')` 抽象（桌面静默吞 `MissingPluginException`）：`sync`, `cancel`, `status`, `requestNotificationPermission`, `openNotificationSettings`, `openExactAlarmSettings`, `openBatterySettings`, `openAutostartSettings`, `sendTestReminder`, `previewReminder`, `stopFluid`, `showToast` |
-| `lib/src/reminder_service.dart` | `ReminderService` | 监听 `AppModel`（冷启动保护/300ms 防抖/指纹去重/单飞队列）：`syncNow({force})`, `buildPlan()`, `cancelAll()`, `refreshStatus()`, `lastPlan`, `lastResult`, `lastStatus`, `_syncInFlight`, `_resyncQueued`, `_resyncForceQueued`, `_syncEpoch`, `_cancelled` |
+| `lib/src/reminder_planner.dart` | `ReminderStyle`, `CourseReminderEvent`, `ReminderPlan`, `planCourseReminders` | 纯函数规划（未来 14 天毫秒事件，FNV-1a 委托 `stable_hash.dart`）：`reminderPayloadVersion=1`, `reminderHorizonDays=14`, `reminderMaxEvents=120`, `reminderMinLeadMinutes=1`, `reminderMaxLeadMinutes=60`, `defaultReminderLeadMinutes=10`, `reminderLeadOptions=[5,10,15,20,30]`, `clampReminderLead()`, `reminderEventId()`, `reminderFingerprint()` |
+| `lib/src/reminder_gateway.dart` | `ReminderGateway`, `MethodChannelReminderGateway`, `ReminderSyncResult`, `ReminderRuntimeStatus` | `MethodChannel('qustschedule/reminder')` 抽象（桌面静默吞 `MissingPluginException`）：`sync`, `cancel`, `status`（含 `dirty`、`unavailable()`、`==`/`hashCode`）, `requestNotificationPermission`, `openNotificationSettings`, `openExactAlarmSettings`, `openBatterySettings`, `openAutostartSettings`, `sendTestReminder`, `previewReminder`（`untilEnd` 保留兼容）, `stopFluid`, `showToast` |
+| `lib/src/reminder_service.dart` | `ReminderService` | 监听 `AppModel` + `prefsNotifier`（冷启动保护/300ms 防抖/指纹去重/单飞队列）：`syncNow({force})`, `buildPlan()`, `cancelAll()`（串行等待 `_syncInFlight`）, `refreshStatus()`, `lastPlan`, `lastResult`, `lastStatus`, `_syncInFlight`, `_cancelInFlight`, `_queuedSyncCompleter`, `_postCancelSyncCompleter`, `_syncEpoch`, `_cancelled` |
 | `lib/pages/reminder_page.dart` | `ReminderPage`, `_ReminderSettingsCard`, `_PermissionsCard`, `_DiagnosticsCard`, `_LeadOptionPill` | 三卡隔离、`RouteSettledStateMixin` 并行状态查询、`_leadDraft` & `_queuedLeadMinutes`：`_statusNotifier`, `_statusEpoch`, `_pendingStatus`, `_toggleReminder()`, `_commitLead()`, `_toggleFluid()`, `_stopFluid()`, `_resync()`, `_preview()`, `_testIn5s()`, `_testInOneMinute()` |
 | `lib/pages/settings_page.dart` | `SettingsPage`, `_ReminderAndWidgetCard` | 「提醒与小组件」入口及电池优化/精确闹钟/自启动三项权限：`_openBattery()`, `_openExactAlarm()`, `_openAutostart()`, `_confirmSignOut()`（登出调 `reminders?.cancelAll()`） |
 | `lib/widgets/reminder_permission_tile.dart` | `ReminderPermissionTile`, `showReminderGuideToast` | 三态权限行（`ok: true/false/null`）与跨进程系统 Toast 引导 |
@@ -23,16 +23,16 @@
 | 文件 | 核心类 / 单例 | 职责与关键符号 |
 | --- | --- | --- |
 | `kotlin/.../reminder/ReminderWorker.kt` | `ReminderWorker` (`internal object`) | 单线程执行器（`"qust-reminder-worker"`）与 `goAsync()` 封装：`execute()`, `runBroadcastAsync(receiver, tag, block)` |
-| `kotlin/.../reminder/ReminderBridge.kt` | `ReminderBridge` | `CHANNEL="qustschedule/reminder"` 唯一 Handler；重 I/O 派发 `ReminderWorker`，主线程回调：`REQUEST_NOTIFICATION=4501`, `attach()`, `dispose()`, `onMethodCall()`, `onRequestPermissionsResult()` |
+| `kotlin/.../reminder/ReminderBridge.kt` | `ReminderBridge` | `CHANNEL="qustschedule/reminder"` 唯一 Handler；缓存 `appContext` + `@Volatile disposed` + `postReply`（`toast` 同走 `!disposed`），重 I/O 派发 `ReminderWorker`：`REQUEST_NOTIFICATION=4501`, `attach()`, `dispose()`, `onMethodCall()`, `onRequestPermissionsResult()` |
 | `kotlin/.../reminder/ReminderPayload.kt` | `ReminderPayload`, `ReminderEvent`, `ReminderPayloadException` | 严格 JSON 校验（单条违规即整体拒绝）：`VERSION=1`, `STYLE_BANNER="banner"`, `STYLE_FLUID="fluid"`, `MAX_EVENTS=200`, `MAX_LEAD_MINUTES=180`, `MAX_PERIOD=30`, `parse(json)` |
 | `kotlin/.../reminder/ReminderStore.kt` | `ReminderStore` | `SharedPreferences("reminder_store")` 同步持久化（全 `.commit()`）：`PREFS="reminder_store"`, `savePayload()`, `loadPayload()`, `alarmCodes()`, `setAlarmCodes()`, `removeAlarmCode()`, `markDirty()`, `clearDirty()`, `clear()` |
-| `kotlin/.../reminder/ReminderScheduler.kt` | `ReminderScheduler`, `ReminderSyncOutcome` | 核心排程器：`LOCK`, `SYSTEM_ALARM_WINDOW_DAYS=10L`, `MIN_LEAD_MS=1000L`, `RC_DAILY_RESYNC=2001`, `RC_TEST=2002`, `sync()`, `cancelAll()`, `rescheduleFromStore()`, `topUpWindowFromStore()`, `scheduleTest()`, `status()` |
+| `kotlin/.../reminder/ReminderScheduler.kt` | `ReminderScheduler`, `ReminderSyncOutcome` | 核心排程器：`LOCK`, `SYSTEM_ALARM_WINDOW_DAYS=10L`, `MIN_LEAD_MS=1000L`, `MIN_EVENT_REQUEST_CODE=10_000`, `RC_DAILY_RESYNC=2001`, `RC_TEST=2002`, `sync()`, `cancelAll()`, `rescheduleFromStore()`, `topUpWindowFromStore()`, `scheduleTest()`, `status()` |
 | `kotlin/.../reminder/ReminderReceiver.kt` | `ReminderReceiver` | 闹钟入口（三重校验 + 流体云失败降级横幅 + 补齐窗口）：`ACTION_REMIND`, `ACTION_TEST`, `ACTION_DISMISS`, `ACTION_FLUID_STOP`, `TEST_LEAD_MINUTES=10`, `handleRemind()`, `handleTest()` |
 | `kotlin/.../reminder/ReminderDailyResyncReceiver.kt` | `ReminderDailyResyncReceiver` | 每日 00:05 自愈：`ACTION_RESYNC="com.fangzi.qustschedule.action.DAILY_RESYNC"` |
 | `kotlin/.../reminder/ReminderRestoreReceiver.kt` | `ReminderRestoreReceiver` | 系统事件恢复：`SUPPORTED_ACTIONS`（5 项系统广播） |
 | `kotlin/.../reminder/ReminderNotifier.kt` | `ReminderNotifier` (`object`) | 横幅通知（ID `2000`）：`CHANNEL_ID="course_reminder_v1"`, `NOTIFY_ID=2000`, `FLUID_NOTIFY_ID=2001`, `REQUEST_CONTENT=4402`, `show()`, `cancelBanner()`, `ensureAllChannels()`, `ensureHighAlertChannel()`, `bodyText()` |
-| `kotlin/.../reminder/ReminderFluidRenderer.kt` | `ReminderFluidRenderer`, `FluidCardState` | 流体云通知构建：`CHANNEL_FLUID="course_fluid_v1"`, `REQUEST_CONTENT=4403`, `build(context, state)`, `FluidCardState.detailText()` |
-| `kotlin/.../reminder/ReminderFluidService.kt` | `ReminderFluidService` (`Service`) | `specialUse` 前台服务（ID `2001`，三重自停）：`ACTION_START`, `ACTION_STOP`, `RC_FLUID_STOP=2003`, `casting`(`@Volatile`), `start()`, `stop()`, `armStopAlarm()`, `disarmStopAlarm()` |
+| `kotlin/.../reminder/ReminderFluidRenderer.kt` | `ReminderFluidRenderer`, `FluidCardState` | 流体云通知构建（读 `state.stopAtMs = startMs`）：`CHANNEL_FLUID="course_fluid_v1"`, `REQUEST_CONTENT=4403`, `build(context, state)`, `FluidCardState.detailText()` |
+| `kotlin/.../reminder/ReminderFluidService.kt` | `ReminderFluidService` (`Service`) | `specialUse` 前台服务（ID `2001`，读 `state.stopAtMs = startMs` 三重自停）：`ACTION_START`, `ACTION_STOP`, `RC_FLUID_STOP=2003`, `casting`(`@Volatile`), `start()`, `stop()`, `armStopAlarm()`, `disarmStopAlarm()` |
 | `kotlin/.../reminder/ReminderSamples.kt` | `ReminderSamples` (`object`) | 预览/测试示例源：`NAME="高等数学（示例）"`, `TEACHER="张老师"`, `ROOM="3教201"`, `CLASS_MINUTES=95L`, `event(leadMinutes)` |
 | `kotlin/.../reminder/ReminderPermissions.kt` | `ReminderPermissions` (`object`) | 权限检测与 15 项 OEM 自启动探测/缓存：`hasNotificationPermission()`, `notificationsEnabled()`, `canScheduleExactAlarms()`, `isIgnoringBatteryOptimizations()`, `hasAutostartSettings()`, `open*Settings()` |
 | `kotlin/.../MainActivity.kt` | `MainActivity` | 唯一挂载 `reminderBridge`，转发 `onRequestPermissionsResult`，`onDestroy` 释放 |
@@ -122,9 +122,9 @@ SettingsPage(_ReminderAndWidgetCard) -> ReminderPage(_ReminderSettingsCard / _Pe
 | `openBatterySettings` | `null` | 主线程 | `null`（优先 `ACTION_APPLICATION_DETAILS_SETTINGS`，退 `ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS`） | — | `Future<void>` |
 | `openAutostartSettings` | `null` | 主线程 | `Boolean`（`true`=打开厂商页，`false`=退 `ACTION_SETTINGS`/应用详情） | — | `Future<bool>` |
 | `testReminder` | `Map{style, delaySeconds}` | `ReminderWorker` | `Long`（触发毫秒 `epoch`；`delaySeconds` 夹取 `5..3600`） | `TEST_FAILED` | `epoch != null && epoch > 0` 返 `bool` |
-| `previewReminder` | `Map{style, leadMinutes, untilEnd}` | 主线程 | `Boolean`（用 `ReminderSamples.event(lead)` 立即展示，不挂闹钟/不进账本） | — | `Future<bool>` |
+| `previewReminder` | `Map{style, leadMinutes, untilEnd}` | 主线程 | `Boolean`（`untilEnd` 保留兼容；用 `ReminderSamples.event(lead)` 立即展示，不挂闹钟/不进账本） | — | `Future<bool>` |
 | `stopFluid` | `null` | 主线程 | `null`（`ReminderFluidService.stop`：停服务 + 撤 `2001`/`2003`） | — | `Future<void>` |
-| `toast` | `Map{message, long}` | 主线程 `mainHandler.post` | `null`（系统 `Toast.makeText`，跨进程浮于系统设置页上） | — | `showToast(message, {longDuration})` |
+| `toast` | `Map{message, long}` | 主线程 `postReply` | `null`（`!disposed` 校验后用 `appContext` 弹系统 `Toast.makeText`，不捕获 `Activity`） | — | `showToast(message, {longDuration})` |
 
 ### 5.2 `status` 字段映射（`ReminderRuntimeStatus`）
 
@@ -192,7 +192,7 @@ SettingsPage(_ReminderAndWidgetCard) -> ReminderPage(_ReminderSettingsCard / _Pe
 | `RC_FLUID_STOP` | `ReminderFluidService` | `2003` | 流体云开课时刻 `startMs` 收起兜底闹钟 requestCode |
 | `REQUEST_CONTENT` | `ReminderNotifier` / `ReminderFluidRenderer` | `4402` / `4403` | 点通知回 `MainActivity`（`FLAG_ACTIVITY_SINGLE_TOP`） |
 | `REQUEST_NOTIFICATION` | `ReminderBridge` | `4501` | Android 13+ `POST_NOTIFICATIONS` 请求码 |
-| `requestCodeFor(id)` | `ReminderScheduler` | `(id.hashCode() and 0x3fffffff).let { if (it==0) 1 else it }` | 课程闹钟槽位（`1..0x3FFFFFFF`，高两位 `00`） |
+| `requestCodeFor(id)` | `ReminderScheduler` | `raw = id.hashCode() and 0x3fffffff; if (raw < 10_000) raw + 10_000 else raw` | 课程闹钟槽位（`10_000..0x3FFFFFFF`，保留 `0..9999` 给固定槽位，高两位 `00`） |
 | `dismissCodeFor(id)` | `ReminderScheduler` | `requestCodeFor(id) or 0x40000000` | 旧版开课撤销槽位（次高位 `1`），仅 `arm()`/`cancel()` 清理兼容 |
 
 ### 7.2 Intent Action 与 Extras
@@ -226,7 +226,7 @@ SettingsPage(_ReminderAndWidgetCard) -> ReminderPage(_ReminderSettingsCard / _Pe
 | ID 与互斥 | `NOTIFY_ID=2000`；发前调 `ReminderFluidService.stop(context)` | `FLUID_NOTIFY_ID=2001`；`startForeground` 前调 `ReminderNotifier.cancelBanner(this)` |
 | 排版 | `ContentTitle`: `name.ifEmpty{"上课提醒"}`；`ContentText` & `BigTextStyle`: `bodyText` → `"HH:mm 上课 · 地点 · 教师"`（空省，无 `SubText`） | `ContentTitle`: `name.ifEmpty{"上课提醒"}`；`SubText`: `detailText()` → `"HH:mm - HH:mm · 教室 · 老师"`；`ShortCriticalText`: `room.ifEmpty{name}.ifEmpty{"上课提醒"}.take(7)`；**无 `ContentText`/`BigTextStyle`/`ProgressStyle`** |
 | 倒计时与标志 | `setWhen(startMs)` + `setShowWhen(true)` + `setUsesChronometer(true)` + `setChronometerCountDown(true)`（SystemUI 原生走秒，0 轮询）；`setOngoing(true)` + `setAutoCancel(false)` + `CATEGORY_REMINDER` + `PRIORITY_HIGH` + `DEFAULT_ALL` + `VISIBILITY_PUBLIC` | 同左 + `setRequestPromotedOngoing(true)`（Android 16+/ColorOS 胶囊提升）+ `setForegroundServiceBehavior(FOREGROUND_SERVICE_IMMEDIATE)`（豁免 Android 12+ 10s 延迟） |
-| 开课 (`startMs`) 收起 | `setTimeoutAfter((startMs - now).coerceAtLeast(1000L))`（普通 `ongoing` 通知系统会准点销毁） | **三重冗余**：1) `setTimeoutAfter((startMs - now).coerceAtLeast(1000L))`；2) `RC_FLUID_STOP=2003`（`armStopAlarm(startMs)` → `ACTION_FLUID_STOP` → `stop`）；3) `handler.postDelayed(stopRunnable, (startMs - now).coerceAtLeast(0L))` |
+| 开课 (`startMs`) 收起 | `setTimeoutAfter((startMs - now).coerceAtLeast(1000L))`（普通 `ongoing` 通知系统会准点销毁） | **三重冗余**（`state.stopAtMs = startMs`）：1) `setTimeoutAfter((state.stopAtMs - now).coerceAtLeast(1000L))`；2) `RC_FLUID_STOP=2003`（`armStopAlarm(state.stopAtMs)` → `ACTION_FLUID_STOP` → `stop`）；3) `handler.postDelayed(stopRunnable, (state.stopAtMs - now).coerceAtLeast(0L))` |
 | 失败降级 | `canPost()==false` 返回 `false` | `ReminderFluidService.start()` 返 `false`（如后台起 FGS 被拦）时自动降级 `ReminderNotifier.show(...)` |
 
 ## 9. 系统恢复矩阵与 `dirty` 语义
@@ -278,14 +278,14 @@ SettingsPage(_ReminderAndWidgetCard) -> ReminderPage(_ReminderSettingsCard / _Pe
 ### 11.2 `ReminderService` 状态机
 
 ```
-_onModelChanged -> 重置 300ms _timer -> syncNow(force: false)
-  ├── _syncInFlight != null: _resyncQueued=true; _resyncForceQueued |= force; 返回在途 Future
-  └── _syncInFlight == null: _runSyncLoop(initialForce) 循环 _syncOnce 直到 !_resyncQueued
+_onModelChanged (监听 model 与 model.prefsNotifier) -> 重置 300ms _timer -> syncNow(force: false)
+  ├── _cancelInFlight != null: 合并至 _postCancelSyncCompleter / _postCancelForce，取消完成后串行续跑
+  ├── _syncInFlight != null: 合并至 _queuedSyncCompleter / _queuedForce，返回其 Future
+  └── 空闲: _runSyncLoop 循环执行 _syncOnce 直到 !_queuedSyncCompleter（epoch/disposed/cancel 变更即中止）
 ```
 
 - **冷启动保护**：`if (!model.preferencesLoaded) return null;`（防 `Preferences.open()` 前以默认 `false` 误调 `cancel()`）。
-- **取消幂等**：无计划时仅 `!_cancelled` 调一次 `_gateway.cancel()` 并置 `_cancelled = true`。
-- **`_syncEpoch` 隔离**：`cancelAll()` 递增 `_syncEpoch++` 并清 `_resyncQueued`；在途 `sync` 返回时若 `epoch != _syncEpoch` 直接丢弃。
+- **取消幂等与串行化**：无计划时仅 `!_cancelled` 调一次 `_gateway.cancel()` 并置 `_cancelled = true`。`cancelAll()` 递增 `_syncEpoch++`、清空 `_queuedSyncCompleter` 并在 `_runCancelAll()` 内先 `await _syncInFlight` 再调 `_gateway.cancel()`（避免在途同步覆盖已取消状态）。
 - **失败不记指纹**：仅 `result.ok == true` 写入 `_lastFingerprint`。
 
 ### 11.3 `ReminderPage` 三卡隔离与 `RouteSettledStateMixin`
@@ -321,7 +321,7 @@ flutter test test/reminder_planner_test.dart test/reminder_service_test.dart tes
 ```
 
 - `test/reminder_planner_test.dart`：提前量（1/10/30）、`endMs` 末节下课、`roomOnly`、`clampReminderLead` 任意整数（7/43）、按当天切作息表、超节次 `skipped++`、单双周/空 `weeks`/超 `maxWeek`/调课、过点不补发、`maxEvents` 截断、`generatedAtMs` 不变指纹与 `event.id` 稳定。
-- `test/reminder_service_test.dart`：指纹去重、`syncNow(force: true)`、改提前量/切流体云重排、失败不记指纹、`syncGate` 在途串行合并、`_cancelled` 幂等、冷启动保护、300ms 防抖、预览/测试/`stopFluid`/4 项权限跳转。
+- `test/reminder_service_test.dart`：指纹去重、`syncNow(force: true)`、`prefsNotifier` 变更重同步、改提前量/切流体云重排、失败不记指纹、`syncGate` 在途串行合并、`cancelAll()` 等在途同步并串行续跑、`_cancelled` 幂等、冷启动保护、300ms 防抖、`ReminderRuntimeStatus.fromMap`/`unavailable()`/`==`/`hashCode`、`MethodChannelReminderGateway` 往返与异常降级、预览/测试/`stopFluid`/4 项权限跳转。
 - `test/support/fake_reminder_gateway.dart`：`FakeReminderGateway` 记录 `syncedPayloads`/`testRequests`/`previewRequests`/`toasts`，支持 `syncGate` 与 `syncResult` 注入。
 - `test/timetable_test.dart`：`Preferences` 默认值、旧 schema 兼容、未知形态（`"capsule"`）回退 `banner`、`1..60` 夹取往返。
 - `test/widget_test.dart`：入口显隐、`_leadDraft` 拖动不落盘、预设胶囊、流体云双向切换 + `stopFluid`、诊断卡、预览/5s/60s 测试、`resumed` 刷新、自启动恒显示手动确认。
