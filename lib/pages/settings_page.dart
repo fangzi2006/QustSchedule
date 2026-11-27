@@ -1,9 +1,9 @@
 /// 设置页：课表 / 提醒与小组件（仅 Android） / 账号 / 关于与更新。
 ///
-/// - 课表：作息时间表入口、周次校准、显示教师、显示地点、显示课表备注、静默更新；
+/// - 课表：作息时间表入口、周次校准、显示教师、显示地点、显示课表备注、静默更新（课表与学业数据同步）；
 /// - 提醒与小组件：课程提醒、桌面小组件，以及忽略电池优化、精确闹钟、自启动权限检查；
 /// - 账号：身份、教务地址、修改密码、退出登录；
-/// - 关于与更新：自动检查更新、关于（调试信息、版本号）。
+/// - 关于与更新：自动检查新版本（应用安装包）、关于（调试信息、版本号）。
 ///
 /// 账号区只有四行：身份、教务地址、修改密码、退出登录。
 /// 退出只有一个入口，且**同时清掉保存的密码**——这个 app 不提供"记住密码"开关，
@@ -144,8 +144,8 @@ class SettingsPage extends StatelessWidget {
                     const Divider(height: 0, indent: 56),
                     SwitchListTile(
                       secondary: const Icon(Icons.sync_rounded, size: 20),
-                      title: const Text('自动同步课表与学业'),
-                      subtitle: const Text('启动或回到前台时，按间隔自动同步课表、考试与成绩'),
+                      title: const Text('静默更新'),
+                      subtitle: const Text('打开 App 时自动刷新课表'),
                       value: model.autoRefresh,
                       onChanged: model.setAutoRefresh,
                     ),
@@ -153,7 +153,7 @@ class SettingsPage extends StatelessWidget {
                       const Divider(height: 0, indent: 56),
                       ListTile(
                         leading: const Icon(Icons.timer_outlined, size: 20),
-                        title: const Text('最小同步间隔'),
+                        title: const Text('最小更新间隔'),
                         subtitle: Text(
                           _formatInterval(model.autoRefreshIntervalMinutes),
                         ),
