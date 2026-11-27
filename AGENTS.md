@@ -21,7 +21,7 @@
 | 任务域 | 核心目标文件 | 关键机制 / 通知源 | 唯一真源 |
 |---|---|---|---|
 | 文件与符号定位 | 全仓库源码与测试 | 路径与导出符号总目录 | [`docs/dev/FILE_MAP.md`](docs/dev/FILE_MAP.md) |
-| 登录 / 重登 / 验证码 / 改密 / 切校 | `lib/src/schedule_service.dart`, `lib/src/state/auth_session_controller.dart`, `lib/src/app_model.dart`, `lib/pages/login_page.dart`, `lib/pages/captcha_page.dart` | `routeNotifier`, `_authEpoch`, `_reloginFlight`, `buildAccountKey`, 10m×2 熔断 | [`docs/dev/CORE_AND_STATE.md`](docs/dev/CORE_AND_STATE.md) §1–§3 |
+| 登录 / 重登 / 验证码 / 改密 / 切校 | `lib/src/schedule_service.dart`, `lib/src/state/auth_session_controller.dart`, `lib/src/app_model.dart`, `lib/pages/login_page.dart`, `lib/pages/captcha_page.dart` | `routeNotifier`, `_authEpoch`, `_reloginFlight`, `_sessionVersion`, `buildAccountKey`, 10m×3 白名单熔断 | [`docs/dev/CORE_AND_STATE.md`](docs/dev/CORE_AND_STATE.md) §1–§3 |
 | 正方协议 / RSA / Cookie | `packages/zf_academic/lib/zf_academic.dart`, `packages/zf_academic/lib/zf_academic_io.dart`, `packages/zf_academic/lib/src/*.dart` | 纯 Dart 零 Flutter 依赖，43 公开符号桶，23 项 `ErrorCode` | [`docs/dev/CORE_AND_STATE.md`](docs/dev/CORE_AND_STATE.md) §8 |
 | 线路 / 学期 / 校历 / 周次 | `lib/src/school.dart`, `lib/src/term_selector_helper.dart`, `lib/src/term_calendar.dart`, `lib/src/state/schedule_controller.dart`, `lib/pages/school_address_page.dart`, `lib/widgets/calibrate_sheet.dart` | `ScheduleController`, `weekNotifier`, `DateTime.utc`, `defaultAcademicPaceHosts` | [`docs/dev/CORE_AND_STATE.md`](docs/dev/CORE_AND_STATE.md) §3.4–§4.2 |
 | `Preferences` Schema 15 / 存储 | `lib/src/preferences_repository.dart`, `lib/src/state/preferences_controller.dart`, `lib/src/safe_json_file.dart` | `prefsNotifier`, `SafeJsonFile` (`.tmp`/`.bak`/`>=16KB` Isolate) | [`docs/dev/CORE_AND_STATE.md`](docs/dev/CORE_AND_STATE.md) §5 |
@@ -54,7 +54,7 @@
 
 ### 当前业务现状
 - 青科大默认外网线路 `https://jwglxt.qust.edu.cn/jwglxt`（支持自定义）；两学期制（秋 `3` / 春 `12`，历史 `'16'` 收敛）；GPA 文案「学期平均学分绩点 (GPA)」；10 位学号 `2000 + YY` 推导入学年（超 5 年回退学年学期标签）。
-- 协议与防锁号常量（RFC 6265 属性、PNG 魔数、10 分钟 2 次重登熔断、10s 超时、默认 18 周保底）为正常设计常量，勿当冗余硬编码误删。
+- 协议与防锁号常量（RFC 6265 属性、PNG 魔数、10 分钟 3 次白名单重登熔断、10s 超时、默认 18 周保底）为正常设计常量，勿当冗余硬编码误删。
 
 ---
 

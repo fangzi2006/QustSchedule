@@ -8,11 +8,11 @@
 ///  3. 登录与课表可单独调用：本类两个入口互不依赖，也可以只用 [ZhengfangClient]。
 ///
 /// 防呆设计（全部有对应测试）：
-///  - 单 flight：并发取课表同时遇失效，只登一次，其余复用同一次登录的结果；
-///  - 回滚：重登失败时把旧 Cookie 快照恢复回去，不会从"会话过期"恶化成"彻底掉登录"；
-///  - 熔断：窗口内自动登录次数上限（默认 10 分钟 2 次），超限抛 SESSION_EXPIRED
-///    要求手动登录，防止"失效误报 + 重登失败"连锁锁号；
-///  - 验证码：无人值守时不静默失败，通过 [captchaHandler] 上抛给 UI；返回 null 视为放弃。
+///  - 单 flight + 会话版本号：并发遇失效合并为单次重登，慢半拍旧请求检测到版本号已升级时直接用新会话重试，不重复重登；
+///  - 回滚边界：仅重登动作本身失败时恢复旧 Cookie；重登成功持久化后，后续业务重试失败绝不回滚成过期旧 Cookie；
+///  - 精细熔断：仅真实认证失败计次（密码错立刻熔断防锁号；其余真认证失败默认 10 分钟 3 次；一切网络/超时/劫持/维护/取消验证码永不计次）；
+///  - 可见/静默阶段解耦：仅当至少存在一个需要进度反馈的任务等待重登时广播 `relogin`，重登结束统一广播 `relogin_finished` 自己摘牌；
+///  - 验证码：无人值守时不静默失败，通过 [captchaHandler] 上抛给 UI；返回 null 视为放弃且不扣熔断次数。
 library;
 
 import 'dart:async';
@@ -32,7 +32,7 @@ class ScheduleService {
     required this.credentials,
     required this.cookieStorage,
     this.captchaHandler = _defaultCaptchaHandler,
-    this.autoLoginLimit = 2,
+    this.autoLoginLimit = 3,
     this.autoLoginWindow = const Duration(minutes: 10),
     this.backendFactory = defaultBackendFactory,
     this.paceHosts = defaultAcademicPaceHosts,
@@ -55,11 +55,14 @@ class ScheduleService {
   /// 非 final：app 启动后再接线（handler 需要引用 UI 状态机）。
   Future<String?> Function(CaptchaState state) captchaHandler;
 
-  /// 阶段回调：`relogin` 表示正在用保存的账密重新登录；
-  /// `fetching_schedule` 表示重新登录成功，正在抓取新课表。
+  /// 阶段回调：
+  /// - `relogin`：存在需要展示进度的任务等待自动重登；
+  /// - `relogin_finished`：前述已亮牌的自动重登结束（成功或失败均由网关自行摘牌）；
+  /// - `fetching_schedule`：课表自动重登成功，正在重新抓取课表。
   void Function(String stage)? onStage;
 
   static const String stageRelogin = 'relogin';
+  static const String stageReloginFinished = 'relogin_finished';
   static const String stageFetchingSchedule = 'fetching_schedule';
 
   /// 熔断窗口内允许的自动登录次数。
@@ -92,6 +95,13 @@ class ScheduleService {
   /// 自动重登完成世代号（用于同轮并发请求共享重登后的即时失效去重计次）。
   int _reloginEpoch = 0;
   int _lastFailureRecordedReloginEpoch = -1;
+
+  /// 会话凭证版本号：每次登录成功、切校或退出递增；
+  /// 慢半拍并发请求返回 sessionExpired 时若检测到版本号已前进，直接复用新凭证重试而不再发起二次重登。
+  int _sessionVersion = 0;
+
+  /// 当前在途自动重登是否已向 UI 广播过 `stageRelogin`。
+  bool _reloginStageNotified = false;
 
   /// 熔断是否已打开（需要用户手动登录一次来解除）。
   bool _breakerOpen = false;
@@ -143,6 +153,8 @@ class ScheduleService {
     _clientFlight = null;
     _inFlight = null;
     _reloginFlight = null;
+    _reloginStageNotified = false;
+    _sessionVersion++;
   }
 
   /// 用户换了学校：丢掉旧客户端与旧 Cookie（快照与主机绑定，不能跨校复用）。
@@ -157,6 +169,8 @@ class ScheduleService {
     _clientFlight = null;
     _inFlight = null;
     _reloginFlight = null;
+    _reloginStageNotified = false;
+    _sessionVersion++;
     _breakerOpen = false;
     _autoLoginFailures.clear();
     _lastFailureRecordedReloginEpoch = -1;
@@ -174,28 +188,68 @@ class ScheduleService {
   // -------------------------------------------------------------------------
 
   /// 取学期列表。与取课表共用同一个客户端；失效时同样走回退登录。
-  Future<Terms> fetchTerms() =>
-      _runWithReloginRetry((client) => client.fetchTerms());
+  Future<Terms> fetchTerms({bool reportReloginStage = true}) =>
+      _runWithReloginRetry(
+        (client) => client.fetchTerms(),
+        reportReloginStage: reportReloginStage,
+      );
 
   /// 取考试安排。与取课表共用同一个客户端；失效时同样走回退登录。
-  Future<List<ExamItem>> fetchExams([String? termId]) =>
-      _runWithReloginRetry((client) => client.fetchExams(termId));
+  Future<List<ExamItem>> fetchExams([
+    String? termId,
+    bool reportReloginStage = true,
+  ]) => _runWithReloginRetry(
+    (client) => client.fetchExams(termId),
+    reportReloginStage: reportReloginStage,
+  );
 
   /// 取成绩明细。与取课表共用同一个客户端；失效时同样走回退登录。
-  Future<List<GradeItem>> fetchGrades([String? termId]) =>
-      _runWithReloginRetry((client) => client.fetchGrades(termId));
+  Future<List<GradeItem>> fetchGrades([
+    String? termId,
+    bool reportReloginStage = true,
+  ]) => _runWithReloginRetry(
+    (client) => client.fetchGrades(termId),
+    reportReloginStage: reportReloginStage,
+  );
+
+  void _promoteReloginStageIfNeeded(bool reportReloginStage) {
+    if (!reportReloginStage || _reloginStageNotified) return;
+    _reloginStageNotified = true;
+    onStage?.call(stageRelogin);
+  }
 
   Future<T> _runWithReloginRetry<T>(
-    Future<T> Function(ScheduleBackend client) run,
-  ) async {
-    await _waitForRelogin();
+    Future<T> Function(ScheduleBackend client) run, {
+    bool reportReloginStage = true,
+    VoidCallback? onAfterReloginBeforeRetry,
+  }) async {
+    final waitedOnEntry = _reloginFlight != null;
+    await _waitForRelogin(reportReloginStage: reportReloginStage);
+    if (waitedOnEntry) {
+      onAfterReloginBeforeRetry?.call();
+    }
+    final versionAtStart = _sessionVersion;
     final client = await _ensureClient();
     try {
       return await run(client);
     } on AcademicError catch (error) {
       if (error.code != ErrorCode.sessionExpired) rethrow;
     }
-    final reloginEpoch = await _reloginWithSavedCredentials();
+
+    int reloginEpoch;
+    if (_sessionVersion != versionAtStart) {
+      // 并发时间差防重复重登：出发后已有其他任务完成重登并更新会话版本号，
+      // 直接等待可能存在的新一轮重登后拿现成新凭证重试 1 次，绝不发起二次重登。
+      await _waitForRelogin(reportReloginStage: reportReloginStage);
+      reloginEpoch = _reloginEpoch;
+    } else {
+      reloginEpoch = await _reloginWithSavedCredentials(
+        reportReloginStage: reportReloginStage,
+      );
+    }
+    onAfterReloginBeforeRetry?.call();
+
+    // 重登后只重试一次，不循环。
     try {
       final result = await run(await _ensureClient());
       _onReloginRetrySucceeded();
@@ -218,25 +272,40 @@ class ScheduleService {
   /// 等待当前正在进行的回退登录（若有）。
   ///
   /// 确保重登期间为全局阻塞式，防止一边登录一边发出业务查询请求；
+  /// 若有需要展示进度的任务加入等待，立即升格广播 `stageRelogin`；
   /// 若重登失败，向等待方传递错误，防止使用失效凭据盲目重发请求。
-  Future<void> _waitForRelogin() {
+  Future<void> _waitForRelogin({bool reportReloginStage = false}) {
     final pending = _reloginFlight;
-    if (pending != null) return pending;
+    if (pending != null) {
+      _promoteReloginStageIfNeeded(reportReloginStage);
+      return pending;
+    }
     return Future.value();
   }
 
   /// 全局阻塞式回退登录。
   ///
   /// 无论是取课表、学期、考试还是成绩遇会话过期，均共用同一单 flight 登录任务。
-  /// 并发请求合并为单次登录，避免多次重复并发登录与重复扣减熔断额度。
-  Future<int> _reloginWithSavedCredentials() {
+  /// 并发请求合并为单次登录，避免多次重复并发登录与重复扣减熔断额度；
+  /// 若本次重登曾向 UI 亮牌，结束时由网关自己广播 `stageReloginFinished` 摘牌。
+  Future<int> _reloginWithSavedCredentials({bool reportReloginStage = true}) {
     final pending = _reloginFlight;
-    if (pending != null) return pending;
-    onStage?.call(stageRelogin);
+    if (pending != null) {
+      _promoteReloginStageIfNeeded(reportReloginStage);
+      return pending;
+    }
+    _reloginStageNotified = false;
+    _promoteReloginStageIfNeeded(reportReloginStage);
     final task = _loginWithSavedCredentials();
     _reloginFlight = task;
     return task.whenComplete(() {
-      if (_reloginFlight == task) _reloginFlight = null;
+      if (_reloginFlight == task) {
+        _reloginFlight = null;
+        if (_reloginStageNotified) {
+          _reloginStageNotified = false;
+          onStage?.call(stageReloginFinished);
+        }
+      }
     });
   }
 
@@ -253,7 +322,7 @@ class ScheduleService {
       );
     }
 
-    // 回滚点：ZhengfangClient.login() 入口会作废旧 Cookie，失败时恢复它，
+    // 回滚点：ZhengfangClient.login() 入口会作废旧 Cookie，仅登录本身失败时恢复它，
     // 否则一次不成功的重登会把"会话过期"恶化成"彻底掉登录"。
     final rollback = client.exportCookies();
     AuthState state;
@@ -265,12 +334,11 @@ class ScheduleService {
       rethrow;
     }
 
-    // 验证码 / 网页验证：无人值守时上抛给调用方处理，不当作普通失败。
+    // 验证码 / 网页验证：用户在验证码页主动取消不扣熔断次数。
     if (state is CaptchaState) {
       final code = await captchaHandler(state);
       if (code == null) {
         _restore(client, rollback);
-        _autoLoginFailures.add(DateTime.now());
         throw AcademicError(ErrorCode.captchaRequired, '需要验证码，已取消自动登录');
       }
       try {
@@ -303,6 +371,7 @@ class ScheduleService {
     }
 
     await _persist(client);
+    _sessionVersion++;
     return ++_reloginEpoch;
   }
 
@@ -332,52 +401,37 @@ class ScheduleService {
   // -------------------------------------------------------------------------
 
   /// 取课表。并发调用共享同一次任务（单 flight）。
-  Future<Schedule> getSchedule({String? termId}) {
+  Future<Schedule> getSchedule({
+    String? termId,
+    bool reportReloginStage = true,
+  }) {
     final pending = _inFlight;
-    if (pending != null) return pending;
-    final task = _getScheduleOnce(termId: termId);
+    if (pending != null) {
+      if (_reloginFlight != null) {
+        _promoteReloginStageIfNeeded(reportReloginStage);
+      }
+      return pending;
+    }
+    final task = _getScheduleOnce(
+      termId: termId,
+      reportReloginStage: reportReloginStage,
+    );
     _inFlight = task;
     return task.whenComplete(() {
       if (_inFlight == task) _inFlight = null;
     });
   }
 
-  Future<Schedule> _getScheduleOnce({String? termId}) async {
-    final wasLoggingIn = _reloginFlight != null;
-    if (wasLoggingIn) {
-      onStage?.call(stageRelogin);
-    }
-    await _waitForRelogin();
-    if (wasLoggingIn) {
-      onStage?.call(stageFetchingSchedule);
-    }
-    final client = await _ensureClient();
-    try {
-      return await client.fetchSchedule(termId);
-    } on AcademicError catch (error) {
-      if (error.code != ErrorCode.sessionExpired) rethrow;
-    }
-    // 走到这里：Cookie 失效。回退到账密登录。
-    final rollback = client.exportCookies();
-    final reloginEpoch = await _reloginWithSavedCredentials();
-    onStage?.call(stageFetchingSchedule);
-
-    // 重登后只重试一次，不循环。
-    try {
-      final schedule = await (await _ensureClient()).fetchSchedule(termId);
-      _onReloginRetrySucceeded();
-      return schedule;
-    } on AcademicError catch (error) {
-      if (error.code == ErrorCode.sessionExpired) {
-        _recordReloginPostRetryExpired(reloginEpoch);
-      }
-      _restore(client, rollback);
-      rethrow;
-    } catch (_) {
-      _restore(client, rollback);
-      rethrow;
-    }
-  }
+  Future<Schedule> _getScheduleOnce({
+    String? termId,
+    bool reportReloginStage = true,
+  }) => _runWithReloginRetry(
+    (client) => client.fetchSchedule(termId),
+    reportReloginStage: reportReloginStage,
+    onAfterReloginBeforeRetry: reportReloginStage
+        ? () => onStage?.call(stageFetchingSchedule)
+        : null,
+  );
 
   // -------------------------------------------------------------------------
   // 入口三：手动登录（设置页 / 重登失败后）
@@ -394,6 +448,7 @@ class ScheduleService {
       await credentials.save(_accountKey(username: creds.username), creds);
     }
     await _persist(client);
+    _sessionVersion++;
     resetBreaker();
   }
 
@@ -436,6 +491,7 @@ class ScheduleService {
         );
       } else {
         await _persist(client);
+        _sessionVersion++;
         resetBreaker();
       }
     }
@@ -481,6 +537,8 @@ class ScheduleService {
     _clientFlight = null;
     _inFlight = null;
     _reloginFlight = null;
+    _reloginStageNotified = false;
+    _sessionVersion++;
     _pendingSignIn = null;
     accountHint = null;
     await cookieStorage.clear();
@@ -600,25 +658,26 @@ class ScheduleService {
     return true;
   }
 
-  static bool _isTransientReloginError(AcademicError error) {
+  static bool _isRealAuthFailure(AcademicError error) {
     return const <ErrorCode>{
-      ErrorCode.networkRetryable,
-      ErrorCode.timeout,
-      ErrorCode.serverError,
-      ErrorCode.accessForbidden,
-      ErrorCode.cancelled,
+      ErrorCode.captchaRequired,
+      ErrorCode.webLoginRequired,
     }.contains(error.code);
   }
 
-  /// 记录自动重登失败：网络/服务端/403 波动不计次；密码错立即熔断防锁号；其余计入窗口。
+  /// 仅对真实登录/认证失败计次：
+  /// - 密码错误（invalidCredentials）立刻熔断防锁号；
+  /// - 验证码校验失败/统一认证拦截计入 10 分钟窗口；
+  /// - 一切网络/超时/5xx/403/劫持/页面残缺/验证无法确认/取消永不计次。
   void _recordAutoLoginFailure(Object error) {
     final academic = asAcademicError(error);
-    if (_isTransientReloginError(academic)) return;
     if (academic.code == ErrorCode.invalidCredentials) {
       _breakerOpen = true;
       return;
     }
-    _autoLoginFailures.add(DateTime.now());
+    if (_isRealAuthFailure(academic)) {
+      _autoLoginFailures.add(DateTime.now());
+    }
   }
 
   /// 自动重登刚成功、紧接着的业务重试仍报 sessionExpired 时记 1 次（按重登世代去重）。

@@ -35,11 +35,16 @@ class HintNoticeController extends ChangeNotifier {
   Timer? _academicHintTimer;
 
   String _globalHint = '';
-  String get globalHint => _globalHint;
   bool _globalHintIsError = false;
-  bool get globalHintIsError => _globalHintIsError;
-  bool _isAcademicUpdateHint = false;
   Timer? _globalHintTimer;
+
+  /// 独立的跨页学业变动喜报槽位（与系统忙碌/重登槽位物理隔离，互不覆写误清）。
+  String _academicUpdateHint = '';
+  Duration _academicUpdateDuration = const Duration(seconds: 2);
+  Timer? _academicUpdateTimer;
+
+  /// 外部顶层路由状态是否正处于忙碌/错误遮挡（booting/loading/signingIn/failed）。
+  bool _systemStatusBusy = false;
 
   int _storageNoticeEvent = 0;
   int get storageNoticeEvent => _storageNoticeEvent;
@@ -49,17 +54,44 @@ class HintNoticeController extends ChangeNotifier {
 
   bool _disposed = false;
 
-  /// 当前展示的全局提示是否为学业数据更新提示。
+  /// 系统全局槽位（如正在重新登录、切校失败等），不含独立学业喜报槽位。
+  String get systemGlobalHint => _globalHint;
+  bool get systemGlobalHintIsError => _globalHintIsError;
+
+  /// 独立跨页学业喜报槽位内容。
+  String get academicUpdateHint => _academicUpdateHint;
+
+  /// 对外兼容视图：优先返回系统全局槽位，系统槽位为空时返回跨页学业喜报。
+  String get globalHint =>
+      _globalHint.isNotEmpty ? _globalHint : _academicUpdateHint;
+
+  bool get globalHintIsError =>
+      _globalHint.isNotEmpty ? _globalHintIsError : false;
+
+  /// 当前展示的全局提示是否为学业数据更新喜报。
   bool get isAcademicUpdateHint =>
-      _isAcademicUpdateHint && _globalHint.isNotEmpty;
+      _globalHint.isEmpty && _academicUpdateHint.isNotEmpty;
 
-  /// 给定应用主状态，判断全局浮层是否正处于忙碌/错误/全局提示占据状态。
+  bool get _isSystemLayerBlocking =>
+      _systemStatusBusy || _globalHint.isNotEmpty;
+
+  /// 同步应用顶层路由忙碌/错误遮挡态；当遮挡解除时自动为待命中的学业喜报启动倒计时。
+  void setSystemStatusBusy(bool busy) {
+    if (_disposed || _systemStatusBusy == busy) return;
+    _systemStatusBusy = busy;
+    _syncAcademicUpdateTimer();
+  }
+
+  /// 给定应用主状态，判断全局浮层是否正处于忙碌/错误/全局提示或学业喜报占据状态。
   bool isGlobalPopupActive({required bool isStatusBusyOrFailed}) =>
-      isStatusBusyOrFailed || _globalHint.isNotEmpty;
+      isStatusBusyOrFailed ||
+      _globalHint.isNotEmpty ||
+      _academicUpdateHint.isNotEmpty;
 
-  /// 当前处于活跃态的提示文案（优先级：全局 > 课表 > 学业）。
+  /// 当前处于活跃态的提示文案（优先级：系统全局 > 跨页学业喜报 > 课表 > 学业）。
   String get hint {
     if (_globalHint.isNotEmpty) return _globalHint;
+    if (_academicUpdateHint.isNotEmpty) return _academicUpdateHint;
     if (_scheduleHint.isNotEmpty) return _scheduleHint;
     if (_academicHint.isNotEmpty) return _academicHint;
     return '';
@@ -67,9 +99,30 @@ class HintNoticeController extends ChangeNotifier {
 
   bool get hintIsError {
     if (_globalHint.isNotEmpty) return _globalHintIsError;
+    if (_academicUpdateHint.isNotEmpty) return false;
     if (_scheduleHint.isNotEmpty) return _scheduleHintIsError;
     if (_academicHint.isNotEmpty) return _academicHintIsError;
     return false;
+  }
+
+  void _syncAcademicUpdateTimer() {
+    if (_disposed || _academicUpdateHint.isEmpty) {
+      _academicUpdateTimer?.cancel();
+      _academicUpdateTimer = null;
+      return;
+    }
+    if (_isSystemLayerBlocking) {
+      _academicUpdateTimer?.cancel();
+      _academicUpdateTimer = null;
+      return;
+    }
+    if (_academicUpdateTimer != null) return;
+    _academicUpdateTimer = Timer(_academicUpdateDuration, () {
+      _academicUpdateTimer = null;
+      if (_disposed || _academicUpdateHint.isEmpty) return;
+      _academicUpdateHint = '';
+      notifyListeners();
+    });
   }
 
   void emitStorageNotice(String message) {
@@ -79,13 +132,17 @@ class HintNoticeController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void showAcademicUpdateHint(String message) {
-    showHint(
-      message,
-      isAcademicUpdate: true,
-      scope: HintScope.global,
-      clearAfter: const Duration(seconds: 2),
-    );
+  void showAcademicUpdateHint(
+    String message, {
+    Duration duration = const Duration(seconds: 2),
+  }) {
+    if (_disposed) return;
+    _academicUpdateHint = message;
+    _academicUpdateDuration = duration;
+    _academicUpdateTimer?.cancel();
+    _academicUpdateTimer = null;
+    _syncAcademicUpdateTimer();
+    notifyListeners();
   }
 
   void showHint(
@@ -96,6 +153,13 @@ class HintNoticeController extends ChangeNotifier {
     HintScope scope = HintScope.global,
   }) {
     if (_disposed) return;
+    if (isAcademicUpdate) {
+      showAcademicUpdateHint(
+        message,
+        duration: clearAfter ?? const Duration(seconds: 2),
+      );
+      return;
+    }
     switch (scope) {
       case HintScope.schedule:
         _scheduleHint = message;
@@ -124,16 +188,16 @@ class HintNoticeController extends ChangeNotifier {
       case HintScope.global:
         _globalHint = message;
         _globalHintIsError = error;
-        _isAcademicUpdateHint = isAcademicUpdate;
         _globalHintTimer?.cancel();
         if (clearAfter != null) {
           _globalHintTimer = Timer(clearAfter, () {
             if (_disposed) return;
             _globalHint = '';
-            _isAcademicUpdateHint = false;
+            _syncAcademicUpdateTimer();
             notifyListeners();
           });
         }
+        _syncAcademicUpdateTimer();
         break;
     }
     notifyListeners();
@@ -153,28 +217,41 @@ class HintNoticeController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void clearGlobalHint() {
-    _globalHintTimer?.cancel();
-    _isAcademicUpdateHint = false;
-    if (_globalHint.isEmpty) return;
-    _globalHint = '';
+  void clearAcademicUpdateHint() {
+    _academicUpdateTimer?.cancel();
+    _academicUpdateTimer = null;
+    if (_academicUpdateHint.isEmpty) return;
+    _academicUpdateHint = '';
     notifyListeners();
   }
 
-  /// 手动关掉提示：若指定了 [scope] 则关掉对应作用域；不指定则清除所有提示。
+  /// 仅清理系统全局提示槽位，绝不误清独立跨页学业喜报槽位。
+  void clearGlobalHint() {
+    _globalHintTimer?.cancel();
+    _globalHintTimer = null;
+    if (_globalHint.isEmpty) return;
+    _globalHint = '';
+    _syncAcademicUpdateTimer();
+    notifyListeners();
+  }
+
+  /// 手动关掉提示：若指定了 [scope] 则关掉对应作用域；不指定则清除全部槽位。
   void clearHint([HintScope? scope]) {
     if (scope == null) {
       _scheduleHintTimer?.cancel();
       _academicHintTimer?.cancel();
       _globalHintTimer?.cancel();
+      _academicUpdateTimer?.cancel();
+      _academicUpdateTimer = null;
       final hasAny =
           _scheduleHint.isNotEmpty ||
           _academicHint.isNotEmpty ||
-          _globalHint.isNotEmpty;
+          _globalHint.isNotEmpty ||
+          _academicUpdateHint.isNotEmpty;
       _scheduleHint = '';
       _academicHint = '';
       _globalHint = '';
-      _isAcademicUpdateHint = false;
+      _academicUpdateHint = '';
       if (hasAny) notifyListeners();
     } else {
       switch (scope) {
@@ -185,7 +262,11 @@ class HintNoticeController extends ChangeNotifier {
           clearAcademicHint();
           break;
         case HintScope.global:
-          clearGlobalHint();
+          if (_globalHint.isNotEmpty) {
+            clearGlobalHint();
+          } else {
+            clearAcademicUpdateHint();
+          }
           break;
       }
     }
@@ -254,6 +335,7 @@ class HintNoticeController extends ChangeNotifier {
     _scheduleHintTimer?.cancel();
     _academicHintTimer?.cancel();
     _globalHintTimer?.cancel();
+    _academicUpdateTimer?.cancel();
     super.dispose();
   }
 }

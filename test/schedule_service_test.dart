@@ -148,8 +148,8 @@ void main() {
       },
     );
 
-    test('重登被拒或重登后重试仍失败时回滚旧 Cookie 并原样上抛错误', () async {
-      // 场景 A：重登被拒（密码已改）
+    test('重登被拒时回滚旧 Cookie；重登成功持久化后业务重试失败则保留新 Cookie 不回滚', () async {
+      // 场景 A：重登被拒（密码已改）→ 回滚旧 Cookie
       final h1 = _Harness();
       await h1.credentials.save(
         _Harness.accountKey,
@@ -172,7 +172,7 @@ void main() {
       expect(h1.backend.importCount, 1);
       expect(h1.backend.lastImported!.cookies.single.value, 'old');
 
-      // 场景 B：重登成功但重试仍失败（页面结构变化）
+      // 场景 B：重登已成功换上新 Cookie，紧接着业务重试报页面结构变化 → 保留新 Cookie 不倒灌过期旧 Cookie
       final h2 = _Harness();
       await h2.credentials.save(
         _Harness.accountKey,
@@ -195,7 +195,9 @@ void main() {
           ),
         ),
       );
-      expect(h2.backend.importCount, 1);
+      expect(h2.backend.importCount, 0);
+      expect(h2.backend.cookies.cookies.single.value, 'fresh');
+      expect(h2.storage.snapshot!.cookies.single.value, 'fresh');
     });
 
     test('PAGE_CHANGED 不触发重登（防白耗失败次数）', () async {
@@ -428,6 +430,7 @@ void main() {
       await h.service.getSchedule();
       expect(stages, [
         ScheduleService.stageRelogin,
+        ScheduleService.stageReloginFinished,
         ScheduleService.stageFetchingSchedule,
       ]);
 
@@ -438,7 +441,10 @@ void main() {
         return const <ExamItem>[];
       };
       await h.service.fetchExams();
-      expect(stages, contains(ScheduleService.stageRelogin));
+      expect(stages, [
+        ScheduleService.stageRelogin,
+        ScheduleService.stageReloginFinished,
+      ]);
     });
 
     test('登录与退出：signIn（直接或经验证码，remember=true/false）与 signOut 清理', () async {
@@ -872,6 +878,184 @@ void main() {
       expect(await h.credentials.has('$httpUrl|20240001'), isFalse);
       expect(await h.credentials.has('$httpUrl/|20240001'), isFalse);
       expect(await h.credentials.has('$httpsUrl|20240001'), isFalse);
+    });
+
+    test('默认 10 分钟 3 次熔断 + 严格白名单计次（劫持/页面残缺/验证异常/取消验证码均不计次）', () async {
+      final credentials = InMemoryCredentialStore();
+      await credentials.save(
+        _Harness.accountKey,
+        const Credentials('20240001', 'pw'),
+      );
+      final backend = FakeBackend();
+      final service = ScheduleService(
+        credentials: credentials,
+        cookieStorage: FakeSessionRepository(),
+        captchaHandler: (_) async => null,
+        baseUrl: _baseUrl,
+        backendFactory: (_) => backend,
+      );
+      expect(service.autoLoginLimit, 3);
+
+      // 1. 各类非真认证失败 + 取消验证码连续触发多次，均不得消耗熔断次数
+      backend.fetchBehavior = (_, _) async => throw expired();
+      final nonAuthErrors = <AcademicError>[
+        const AcademicError(ErrorCode.untrustedUrl, '校园网未认证跳转'),
+        const AcademicError(ErrorCode.pageChanged, '弱网返回残缺登录页'),
+        const AcademicError(ErrorCode.validationFailed, '登录响应无法验证'),
+        const AcademicError(ErrorCode.staleContext, '上下文过期'),
+      ];
+      for (final err in nonAuthErrors) {
+        backend.loginBehavior = (_, _) async => throw err;
+        await expectLater(
+          service.getSchedule(),
+          throwsA(isA<AcademicError>().having((e) => e.code, 'code', err.code)),
+        );
+        expect(service.breakerOpen, isFalse);
+      }
+
+      // 用户在验证码页主动取消 4 次也不得熔断
+      backend.loginBehavior = (_, _) async => const CaptchaState(
+        continuationId: 'c-cancel',
+        imageBase64: 'iVBORw0KGgo=',
+        mimeType: 'image/png',
+      );
+      for (var i = 0; i < 4; i++) {
+        await expectLater(
+          service.getSchedule(),
+          throwsA(
+            isA<AcademicError>().having(
+              (e) => e.code,
+              'code',
+              ErrorCode.captchaRequired,
+            ),
+          ),
+        );
+        expect(service.breakerOpen, isFalse);
+      }
+
+      // 2. 真实认证失败（重登后紧接再过期）需累计满 3 次才打开熔断
+      backend.loginBehavior = (call, _) async {
+        backend.cookies = snapshotOf(_baseUrl, value: 'loop-$call');
+        return const AuthenticatedState(
+          studentId: '20240001',
+          studentName: 'n',
+        );
+      };
+      final loginsBeforeLoop = backend.loginCount;
+      for (var round = 1; round <= 3; round++) {
+        await expectLater(
+          service.getSchedule(),
+          throwsA(
+            isA<AcademicError>().having(
+              (e) => e.code,
+              'code',
+              ErrorCode.sessionExpired,
+            ),
+          ),
+        );
+        expect(backend.loginCount, loginsBeforeLoop + round);
+        expect(service.breakerOpen, isFalse);
+      }
+
+      // 第 4 次被熔断拦截，不再请求 login
+      await expectLater(
+        service.getSchedule(),
+        throwsA(
+          isA<AcademicError>()
+              .having((e) => e.code, 'code', ErrorCode.sessionExpired)
+              .having((e) => e.message, 'message', contains('自动登录次数过多')),
+        ),
+      );
+      expect(backend.loginCount, loginsBeforeLoop + 3);
+      expect(service.breakerOpen, isTrue);
+    });
+
+    test('并发时间差防重复重登：慢半拍旧请求见会话版本号已升级直接复用新凭证重试', () async {
+      final h = _Harness();
+      await h.credentials.save(
+        _Harness.accountKey,
+        const Credentials('20240001', 'pw'),
+      );
+
+      final slowExamGate = Completer<void>();
+      var scheduleCall = 0;
+      h.backend.fetchBehavior = (_, _) async {
+        if (++scheduleCall == 1) throw expired();
+        return sampleSchedule();
+      };
+      var examsCall = 0;
+      h.backend.examsBehavior = (_, _) async {
+        if (++examsCall == 1) {
+          // 模拟带着旧凭证在路上慢半拍，等课表重登彻底结束后才返回旧过期错
+          await slowExamGate.future;
+          throw expired();
+        }
+        return sampleExams();
+      };
+
+      // 同时出发
+      final scheduleFuture = h.service.getSchedule();
+      final examsFuture = h.service.fetchExams();
+
+      // 等课表完成重登并拿到新凭证
+      expect((await scheduleFuture).entries, isNotEmpty);
+      expect(h.backend.loginCount, 1);
+      expect(h.service.reloginFlightForTest, isNull);
+
+      // 放行慢半拍的考试旧请求：它返回过期错后应检测到会话版本号已升级，直接复用新凭证重试，绝不二次登录
+      slowExamGate.complete();
+      expect(await examsFuture, isNotEmpty);
+      expect(h.backend.loginCount, 1);
+      expect(h.backend.examsCount, 2);
+      expect(h.backend.cookies.cookies.single.value, 'fresh');
+    });
+
+    test('静默重登不广播 relogin；若半路有可见任务加入等待则立即升格广播，结束自行摘牌', () async {
+      final h = _Harness();
+      await h.credentials.save(
+        _Harness.accountKey,
+        const Credentials('20240001', 'pw'),
+      );
+      final stages = <String>[];
+      h.service.onStage = stages.add;
+
+      // 1. 纯静默请求（reportReloginStage: false）重登全程不发任何阶段回调
+      var examsCall = 0;
+      h.backend.examsBehavior = (_, _) async {
+        if (++examsCall == 1) throw expired();
+        return sampleExams();
+      };
+      await h.service.fetchExams(null, false);
+      expect(h.backend.loginCount, 1);
+      expect(stages, isEmpty);
+
+      // 2. 静默请求先触发重登，半路课表可见请求加入等待 → 立即升格广播 relogin，结束自行广播 relogin_finished
+      final loginGate = Completer<void>();
+      h.backend.loginBehavior = (_, _) async {
+        await loginGate.future;
+        h.backend.cookies = snapshotOf(_baseUrl, value: 'fresh-2');
+        return const AuthenticatedState(studentId: '1', studentName: 'n');
+      };
+      examsCall = 0;
+      final silentFuture = h.service.fetchExams(null, false);
+      await Future<void>.delayed(Duration.zero);
+      expect(h.service.reloginFlightForTest, isNotNull);
+      expect(stages, isEmpty);
+
+      final visibleSchedule = h.service.getSchedule();
+      await Future<void>.delayed(Duration.zero);
+      expect(stages, [ScheduleService.stageRelogin]);
+
+      loginGate.complete();
+      await Future.wait<dynamic>(<Future<dynamic>>[
+        silentFuture,
+        visibleSchedule,
+      ]);
+      expect(stages, [
+        ScheduleService.stageRelogin,
+        ScheduleService.stageReloginFinished,
+        ScheduleService.stageFetchingSchedule,
+      ]);
     });
   });
 }

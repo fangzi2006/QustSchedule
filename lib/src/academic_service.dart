@@ -106,8 +106,9 @@ class AcademicService {
   Future<List<ExamItem>> fetchExams(
     String termId, {
     bool Function()? shouldCache,
+    bool reportReloginStage = true,
   }) async {
-    final exams = await service.fetchExams(termId);
+    final exams = await service.fetchExams(termId, reportReloginStage);
     if (shouldCache == null || shouldCache()) {
       await examCache.save(termId, exams);
     }
@@ -118,9 +119,10 @@ class AcademicService {
   Future<List<GradeItem>> fetchGrades(
     String termId, {
     bool Function()? shouldCache,
+    bool reportReloginStage = true,
   }) async {
     try {
-      final grades = await service.fetchGrades(termId);
+      final grades = await service.fetchGrades(termId, reportReloginStage);
       if (shouldCache == null || shouldCache()) {
         await gradesCache.save(termId, grades, isNotEvaluated: false);
       }
@@ -141,9 +143,9 @@ class AcademicService {
     }
   }
 
-  /// 随课表触发的非阻塞异步后台同步流水线。
+  /// 随静默同步触发的非阻塞异步后台同步流水线。
   ///
-  /// 独立捕获异常，绝不向上抛出阻碍课表主流程。
+  /// 全程静默（`reportReloginStage: false`）且独立捕获异常，绝不向上抛出阻碍主流程。
   Future<void> syncCurrentTermAsync({
     required String termId,
     void Function()? onDataUpdated,
@@ -154,10 +156,12 @@ class AcademicService {
       fetchExams(
         termId,
         shouldCache: shouldCache,
+        reportReloginStage: false,
       ).catchError((_) => const <ExamItem>[]),
       fetchGrades(
         termId,
         shouldCache: shouldCache,
+        reportReloginStage: false,
       ).catchError((_) => const <GradeItem>[]),
     ]);
     onDataUpdated?.call();

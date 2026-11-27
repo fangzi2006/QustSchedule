@@ -24,8 +24,6 @@ class AcademicController extends ChangeNotifier {
     required this._termsReader,
     required this._termsSetter,
     required this._isNeedLoginReader,
-    required this._suppressStageHintsSetter,
-    this._onNetworkLoadFinished,
     AcademicService? academicService,
   }) : _service = service,
        _examCache = examCache,
@@ -47,8 +45,6 @@ class AcademicController extends ChangeNotifier {
   final Terms? Function() _termsReader;
   final void Function(Terms terms) _termsSetter;
   final bool Function() _isNeedLoginReader;
-  final void Function(bool suppress) _suppressStageHintsSetter;
-  final VoidCallback? _onNetworkLoadFinished;
 
   AcademicService get academicService => _academicService;
   ExamCache get examCache => _examCache;
@@ -108,6 +104,7 @@ class AcademicController extends ChangeNotifier {
   bool get academicNeedsRelogin => _academicNeedsRelogin;
 
   bool _academicDataClearedForDebug = false;
+  int _networkSyncedRevision = 0;
   Future<void>? _academicSync;
   bool _disposed = false;
 
@@ -138,22 +135,36 @@ class AcademicController extends ChangeNotifier {
     loadAcademicData(termId: termId);
   }
 
+  /// 课表跨到新学期时，若学业页原本正跟随旧课表学期（而非刻意停在历史学期），
+  /// 恢复默认跟随新课表学期，避免跨学期首日学业与小组件仍停留在上学期。
+  void followScheduleTermIfMatched(String previousTermId) {
+    if (previousTermId.isNotEmpty && _academicTermId == previousTermId) {
+      _academicTermId = '';
+    }
+  }
+
   /// 跨天时提醒学业页重算倒计时。
   void notifyDayChanged() {
     if (_disposed) return;
     notifyListeners();
   }
 
-  /// 恢复学期离线学业缓存（0 延迟展示）。
+  /// 恢复学期离线学业缓存（0 延迟展示；若期间已有更新的网络同步落盘则不覆盖）。
   Future<void> restoreCachedData(String termId) async {
     if (termId.isEmpty) return;
     final seq = _academicLoadSeq;
+    final syncRev = _networkSyncedRevision;
     try {
       final cachedExamsFuture = _examCache.load(termId);
       final cachedGradesFuture = _gradesCache.load(termId);
       final cachedExams = await cachedExamsFuture;
       final cachedGrades = await cachedGradesFuture;
-      if (_disposed || seq != _academicLoadSeq || _isNeedLoginReader()) return;
+      if (_disposed ||
+          seq != _academicLoadSeq ||
+          syncRev != _networkSyncedRevision ||
+          _isNeedLoginReader()) {
+        return;
+      }
       if (cachedExams != null || cachedGrades != null) {
         _exams = cachedExams?.items ?? const <ExamItem>[];
         _grades = cachedGrades?.items ?? const <GradeItem>[];
@@ -194,8 +205,6 @@ class AcademicController extends ChangeNotifier {
     }
 
     final seq = ++_academicLoadSeq;
-    bool touchedNetwork = false;
-    bool networkCleanupHandled = false;
     try {
       if (target.isEmpty) {
         final existingTerms = _termsReader();
@@ -203,7 +212,6 @@ class AcademicController extends ChangeNotifier {
           target = existingTerms.currentId;
           _academicTermId = target;
         } else {
-          touchedNetwork = true;
           try {
             final fetched = await _service.fetchTerms();
             if (_disposed || seq != _academicLoadSeq) return;
@@ -250,7 +258,6 @@ class AcademicController extends ChangeNotifier {
       _academicLoading = true;
       _academicError = null;
       _academicNeedsRelogin = false;
-      touchedNetwork = true;
       notifyListeners();
       if (showHint) {
         _hints.showHint('正在更新学业数据…', scope: HintScope.academic);
@@ -280,6 +287,7 @@ class AcademicController extends ChangeNotifier {
 
         if (examRes is List<ExamItem>) {
           _exams = examRes;
+          _networkSyncedRevision++;
         } else if (examRes is AcademicError &&
             examRes.code == ErrorCode.notOpen) {
           // 考试安排未开放属于正常学期周期状态，保持静默，不提示错误
@@ -293,6 +301,7 @@ class AcademicController extends ChangeNotifier {
         if (gradeRes is List<GradeItem>) {
           _grades = gradeRes;
           _isNotEvaluated = false;
+          _networkSyncedRevision++;
         } else if (gradeRes is AcademicError &&
             gradeRes.code == ErrorCode.notEvaluated) {
           _isNotEvaluated = true;
@@ -327,8 +336,6 @@ class AcademicController extends ChangeNotifier {
           _academicLoading = false;
           _loadingAcademicTerm = null;
           notifyListeners();
-          networkCleanupHandled = true;
-          _onNetworkLoadFinished?.call();
           if (_isNeedLoginReader()) {
             _hints.clearAcademicHint();
           } else if (_academicError != null) {
@@ -350,22 +357,9 @@ class AcademicController extends ChangeNotifier {
               scope: HintScope.academic,
             );
           }
-        } else if (touchedNetwork &&
-            !networkCleanupHandled &&
-            !_disposed &&
-            !_academicLoading) {
-          networkCleanupHandled = true;
-          _onNetworkLoadFinished?.call();
         }
       }
-    } finally {
-      if (touchedNetwork &&
-          !networkCleanupHandled &&
-          !_disposed &&
-          (seq == _academicLoadSeq || !_academicLoading)) {
-        _onNetworkLoadFinished?.call();
-      }
-    }
+    } catch (_) {}
   }
 
   /// 手动刷新当前学业数据。
@@ -375,26 +369,38 @@ class AcademicController extends ChangeNotifier {
     showHint: showHint,
   );
 
-  /// 课程查询完成后异步非阻塞触发考试与成绩查询，不弹出阶段提示或错误气泡。
+  /// 独立静默学业同步线：先读本地缓存兜底并留作对比基准，再并行拉取考试与成绩。
+  ///
+  /// 全程静默（重登亦不亮牌、失败不弹错误），仅当原有缓存且内容确有变化时发送跨页喜报。
   Future<void> syncQuietly(String termId) {
+    if (termId.isEmpty || _disposed) return Future<void>.value();
     late final Future<void> future;
-    future = _runQuietSync(termId, () => _academicSync == future);
+    future = _runQuietSync(termId);
     _academicSync = future;
     return future;
   }
 
-  Future<void> _runQuietSync(
-    String termId,
-    bool Function() isLatestSync,
-  ) async {
+  Future<void> _runQuietSync(String termId) async {
     final seq = _academicLoadSeq;
-    _suppressStageHintsSetter(true);
     try {
       final existingExamsFuture = _examCache.load(termId);
       final existingGradesFuture = _gradesCache.load(termId);
       final existingExams = await existingExamsFuture;
       final existingGrades = await existingGradesFuture;
       if (_disposed || seq != _academicLoadSeq || _isNeedLoginReader()) return;
+
+      // 冷启动先以旧缓存兜底展示（避免空闲缓存恢复与网络静默同步赛跑）。
+      if (_loadedAcademicTerm != termId &&
+          academicTermId == termId &&
+          (existingExams != null || existingGrades != null)) {
+        _exams = existingExams?.items ?? const <ExamItem>[];
+        _grades = existingGrades?.items ?? const <GradeItem>[];
+        _isNotEvaluated = existingGrades?.isNotEvaluated ?? false;
+        _loadedAcademicTerm = termId;
+        _academicError = null;
+        _academicNeedsRelogin = false;
+        notifyListeners();
+      }
 
       final bool isDebugCleared = _academicDataClearedForDebug;
       _academicDataClearedForDebug = false;
@@ -405,16 +411,24 @@ class AcademicController extends ChangeNotifier {
             !_disposed && seq == _academicLoadSeq && !_isNeedLoginReader(),
       );
       if (_disposed || seq != _academicLoadSeq || _isNeedLoginReader()) return;
-      if (academicTermId == termId) {
-        await restoreCachedData(termId);
-      }
-      if (_disposed || seq != _academicLoadSeq || _isNeedLoginReader()) return;
 
       final freshExamsFuture = _examCache.load(termId);
       final freshGradesFuture = _gradesCache.load(termId);
       final freshExams = await freshExamsFuture;
       final freshGrades = await freshGradesFuture;
       if (_disposed || seq != _academicLoadSeq || _isNeedLoginReader()) return;
+
+      if (academicTermId == termId &&
+          (freshExams != null || freshGrades != null)) {
+        _exams = freshExams?.items ?? const <ExamItem>[];
+        _grades = freshGrades?.items ?? const <GradeItem>[];
+        _isNotEvaluated = freshGrades?.isNotEvaluated ?? false;
+        _loadedAcademicTerm = termId;
+        _academicError = null;
+        _academicNeedsRelogin = false;
+        _networkSyncedRevision++;
+        notifyListeners();
+      }
 
       final changeMsg = _diffChangeMessage(
         existingExams: existingExams?.items,
@@ -431,10 +445,6 @@ class AcademicController extends ChangeNotifier {
       }
     } catch (_) {
       // 绝不上抛或弹网络错误通知
-    } finally {
-      if (_academicSync == null || isLatestSync()) {
-        _suppressStageHintsSetter(false);
-      }
     }
   }
 
@@ -463,8 +473,9 @@ class AcademicController extends ChangeNotifier {
     _academicError = null;
     _academicNeedsRelogin = false;
     _academicSync = null;
-    _suppressStageHintsSetter(false);
+    _networkSyncedRevision++;
     _hints.clearAcademicHint();
+    _hints.clearAcademicUpdateHint();
     notifyListeners();
     unawaited(_examCache.clear());
     unawaited(_gradesCache.clear());

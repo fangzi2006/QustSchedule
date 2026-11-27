@@ -111,8 +111,6 @@ class AppModel extends ChangeNotifier {
       termsReader: () => scheduleState.terms,
       termsSetter: (terms) => scheduleState.setTerms(terms, notify: false),
       isNeedLoginReader: () => _status == AppStatus.needLogin,
-      suppressStageHintsSetter: (suppress) => _suppressStageHints = suppress,
-      onNetworkLoadFinished: _handleAcademicNetworkFinished,
       academicService: academicService,
     );
     session.service.captchaHandler = _handleCaptcha;
@@ -148,8 +146,15 @@ class AppModel extends ChangeNotifier {
   /// 顶层页面路由监听源：仅在页面切换条件、登录提示或错误码变化时通知。
   final ChangeNotifier routeNotifier = ChangeNotifier();
 
-  bool _suppressStageHints = false;
-  bool _reloginStageActive = false;
+  /// 数据静默同步总调度单飞指针（防弱网或反复切回前台重入）。
+  Future<void>? _silentSyncFlight;
+
+  /// 当前挂起的自动重登验证码是否来自“已有本地课表的静默同步”。
+  bool _reloginCaptchaFromSilentSync = false;
+
+  /// 本次静默同步遇验证码且用户主动取消时，抑制 _loadSchedule 二次覆写提示。
+  bool _silentSyncCaptchaCanceled = false;
+
   int _authEpoch = 0;
   bool _disposed = false;
 
@@ -501,13 +506,18 @@ class AppModel extends ChangeNotifier {
       final cached = await cachedFuture;
 
       if (cached != null && sameSchool(cached.baseUrl, schoolBaseUrl)) {
-        _restoreCachedSchedule(cached);
+        final willSilentSync =
+            snapshot != null &&
+            prefs.autoRefresh &&
+            scheduleState.shouldSilentRefresh(cached.fetchedAt);
+        _restoreCachedSchedule(
+          cached,
+          scheduleIdleAcademicRestore: !willSilentSync,
+        );
         if (snapshot != null && (studentName.isEmpty || studentId.isEmpty)) {
           unawaited(session.syncIdentityQuietly());
         }
-        if (snapshot != null &&
-            prefs.autoRefresh &&
-            scheduleState.shouldSilentRefresh(cached.fetchedAt)) {
+        if (willSilentSync) {
           unawaited(syncSilently());
         }
         return;
@@ -530,10 +540,15 @@ class AppModel extends ChangeNotifier {
     }
   }
 
-  void _restoreCachedSchedule(CachedSchedule cached) {
+  void _restoreCachedSchedule(
+    CachedSchedule cached, {
+    bool scheduleIdleAcademicRestore = true,
+  }) {
     scheduleState.applyCachedSchedule(cached);
     _setStatus(AppStatus.ready);
-    _scheduleIdleAcademicRestore(cached.schedule.termId);
+    if (scheduleIdleAcademicRestore) {
+      _scheduleIdleAcademicRestore(cached.schedule.termId);
+    }
   }
 
   void _scheduleIdleAcademicRestore(String termId) {
@@ -592,16 +607,55 @@ class AppModel extends ChangeNotifier {
     _notifyStateChanged();
   }
 
-  Future<void> syncSilently() =>
-      _loadSchedule(background: true, triggerAcademic: true);
+  /// 独立的数据静默同步总调度：
+  /// 1. 单飞防重入；
+  /// 2. 真正并行同时拉起「课表静默线」与「学业静默线（先用本地已知学期直接开跑）」；
+  /// 3. 双线失败互不连累；课表返回若检测到跨到新学期，自动通知学业线按新学期补跑一次。
+  Future<void> syncSilently() {
+    if (_disposed) return Future<void>.value();
+    final existing = _silentSyncFlight;
+    if (existing != null) return existing;
+    final task = _runSilentSync();
+    _silentSyncFlight = task;
+    return task.whenComplete(() {
+      if (_silentSyncFlight == task) _silentSyncFlight = null;
+    });
+  }
+
+  Future<void> _runSilentSync() async {
+    _cancelIdleAcademicRestore();
+    final epoch = _authEpoch;
+    final initialTermId = scheduleState.termId;
+
+    if (initialTermId.isNotEmpty) {
+      unawaited(academic.syncQuietly(initialTermId));
+    }
+
+    final scheduleSucceeded = await _loadSchedule(
+      background: true,
+      silentAutoSync: true,
+    );
+    if (_disposed ||
+        !scheduleSucceeded ||
+        epoch != _authEpoch ||
+        _status == AppStatus.needLogin) {
+      return;
+    }
+
+    final fetchedTermId = scheduleState.termId;
+    if (fetchedTermId.isNotEmpty && fetchedTermId != initialTermId) {
+      academic.followScheduleTermIfMatched(initialTermId);
+      unawaited(academic.syncQuietly(fetchedTermId));
+    }
+  }
 
   Future<void> refresh() =>
-      _loadSchedule(background: true, triggerAcademic: false);
+      _loadSchedule(background: true, silentAutoSync: false);
 
-  Future<void> _loadSchedule({
+  Future<bool> _loadSchedule({
     String? termId,
     bool background = false,
-    bool triggerAcademic = false,
+    bool silentAutoSync = false,
     bool forceForeground = false,
   }) async {
     final hasData = scheduleState.schedule != null;
@@ -628,8 +682,9 @@ class AppModel extends ChangeNotifier {
     scheduleState.scheduleLoad = loadFuture;
     try {
       final fetched = await loadFuture;
-      if (_disposed || scheduleState.scheduleLoad != loadFuture) return;
-      _reloginStageActive = false;
+      if (_disposed || scheduleState.scheduleLoad != loadFuture) return false;
+      _reloginCaptchaFromSilentSync = false;
+      _silentSyncCaptchaCanceled = false;
       session.setCaptcha(null);
       scheduleState.applyFetchedSchedule(
         fetched,
@@ -639,7 +694,6 @@ class AppModel extends ChangeNotifier {
       );
       scheduleState.setRefreshing(false);
       _setStatus(AppStatus.ready);
-      hints.clearGlobalHint();
       if (silent || hasData) {
         hints.showHint(
           '已更新',
@@ -647,22 +701,27 @@ class AppModel extends ChangeNotifier {
           scope: HintScope.schedule,
         );
       } else {
-        hints.clearHint();
+        hints.clearScheduleHint();
       }
       unawaited(_loadTermsQuietly());
       unawaited(session.syncIdentityQuietly());
-      if (triggerAcademic && fetched.termId.isNotEmpty) {
-        unawaited(academic.syncQuietly(fetched.termId));
-      }
+      return true;
     } on AcademicError catch (error) {
-      if (_disposed || scheduleState.scheduleLoad != loadFuture) return;
-      _reloginStageActive = false;
+      if (_disposed || scheduleState.scheduleLoad != loadFuture) return false;
+      final canceledFromSilent =
+          _silentSyncCaptchaCanceled &&
+          error.code == ErrorCode.captchaRequired &&
+          _status == AppStatus.ready;
+      _reloginCaptchaFromSilentSync = false;
+      _silentSyncCaptchaCanceled = false;
       session.setCaptcha(null);
-      hints.clearGlobalHint();
       scheduleState.setRefreshing(false);
       if (_status == AppStatus.needLogin) {
         hints.clearScheduleHint();
-        return;
+        return false;
+      }
+      if (canceledFromSilent) {
+        return false;
       }
       final bool isAuthRecoveryFailure =
           error.code == ErrorCode.sessionExpired ||
@@ -670,7 +729,7 @@ class AppModel extends ChangeNotifier {
       if (!silent ||
           _status == AppStatus.signingIn ||
           _status == AppStatus.needCaptcha ||
-          (isAuthRecoveryFailure && !triggerAcademic)) {
+          (isAuthRecoveryFailure && !silentAutoSync)) {
         _fail(error);
       } else {
         hints.showHint(
@@ -680,15 +739,16 @@ class AppModel extends ChangeNotifier {
           scope: HintScope.schedule,
         );
       }
+      return false;
     } catch (error) {
-      if (_disposed || scheduleState.scheduleLoad != loadFuture) return;
-      _reloginStageActive = false;
+      if (_disposed || scheduleState.scheduleLoad != loadFuture) return false;
+      _reloginCaptchaFromSilentSync = false;
+      _silentSyncCaptchaCanceled = false;
       session.setCaptcha(null);
-      hints.clearGlobalHint();
       scheduleState.setRefreshing(false);
       if (_status == AppStatus.needLogin) {
         hints.clearScheduleHint();
-        return;
+        return false;
       }
       if (!silent ||
           _status == AppStatus.signingIn ||
@@ -702,6 +762,7 @@ class AppModel extends ChangeNotifier {
           scope: HintScope.schedule,
         );
       }
+      return false;
     } finally {
       if (scheduleState.scheduleLoad == loadFuture) {
         scheduleState.scheduleLoad = null;
@@ -711,7 +772,9 @@ class AppModel extends ChangeNotifier {
 
   Future<void> _loadTermsQuietly() async {
     try {
-      final fetched = await session.service.fetchTerms();
+      final fetched = await session.service.fetchTerms(
+        reportReloginStage: false,
+      );
       if (_disposed) return;
       scheduleState.setTerms(fetched);
       _notifyStateChanged();
@@ -728,7 +791,7 @@ class AppModel extends ChangeNotifier {
       _notifyStateChanged();
       academic.notifyDayChanged();
     }
-    if (scheduleState.shouldRefreshWhenShown) {
+    if (_silentSyncFlight == null && scheduleState.shouldRefreshWhenShown) {
       await syncSilently();
     }
   }
@@ -766,7 +829,8 @@ class AppModel extends ChangeNotifier {
     _authEpoch++;
     scheduleState.scheduleLoad = null;
     scheduleState.setRefreshing(false);
-    _reloginStageActive = false;
+    _reloginCaptchaFromSilentSync = false;
+    _silentSyncCaptchaCanceled = false;
     session.setCaptcha(null);
     if (resetSchoolSwitch) {
       _schoolSwitchSeq++;
@@ -821,11 +885,9 @@ class AppModel extends ChangeNotifier {
         try {
           await reloginFlight;
           if (_disposed || epoch != _authEpoch) return;
-          _reloginStageActive = false;
+          _reloginCaptchaFromSilentSync = false;
+          _silentSyncCaptchaCanceled = false;
           session.setCaptcha(null);
-          if (!hints.isAcademicUpdateHint && hints.globalHint == '正在重新登录…') {
-            hints.clearGlobalHint();
-          }
           if (_status == AppStatus.signingIn) {
             _setStatus(
               scheduleState.schedule != null
@@ -836,7 +898,8 @@ class AppModel extends ChangeNotifier {
           unawaited(session.syncIdentityQuietly());
         } on AcademicError catch (error) {
           if (_disposed || epoch != _authEpoch) return;
-          _reloginStageActive = false;
+          _reloginCaptchaFromSilentSync = false;
+          _silentSyncCaptchaCanceled = false;
           session.setCaptcha(null);
           hints.clearGlobalHint();
           if (scheduleState.scheduleLoad == null) {
@@ -847,7 +910,8 @@ class AppModel extends ChangeNotifier {
           }
         } catch (error) {
           if (_disposed || epoch != _authEpoch) return;
-          _reloginStageActive = false;
+          _reloginCaptchaFromSilentSync = false;
+          _silentSyncCaptchaCanceled = false;
           session.setCaptcha(null);
           hints.clearGlobalHint();
           if (scheduleState.scheduleLoad == null) {
@@ -858,11 +922,9 @@ class AppModel extends ChangeNotifier {
           }
         }
       } else {
-        _reloginStageActive = false;
+        _reloginCaptchaFromSilentSync = false;
+        _silentSyncCaptchaCanceled = false;
         session.setCaptcha(null);
-        if (!hints.isAcademicUpdateHint && hints.globalHint == '正在重新登录…') {
-          hints.clearGlobalHint();
-        }
         if (scheduleState.scheduleLoad == null) {
           scheduleState.setRefreshing(false);
         }
@@ -922,6 +984,8 @@ class AppModel extends ChangeNotifier {
     AuthState state, {
     bool switchedSchool = false,
   }) async {
+    // 摘掉 signIn() 自己挂起的「登录中…」系统全局气泡。
+    hints.clearGlobalHint();
     switch (state) {
       case AuthenticatedState():
         _pendingSchoolSwitchUrl = null;
@@ -981,10 +1045,14 @@ class AppModel extends ChangeNotifier {
 
   void cancelCaptcha() {
     final captchaSwitch = _captchaSchoolSwitch;
+    final fromSilentSync = _reloginCaptchaFromSilentSync;
     _captchaSchoolSwitch = null;
+    _reloginCaptchaFromSilentSync = false;
+    if (fromSilentSync && scheduleState.schedule != null) {
+      _silentSyncCaptchaCanceled = true;
+    }
     session.cancelCaptcha(
       onCanceled: () {
-        _reloginStageActive = false;
         hints.clearGlobalHint();
         hints.clearScheduleHint();
         scheduleState.setRefreshing(false);
@@ -999,6 +1067,16 @@ class AppModel extends ChangeNotifier {
             return;
           }
         }
+        if (fromSilentSync && scheduleState.schedule != null) {
+          _setStatus(AppStatus.ready);
+          hints.showHint(
+            '已取消自动登录',
+            clearAfter: const Duration(seconds: 3),
+            scope: HintScope.schedule,
+          );
+          return;
+        }
+        hints.clearHint();
         _setStatus(AppStatus.needLogin, message: '已取消登录');
       },
     );
@@ -1261,6 +1339,7 @@ class AppModel extends ChangeNotifier {
       termStart: termStart,
     );
     _status = AppStatus.ready;
+    hints.setSystemStatusBusy(false);
     _notifyRouteChanged();
     _notifyStateChanged();
   }
@@ -1298,38 +1377,26 @@ class AppModel extends ChangeNotifier {
   // 内部回调与状态路由
   // ---------------------------------------------------------------------------
 
-  Future<String?> _handleCaptcha(CaptchaState state) => session.handleCaptcha(
-    state,
-    onNeedCaptcha: () =>
-        _setStatus(AppStatus.needCaptcha, message: '自动重登需要验证码'),
-  );
+  Future<String?> _handleCaptcha(CaptchaState state) {
+    _reloginCaptchaFromSilentSync =
+        _silentSyncFlight != null && scheduleState.schedule != null;
+    return session.handleCaptcha(
+      state,
+      onNeedCaptcha: () =>
+          _setStatus(AppStatus.needCaptcha, message: '自动重登需要验证码'),
+    );
+  }
 
   void _onServiceStage(String stage) {
-    if (_disposed || _suppressStageHints) return;
+    if (_disposed) return;
     if (stage == ScheduleService.stageRelogin) {
-      _reloginStageActive = true;
-      scheduleState.setRefreshing(true);
       hints.showHint('正在重新登录…', scope: HintScope.global);
+    } else if (stage == ScheduleService.stageReloginFinished) {
+      hints.clearGlobalHint();
     } else if (stage == ScheduleService.stageFetchingSchedule) {
-      _reloginStageActive = false;
-      scheduleState.setRefreshing(true);
       hints.clearGlobalHint();
       final hasData = scheduleState.schedule != null;
       hints.showHint(hasData ? '更新中…' : '获取中…', scope: HintScope.schedule);
-    }
-  }
-
-  void _handleAcademicNetworkFinished() {
-    if (_disposed) return;
-    if (scheduleState.scheduleLoad == null &&
-        session.service.reloginFlight == null) {
-      scheduleState.setRefreshing(false);
-      if (_reloginStageActive || hints.globalHint == '正在重新登录…') {
-        _reloginStageActive = false;
-        if (!hints.isAcademicUpdateHint) {
-          hints.clearGlobalHint();
-        }
-      }
     }
   }
 
@@ -1342,6 +1409,12 @@ class AppModel extends ChangeNotifier {
     _status = status;
     _message = message;
     _errorCode = code;
+    hints.setSystemStatusBusy(
+      status == AppStatus.booting ||
+          status == AppStatus.loading ||
+          status == AppStatus.signingIn ||
+          status == AppStatus.failed,
+    );
     _notifyRouteChanged();
     _notifyStateChanged();
   }
@@ -1349,7 +1422,8 @@ class AppModel extends ChangeNotifier {
   void _fail(Object error, {bool keepPendingSchoolSwitch = false}) {
     if (_disposed) return;
     final academic = asAcademicError(error);
-    _reloginStageActive = false;
+    _reloginCaptchaFromSilentSync = false;
+    _silentSyncCaptchaCanceled = false;
     if (!keepPendingSchoolSwitch) {
       _pendingSchoolSwitchUrl = null;
     }

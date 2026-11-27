@@ -66,12 +66,11 @@ class StatusPopup extends StatelessWidget {
                   case HintScope.global:
                     if (model.status == AppStatus.failed) {
                       model.dismissError();
-                    } else {
-                      final wasAcademicUpdate = model.isAcademicUpdateHint;
-                      model.clearGlobalHint();
-                      if (wasAcademicUpdate) {
-                        onNavigateToAcademic?.call();
-                      }
+                    } else if (model.hints.systemGlobalHint.isNotEmpty) {
+                      model.hints.clearGlobalHint();
+                    } else if (model.hints.academicUpdateHint.isNotEmpty) {
+                      model.hints.clearAcademicUpdateHint();
+                      onNavigateToAcademic?.call();
                     }
                     break;
                   case HintScope.schedule:
@@ -118,12 +117,11 @@ class StatusPopup extends StatelessWidget {
         if (model.status == AppStatus.signingIn) {
           return const _PopupData(text: '登录中…', busy: true);
         }
-        if (model.globalHint.isNotEmpty) {
-          final error = model.globalHintIsError;
-          final isAcademicUpdate = model.isAcademicUpdateHint;
+        if (model.hints.systemGlobalHint.isNotEmpty) {
+          final error = model.hints.systemGlobalHintIsError;
           return _PopupData(
-            text: model.globalHint,
-            busy: !error && !isAcademicUpdate,
+            text: model.hints.systemGlobalHint,
+            busy: !error,
             error: error,
           );
         }
@@ -136,6 +134,9 @@ class StatusPopup extends StatelessWidget {
         }
         if (model.status == AppStatus.booting) {
           return const _PopupData(text: '连接中…', busy: true);
+        }
+        if (model.hints.academicUpdateHint.isNotEmpty) {
+          return _PopupData(text: model.hints.academicUpdateHint);
         }
         return null;
 

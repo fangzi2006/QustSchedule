@@ -11,8 +11,8 @@
 | 课表周历 | `lib/src/state/schedule_controller.dart` | `ScheduleController`, `WeekNotifier` | `Schedule`/`Terms`/`week`/`weekNotifier`/`refreshingNotifier`/校历/调课与冲突缓存 (`_dataRevision`) |
 | 学业数据 | `lib/src/state/academic_controller.dart` | `AcademicController` | `exams`/`grades`/`gradeStats`（引用记忆化）/`isNotEvaluated`/`_academicLoadSeq`/静默同步与变更比对 |
 | 偏好防抖 | `lib/src/state/preferences_controller.dart` | `PreferencesController` | `Preferences` 读写、滑块 300ms 草稿防抖（`dispose()` 清理不落盘）、启动自动查更 |
-| 提示气泡 | `lib/src/state/hint_notice_controller.dart` | `HintNoticeController`, `HintScope` | `global`/`schedule`/`academic` 三域提示、`storageNoticeEvent`、`humanizeError` |
-| 课表服务 | `lib/src/schedule_service.dart` | `ScheduleService` | Cookie 优先抓取；`SESSION_EXPIRED` 单 flight 重登 (`_reloginFlight`)、旧 Cookie 回滚、10m/2次熔断、`readSavedCredentials()`/`_fallbackAccountKeys()` |
+| 提示气泡 | `lib/src/state/hint_notice_controller.dart` | `HintNoticeController`, `HintScope` | 四槽隔离（`systemGlobalHint`/`academicUpdateHint`/`scheduleHint`/`academicHint`）、喜报遮挡延后计时、`storageNoticeEvent`、`humanizeError` |
+| 课表服务 | `lib/src/schedule_service.dart` | `ScheduleService` | Cookie 优先抓取；`SESSION_EXPIRED` 单 flight 重登 (`_reloginFlight`) + `_sessionVersion` 防时间差二次重登、仅登录失败回滚、10m/3次白名单熔断、`reportReloginStage`、`readSavedCredentials()`/`_fallbackAccountKeys()` |
 | 测试门面 | `lib/src/backends.dart` | `ScheduleBackend`, `ZfBackend`, `defaultBackendFactory` | 收窄 `ZhengfangClient` 供 DI 与单测替换 |
 | 学业服务 | `lib/src/academic_service.dart` | `AcademicService`, `GradeStats` | 抓取/缓存考试与成绩；`notEvaluated` 保留旧成绩；原生 `jd` 加权 GPA |
 | 课表缓存 | `lib/src/schedule_cache.dart` | `CachedSchedule`, `ScheduleCache`, `FileScheduleCache`, `LateScheduleCache` | `zf-schedule-cache.json` (`baseUrl`/`fetchedAt`/`schedule`/`remarks`) |
@@ -82,8 +82,8 @@ class AppModel extends ChangeNotifier {
     Future<Directory> Function()? supportDirectoryLoader});
   Future<void> boot();
   Future<void> onAppShown();
-  Future<void> syncSilently(); // _loadSchedule(background: true, triggerAcademic: true)
-  Future<void> refresh();      // _loadSchedule(background: true, triggerAcademic: false)
+  Future<void> syncSilently(); // 独立单飞总调度：并行拉起课表线与学业静默线（跨学期自动补跑）
+  Future<void> refresh();      // 仅课表线（不触发学业同步）
   Future<void> signIn(String username, String password);
   Future<void> submitCaptcha(String code);
   Future<void> refreshCaptcha();
@@ -120,7 +120,7 @@ class AppModel extends ChangeNotifier {
 3. `rebind` 到各子控制器；若 `Preferences.didResetFromCorruption`，调 `hints.emitStorageNotice('本地设置文件已损坏且无法恢复，已重置为默认设置')`；置 `prefs.preferencesLoaded = true`（此前 `ReminderService` 禁因默认 `reminderEnabled == false` 清空闹钟）。
 4. `session.restoreSavedSchoolIfNeeded()`（同步 `service.switchSchool`）与 `session.restoreAccount()`（从 `accountOf`/`studentNameOf` 恢复 `_username`/`_studentId`/`_studentName`/`service.accountHint`）。
 5. 并发执行 `session.service.bootstrap()` 与 `scheduleState.scheduleCache.load()`。
-6. **分支 A（`cached != null && sameSchool(cached.baseUrl, schoolBaseUrl)`）**：`_restoreCachedSchedule(cached)` 直达 `ready`（0 延迟）；`Timer(Duration.zero)` 恢复 `academic.restoreCachedData(termId)`；若 `snapshot != null` 且姓名/学号空则 `unawaited(session.syncIdentityQuietly())`；若 `snapshot != null && prefs.autoRefresh && scheduleState.shouldSilentRefresh(cached.fetchedAt)` 则 `unawaited(syncSilently())`；直接返回。
+6. **分支 A（`cached != null && sameSchool(cached.baseUrl, schoolBaseUrl)`）**：`_restoreCachedSchedule(cached)` 直达 `ready`（0 延迟）；若需静默同步则由 `syncSilently()` 并行拉起课表与学业（学业线先读旧缓存兜底并比对），否则 `Timer(Duration.zero)` 恢复 `academic.restoreCachedData(termId)`；若 `snapshot != null` 且姓名/学号空则 `unawaited(session.syncIdentityQuietly())`；直接返回。
 7. **分支 B（无缓存）**：`snapshot == null` 时调 `session.service.readSavedCredentials()`（含规范化键与兼容键回退），有则恢复 `session.username` 并 `_loadSchedule()`，无则置 `needLogin`；`snapshot != null` 直接 `await _loadSchedule()`。
 
 ### 1.4 五大子控制器契约 (`lib/src/state/*`)
@@ -144,7 +144,7 @@ class AppModel extends ChangeNotifier {
   - 300ms 防抖草稿：`setCellHeight` / `setCourseTextScale` 仅更 `_cellHeightDraft` / `_courseTextScaleDraft` 并重置 `_appearanceTimer`，到期或 `flushAppearance()` 合并调 `Preferences.setAppearance()` 落盘；`dispose()` 置 `_disposed = true`、取消定时器并清空草稿（**不触发落盘**）。
   - `checkAutoUpdate`：`!_hasCheckedAutoUpdate && autoCheckUpdate && !_disposed` 时延迟 `initialDelay = 1s` 执行（`updateService == null` 时委托 `_updateFlow.checkForUpdates`）；遇 `UpdateStatus.networkError`/异常重试 2 次（间隔 2s）；`hasUpdate` 调 `_updateFlow.setAvailableUpdate` + `onHasUpdate`。
 - **`HintNoticeController` (`hint_notice_controller.dart`)**：
-  - 优先级 `global > schedule > academic`；`isGlobalPopupActive`：`AppStatus` 为 `booting`/`loading`/`signingIn`/`failed` 或 `_globalHint.isNotEmpty`。
+  - 四槽独立隔离与显示优先级：`systemGlobalHint` > `academicUpdateHint` > `scheduleHint` > `academicHint`；`clearGlobalHint()` 仅清系统全局槽、绝不误清 `academicUpdateHint`；`setSystemStatusBusy()` 联动系统忙碌/错误态，使跨页喜报在被系统层遮挡时延后至真正露面才启动 2s 倒计时；`isGlobalPopupActive`：`AppStatus` 为 `booting`/`loading`/`signingIn`/`failed` 或 `_globalHint`/`_academicUpdateHint` 非空。
   - `humanizeError(AcademicError)` 映射：
 
 | `ErrorCode` | 中文文案 |
@@ -174,11 +174,11 @@ class AppModel extends ChangeNotifier {
 | :--- | :--- | :--- |
 | `_authEpoch` (`int`) | `AppModel` | `_resetAuthFlight()`（`signIn`/`changeSchool`/`signOut` 触发）自增 `_authEpoch` 并清空 `scheduleLoad`/`refreshing`/`_reloginStageActive`/挂起 `captcha`。重登恢复后须校验 `epoch == _authEpoch`。 |
 | `scheduleLoad` (`Future<Schedule>?`) | `ScheduleController` | `_loadSchedule` 登记所有权指针；`await` 返回/异常后须校验 `scheduleLoad == loadFuture` 才写状态；置 `null` 即作废在途请求。 |
-| `_reloginFlight` & `_reloginEpoch` | `ScheduleService` | `getSchedule`/`fetchTerms`/`fetchExams`/`fetchGrades` 遇 `sessionExpired` 共享全局单 flight 重登（返回递增 `_reloginEpoch`）。业务入口先 `await _waitForRelogin()`；重登后并发业务立即再报 `sessionExpired` 按 `_reloginEpoch` 去重仅计 1 次失败。 |
+| `_reloginFlight` / `_reloginEpoch` / `_sessionVersion` | `ScheduleService` | `getSchedule`/`fetchTerms`/`fetchExams`/`fetchGrades` 遇 `sessionExpired` 先比对 `_sessionVersion`（已升级则直接拿新凭证重试 1 次，防并发时间差二次重登），否则共享全局单 flight 重登（返回递增 `_reloginEpoch`）；`reportReloginStage` 隔离可见/静默重登，网关自行广播 `stageRelogin`/`stageReloginFinished` 摘牌，不触碰课表 `refreshing`；同批次并发再过期按 `_reloginEpoch` 去重仅计 1 次。 |
+| `_silentSyncFlight` | `AppModel` | `syncSilently()` 总调度单飞防重入；并行拉起课表与学业静默线（课表失败不连累学业），课表返回跨学期时自动为学业补跑；静默重登遇验证码取消且有本地课表时留 `ready` 轻提示不踢登录页。 |
 | `_schoolSwitchInFlight` / `_schoolSwitchSeq` | `AppModel` | 覆盖读安全存储到新校登录完整窗口防连点重入；`_resetAuthFlight()` 递增 `_schoolSwitchSeq` 作废在途切校。 |
 | `_inFlight` / `_clientFlight` | `ScheduleService` | `_inFlight` 合并并发 `getSchedule()`；`_clientFlight` 合并 `_ensureClient()` 首次构造与 `bootstrap()`。 |
-| `_academicLoadSeq` (`int`) | `AcademicController` | `loadAcademicData()` / `resetOnSignOut()` 自增。`restoreCachedData`/`loadAcademicData`/`_runQuietSync` 每个 `await` 后及 `shouldCache: () => !_disposed && seq == _academicLoadSeq && !_isNeedLoginReader()` 均须校验 `seq == _academicLoadSeq`。 |
-| `_suppressStageHints` (`bool`) | `AppModel` | `AcademicController.syncQuietly` 期间置 `true`，使 `_onServiceStage` 忽略 `relogin`/`fetching_schedule` 阶段气泡。 |
+| `_academicLoadSeq` / `_networkSyncedRevision` | `AcademicController` | `loadAcademicData()` / `resetOnSignOut()` 自增 `_academicLoadSeq`；`restoreCachedData` 额外校验 `_networkSyncedRevision` 防冷启动旧读盘结果覆盖已落盘的新网络同步。 |
 | `SafeJsonFile._queues` & `_pendingWrites` | `SafeJsonFile` | 以 `file.absolute.path` 为键串行化 `readJson`/`writeJson`/`updateJson`/`clear`；`writeJson(coalesce: true)` 最多保留 1 在写 + 1 待写 `_PendingWrite`（原地替换 `buildPayload`）；读/改/清立即封口或取消待写。 |
 
 ---
@@ -187,18 +187,17 @@ class AppModel extends ChangeNotifier {
 
 ### 3.1 `ScheduleService` (`lib/src/schedule_service.dart`)
 
-- **常量**：`autoLoginLimit = 2`，`autoLoginWindow = Duration(minutes: 10)`，`requestTimeoutMs = 10000`，`_requestLogLimit = 120`，`stageRelogin = 'relogin'`，`stageFetchingSchedule = 'fetching_schedule'`。
-- **自动重登与熔断 (`_loginWithSavedCredentials`)**：
+- **常量**：`autoLoginLimit = 3`，`autoLoginWindow = Duration(minutes: 10)`，`requestTimeoutMs = 10000`，`_requestLogLimit = 120`，`stageRelogin = 'relogin'`，`stageReloginFinished = 'relogin_finished'`，`stageFetchingSchedule = 'fetching_schedule'`。
+- **自动重登与白名单熔断 (`_loginWithSavedCredentials`)**：
   1. 调 `readSavedCredentials()`（先查规范化 `_accountKey()` `buildAccountKey(_baseUrl, account)`，未命中再遍历 `_fallbackAccountKeys()` 兼容 `http↔https` 与历史末尾 `/` 键，均在 `signOut()` 同步清理）；无则抛 `SESSION_EXPIRED`（未保存密码）。
-  2. `_breakerOpen || !_autoLoginAllowed()`（10m 内有效失败 >= 2）置 `_breakerOpen = true` 并抛 `SESSION_EXPIRED`（自动登录次数过多）。
-  3. 备份 `rollback = client.exportCookies()`（`client.login()` 入口会 `_cookies.invalidate()`）。
-  4. `client.login(saved)` 错误分类：
-     - **不计熔断**：`networkRetryable` / `timeout` / `serverError` / `accessForbidden` / `cancelled`；
+  2. `_breakerOpen || !_autoLoginAllowed()`（10m 内真实认证失败 >= 3）置 `_breakerOpen = true` 并抛 `SESSION_EXPIRED`（自动登录次数过多）。
+  3. 备份 `rollback = client.exportCookies()`（`client.login()` 入口会 `_cookies.invalidate()`）；**仅登录动作本身失败时 `_restore(client, rollback)`**，重登成功持久化并递增 `_sessionVersion` 后，后续业务重试失败绝不回滚为过期旧 Cookie。
+  4. `client.login(saved)` 严格白名单计次：
      - **立即熔断 (`_breakerOpen = true`)**：`invalidCredentials`（防锁号）；
-     - **计入 10m/2次窗口**：其余认证/验证码取消/网页认证/页面异常，及重登后紧接业务重试仍报 `sessionExpired`（按 `_reloginEpoch` 去重计 1 次）；
+     - **计入 10m/3次窗口**：`captchaRequired`（验证码提交失败）/ `webLoginRequired` / 未知非成功态，及重登后紧接业务重试仍报 `sessionExpired`（按 `_reloginEpoch` 去重计 1 次）；
+     - **永不计次**：用户在验证码页主动取消（`code == null`），以及一切网络/环境异常（`networkRetryable`/`timeout`/`serverError`/`accessForbidden`/`untrustedUrl`/`pageChanged`/`validationFailed`/`staleContext`/`resultUnknown`/`cancelled`）；
      - **清零/解除**：重登后业务成功清空 `_autoLoginFailures`；`_breakerOpen == true` 仅手动 `signIn`/`submitCaptcha` 成功或 `switchSchool` 调 `resetBreaker()` 解除。
-     - 任一失败均 `_restore(client, rollback)` 并上抛。
-  5. 校验 `_client == client` 后 `_persist(client)` 并返回新 `_reloginEpoch`。
+  5. 校验 `_client == client` 后 `_persist(client)`、递增 `_sessionVersion` 并返回新 `_reloginEpoch`。
   6. `signIn()` 走 `_ensureClient(loadCookies: false)` 跳过 `bootstrap()`；`exportCurrentCookies()` 仅导出当前内存非空快照。
 
 ### 3.2 `AcademicService` & `GradeStats` (`lib/src/academic_service.dart`)

@@ -1237,41 +1237,162 @@ void main() {
       }
     });
 
-    test('手动 refresh() 或课表查询失败时不派发学业同步，且学业同步途中退出登录不写回残留数据', () async {
-      final backend = FakeBackend();
-      final rig = buildRig(backend: backend);
+    test(
+      '手动 refresh() 不派发学业同步；syncSilently 双线并行解耦（课表失败不连累学业），退登不写回残留',
+      () async {
+        final backend = FakeBackend();
+        final rig = buildRig(backend: backend);
+        final model = rig.model;
+        addTearDown(model.dispose);
+        model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+        // 1. 手动 refresh() 不派发学业同步
+        await model.refresh();
+        expect(model.academicSyncForTest, isNull);
+        expect(backend.examsCount, 0);
+
+        // 2. syncSilently 课表失败时，并行起飞的学业线照常独立完成，互不连累
+        backend.fetchBehavior = (call, termId) async =>
+            throw const AcademicError(ErrorCode.networkRetryable, '网络超时');
+        await model.syncSilently();
+        expect(model.scheduleHintIsError, isTrue);
+        expect(model.academicSyncForTest, isNotNull);
+        await model.academicSyncForTest;
+        expect(backend.examsCount, 1);
+        expect(model.exams, isNotEmpty);
+
+        // 3. 学业同步进行中退出登录，完成后不得写回残留数据
+        backend.fetchBehavior = null;
+        final academicCompleter = Completer<void>();
+        backend.examsBehavior = (call, termId) async {
+          await academicCompleter.future;
+          return sampleExams();
+        };
+        await model.syncSilently();
+        expect(model.academicSyncForTest, isNotNull);
+
+        await model.signOut();
+        expect(model.status, AppStatus.needLogin);
+        academicCompleter.complete();
+        await Future<void>.delayed(Duration.zero);
+        expect(model.exams, isEmpty);
+        expect(model.grades, isEmpty);
+      },
+    );
+
+    test('syncSilently 真正并行拉起双线、跨学期自动补跑、且课表收尾不误清学业喜报', () async {
+      final examCache = InMemoryExamCache();
+      await examCache.save('2026-2027-1', const <ExamItem>[
+        ExamItem(courseName: '旧考试'),
+      ]);
+      final gradesCache = InMemoryGradesCache();
+      final scheduleGate = Completer<Schedule>();
+      final requestedExamTerms = <String?>[];
+      final backend = FakeBackend()
+        ..fetchBehavior = ((_, _) => scheduleGate.future)
+        ..examsBehavior = (_, termId) async {
+          requestedExamTerms.add(termId);
+          if (termId == '2026-2027-2') {
+            return const <ExamItem>[ExamItem(courseName: '新学期考试')];
+          }
+          return const <ExamItem>[ExamItem(courseName: '新变动考试')];
+        };
+
+      final model = AppModel(
+        service: ScheduleService(
+          credentials: InMemoryCredentialStore(),
+          cookieStorage: FakeSessionRepository(),
+          backendFactory: (_) => backend,
+          baseUrl: _baseUrl,
+        ),
+        preferences: Preferences.inMemory(),
+        examCache: examCache,
+        gradesCache: gradesCache,
+        schoolBaseUrl: _baseUrl,
+      );
+      addTearDown(model.dispose);
+      model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
+
+      // 1. 课表尚未返回前，学业静默线就已经并行发出请求并弹出独立喜报
+      final syncFuture = model.syncSilently();
+      await model.academicSyncForTest;
+      expect(requestedExamTerms, <String?>['2026-2027-1']);
+      expect(model.globalHint, '考试安排有更新');
+      expect(model.isAcademicUpdateHint, isTrue);
+
+      // 2. 随后课表完成（同学期）收尾，绝不能误清刚弹出的跨页学业喜报
+      scheduleGate.complete(sampleSchedule('2026-2027-1'));
+      await syncFuture;
+      expect(model.scheduleHint, '已更新');
+      expect(model.globalHint, '考试安排有更新');
+      expect(model.isAcademicUpdateHint, isTrue);
+
+      // 3. 跨到新学期时：先并行查旧学期，课表返回新学期后自动为学业补跑新学期
+      requestedExamTerms.clear();
+      backend.fetchBehavior = (_, _) async => sampleSchedule('2026-2027-2');
+      await model.syncSilently();
+      await model.academicSyncForTest;
+      expect(
+        requestedExamTerms,
+        containsAll(<String>['2026-2027-1', '2026-2027-2']),
+      );
+      expect(model.termId, '2026-2027-2');
+      expect(model.exams.single.courseName, '新学期考试');
+    });
+
+    test('跨页学业喜报被重登气泡遮挡时延后开始 2 秒计时；静默同步取消验证码留在课表页不踢登录页', () async {
+      // 1. 喜报被系统全局气泡遮挡时暂不倒计时，解除遮挡后才开始完整计时
+      final rig = buildRig();
       final model = rig.model;
       addTearDown(model.dispose);
       model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
 
-      // 1. 手动 refresh() 不派发学业同步
-      await model.refresh();
-      expect(model.academicSyncForTest, isNull);
-      expect(backend.examsCount, 0);
+      model.hints.showHint('正在重新登录…', scope: HintScope.global);
+      model.hints.showAcademicUpdateHint(
+        '成绩有更新',
+        duration: const Duration(milliseconds: 80),
+      );
+      expect(model.globalHint, '正在重新登录…');
+      expect(model.isAcademicUpdateHint, isFalse);
 
-      // 2. syncSilently 课表失败不派发学业同步
-      backend.fetchBehavior = (call, termId) async =>
-          throw const AcademicError(ErrorCode.networkRetryable, '网络超时');
-      await model.syncSilently();
-      expect(model.academicSyncForTest, isNull);
-      expect(backend.examsCount, 0);
+      // 遮挡超过 80ms 后喜报仍健在
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(model.hints.academicUpdateHint, '成绩有更新');
 
-      // 3. 学业同步进行中退出登录，完成后不得写回残留数据
-      backend.fetchBehavior = null;
-      final academicCompleter = Completer<void>();
-      backend.examsBehavior = (call, termId) async {
-        await academicCompleter.future;
-        return sampleExams();
-      };
-      await model.syncSilently();
-      expect(model.academicSyncForTest, isNotNull);
+      // 解除遮挡：喜报露面并开始 80ms 倒计时
+      model.hints.clearGlobalHint();
+      expect(model.globalHint, '成绩有更新');
+      expect(model.isAcademicUpdateHint, isTrue);
 
-      await model.signOut();
-      expect(model.status, AppStatus.needLogin);
-      academicCompleter.complete();
-      await Future<void>.delayed(Duration.zero);
-      expect(model.exams, isEmpty);
-      expect(model.grades, isEmpty);
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(model.globalHint, isEmpty);
+
+      // 2. 静默同步遇验证码取消：已有本地课表时留在 ready 并轻提示，不踢回登录页、不扣熔断次数
+      await rig.credentials.save(
+        '${model.service.baseUrl.toLowerCase()}|20240001',
+        const Credentials('20240001', 'pw'),
+      );
+      model.service.accountHint = '20240001';
+      model.session.username = '20240001';
+      rig.backend.fetchBehavior = (_, _) async => throw expired();
+      rig.backend.loginBehavior = (_, _) async => const CaptchaState(
+        continuationId: 'silent-cap',
+        imageBase64: 'iVBORw0KGgo=',
+        mimeType: 'image/png',
+      );
+
+      final silentFuture = model.syncSilently();
+      for (var i = 0; i < 30 && model.status != AppStatus.needCaptcha; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(model.status, AppStatus.needCaptcha);
+
+      model.cancelCaptcha();
+      await silentFuture;
+      expect(model.status, AppStatus.ready);
+      expect(model.schedule, isNotNull);
+      expect(model.scheduleHint, '已取消自动登录');
+      expect(model.service.breakerOpen, isFalse);
     });
 
     test('同学期静默更新与手动刷新保留当前查看周次，若新课表 maxWeek 变小则自动收敛', () async {
@@ -2000,7 +2121,8 @@ void main() {
         showHint: true,
       );
       await waitUntil(() => model.globalHint == '正在重新登录…');
-      expect(model.refreshing, isTrue);
+      expect(model.refreshing, isFalse);
+      expect(model.academicLoading, isTrue);
 
       await model.loadAcademicData(termId: '2026-2027-2', forceRefresh: false);
       expect(model.exams.single.courseName, '第二学期缓存考试');
