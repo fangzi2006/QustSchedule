@@ -53,7 +53,7 @@
 | [`lib/src/widget_gateway.dart`](../../lib/src/widget_gateway.dart) | `DesktopWidgetGateway`, `MethodChannelDesktopWidgetGateway` | `qustschedule/widget` 通道网关与实例计数监听 |
 | [`lib/src/widget_service.dart`](../../lib/src/widget_service.dart) | `WidgetSnapshotInput`, `DesktopWidgetService` | 300ms 防抖 + 单飞队列同步原生小组件与 `livePinnedCounts` |
 
-### 1.4 自动更新 (`lib/src/updater/`，6 文件)
+### 1.4 应用内更新（新版本） (`lib/src/updater/`，6 文件)
 | 文件 | 核心导出 | 职责 |
 |---|---|---|
 | [`lib/src/updater/update_flow_controller.dart`](../../lib/src/updater/update_flow_controller.dart) | `UpdateFlowController`, `UpdateFlowStage` | 单弹窗更新状态机、后台胶囊、`_downloadEpoch`/`_isTriggeringInstall` 防竞态与注入 `UpdaterGateway` |

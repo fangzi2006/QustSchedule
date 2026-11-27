@@ -300,7 +300,7 @@ class AppModel extends ChangeNotifier {
   QuickSetup? get quickSetup => prefs.quickSetup;
   Future<void> saveQuickSetup(QuickSetup setup) => prefs.saveQuickSetup(setup);
 
-  // 课表显示与静默更新设置
+  // 课表显示与数据静默同步设置
   bool get showTeacher => prefs.showTeacher;
   bool get showLocation => prefs.showLocation;
   Future<void> setShowTeacher(bool value) => prefs.setShowTeacher(value);

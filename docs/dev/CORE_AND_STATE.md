@@ -10,7 +10,7 @@
 | 认证会话 | `lib/src/state/auth_session_controller.dart` | `AuthSessionController` | `ScheduleService`/`schoolBaseUrl`/`username`/`studentId`/`studentName`/验证码 `Completer`/请求日志 |
 | 课表周历 | `lib/src/state/schedule_controller.dart` | `ScheduleController`, `WeekNotifier` | `Schedule`/`Terms`/`week`/`weekNotifier`/`refreshingNotifier`/校历/调课与冲突缓存 (`_dataRevision`) |
 | 学业数据 | `lib/src/state/academic_controller.dart` | `AcademicController` | `exams`/`grades`/`gradeStats`（引用记忆化）/`isNotEvaluated`/`_academicLoadSeq`/静默同步与变更比对 |
-| 偏好防抖 | `lib/src/state/preferences_controller.dart` | `PreferencesController` | `Preferences` 读写、滑块 300ms 草稿防抖（`dispose()` 清理不落盘）、启动自动查更 |
+| 偏好防抖 | `lib/src/state/preferences_controller.dart` | `PreferencesController` | `Preferences` 读写、滑块 300ms 草稿防抖（`dispose()` 清理不落盘）、启动自动检查新版本 |
 | 提示气泡 | `lib/src/state/hint_notice_controller.dart` | `HintNoticeController`, `HintScope` | 四槽隔离（`systemGlobalHint`/`academicUpdateHint`/`scheduleHint`/`academicHint`）、喜报遮挡延后计时、`storageNoticeEvent`、`humanizeError` |
 | 课表服务 | `lib/src/schedule_service.dart` | `ScheduleService` | Cookie 优先抓取；`SESSION_EXPIRED` 单 flight 重登 (`_reloginFlight`) + `_sessionVersion` 防时间差二次重登、仅登录失败回滚、10m/3次白名单熔断、`reportReloginStage`、`readSavedCredentials()`/`_fallbackAccountKeys()` |
 | 测试门面 | `lib/src/backends.dart` | `ScheduleBackend`, `ZfBackend`, `defaultBackendFactory` | 收窄 `ZhengfangClient` 供 DI 与单测替换 |
@@ -273,8 +273,8 @@ class AppModel extends ChangeNotifier {
 | `showLocation` | `bool` | `true` | `bool` | 格子显示地点 |
 | `cellHeight` | `double` | `60.0` (`defaultCellHeight`) | `clampCellHeight`: `50.0..120.0` (`minCellHeight..maxCellHeight`) | 单节行高（逻辑像素） |
 | `courseTextScale` | `double` | `1.0` (`defaultCourseTextScale`) | `clampCourseTextScale`: `0.8..1.4` (`minCourseTextScale..maxCourseTextScale`) | 卡片字号倍率 |
-| `autoRefresh` | `bool` | `true` | `bool` | Schema 5：冷启动/回前台静默刷新 |
-| `autoRefreshIntervalMinutes` | `int` | `180` (`defaultAutoRefreshIntervalMinutes`) | `clampAutoRefreshIntervalMinutes`: `60..1440` | Schema 5：静默刷新最小间隔（分） |
+| `autoRefresh` | `bool` | `true` | `bool` | Schema 5：冷启动/回前台数据静默同步（并行课表与学业） |
+| `autoRefreshIntervalMinutes` | `int` | `180` (`defaultAutoRefreshIntervalMinutes`) | `clampAutoRefreshIntervalMinutes`: `60..1440` | Schema 5：数据静默同步最小间隔（分） |
 | `reschedules` | `List<Map>` | `[]` | `RescheduleRule.fromJson` | Schema 5：按日调课规则 |
 | `showScheduleRemarks` | `bool` | `true` | `bool` | Schema 6：底部实践/其他备注 |
 | `reminderEnabled` | `bool` | `false` | `bool` | Schema 9：课前提醒开关（默认关） |
@@ -283,7 +283,7 @@ class AppModel extends ChangeNotifier {
 | `reminderFluidUntilEnd` | `bool` | `false` (`defaultReminderFluidUntilEnd`) | `bool` | Schema 11：流体云持续至下课 |
 | `selectedUpdateProxy` | `String` | `'https://gh-proxy.org'` (`defaultUpdateProxyUrl`) | 兼容旧键 `updateProxyUrl`；`''` 为直连（真源归 `update_models.dart`，由 `preferences_repository.dart` 再导出） | Schema 12：当前更新代理 |
 | `customUpdateProxies` | `List<String>` | `[]` | 过滤空串与 `presetUpdateProxies`（`update_models.dart`） | Schema 12：自定义代理（删当前选中回退默认） |
-| `autoCheckUpdate` | `bool` | `true` (`defaultAutoCheckUpdate`) | `bool` | Schema 12：启动自动查更 |
+| `autoCheckUpdate` | `bool` | `true` (`defaultAutoCheckUpdate`) | `bool` | Schema 12：启动自动检查应用新版本 |
 | `widgetConfig` | `Map<String,dynamic>` | `DesktopWidgetConfigSet.defaults()` | 按 `DesktopWidgetKind` (`today`/`week`/`next`) 存储 | Schema 14：桌面小组件样式（见 `WIDGET.md`） |
 | `timetables` | `List<Map>` | `[defaultTimetable(), defaultSummerTimetable()]` | `_withBuiltinSummerTable` 自动补春夏表；上限 20，传空抛 `ArgumentError` | 作息时间表列表（至少 1 张） |
 | `quickSetup` | `Map<String,dynamic>?` | `null`（未保存不写出） | `QuickSetup.fromJson` | 快捷作息参数记忆 |

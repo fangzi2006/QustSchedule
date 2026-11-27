@@ -6,7 +6,7 @@
 ///  3. 课表节数（上午 / 下午 / 晚上各几节，全局设置，所有作息表共用）；
 ///  4. 课表格子里显不显示教师 / 上课地点；
 ///  5. 外观：格子高度与课程卡片文字缩放；
-///  6. 静默更新开关与最小间隔、调课规则；
+///  6. 数据静默同步（课表与学业）开关与最小间隔、调课规则；
 ///  7. 课前提醒开关与提前量（schema 9）。
 ///
 /// 为什么不复用 Cookie 快照文件：那个是会话资产（可清可重建），
@@ -39,7 +39,7 @@ export 'updater/update_models.dart'
 
 const int preferencesSchema = 15;
 
-/// 启动时是否自动检查更新（默认开启）。
+/// 启动时是否自动检查应用新版本（默认开启，区别于课表/学业数据静默同步）。
 const bool defaultAutoCheckUpdate = true;
 
 /// 课表格子（一节那一行）的高度，逻辑像素。
@@ -66,7 +66,7 @@ double clampCourseTextScale(double value) {
   return value.clamp(minCourseTextScale, maxCourseTextScale).toDouble();
 }
 
-/// 静默更新的最小间隔（分钟）范围与默认值。
+/// 数据静默同步（课表与学业）的最小间隔（分钟）范围与默认值。
 const int minAutoRefreshIntervalMinutes = 60;
 const int maxAutoRefreshIntervalMinutes = 1440;
 const int defaultAutoRefreshIntervalMinutes = 180;
@@ -805,13 +805,13 @@ class Preferences {
   }
 
   // ---------------------------------------------------------------------------
-  // 静默更新 + 调课
+  // 数据静默同步 + 调课
   // ---------------------------------------------------------------------------
 
-  /// 是否开启冷启动的静默更新。
+  /// 是否开启冷启动/回前台的数据静默同步（并行同步课表与学业）。
   bool get autoRefresh => _autoRefresh;
 
-  /// 静默更新的最小间隔（分钟）。
+  /// 数据静默同步的最小间隔（分钟）。
   int get autoRefreshIntervalMinutes => _autoRefreshIntervalMinutes;
 
   /// 调课规则（只影响渲染）。
