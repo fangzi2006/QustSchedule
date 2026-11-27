@@ -230,6 +230,25 @@ void main() {
       await tester.pumpWidget(wrap(SettingsPage(model: model)));
 
       await tester.dragUntilVisible(
+        find.text('自动检查新版本'),
+        find.byType(ListView),
+        const Offset(0, -60),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('自动检查新版本'), findsOneWidget);
+      expect(find.text('启动应用时检测是否有新版本安装包'), findsOneWidget);
+
+      await tester.dragUntilVisible(
+        find.text('自动同步课表与学业'),
+        find.byType(ListView),
+        const Offset(0, 80),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('自动同步课表与学业'), findsOneWidget);
+      expect(find.text('启动或回到前台时，按间隔自动同步课表、考试与成绩'), findsOneWidget);
+      expect(find.text('最小同步间隔'), findsOneWidget);
+
+      await tester.dragUntilVisible(
         find.text('退出登录'),
         find.byType(ListView),
         const Offset(0, -60),

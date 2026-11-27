@@ -144,8 +144,8 @@ class SettingsPage extends StatelessWidget {
                     const Divider(height: 0, indent: 56),
                     SwitchListTile(
                       secondary: const Icon(Icons.sync_rounded, size: 20),
-                      title: const Text('静默更新'),
-                      subtitle: const Text('打开 App 时自动刷新课表'),
+                      title: const Text('自动同步课表与学业'),
+                      subtitle: const Text('启动或回到前台时，按间隔自动同步课表、考试与成绩'),
                       value: model.autoRefresh,
                       onChanged: model.setAutoRefresh,
                     ),
@@ -153,7 +153,7 @@ class SettingsPage extends StatelessWidget {
                       const Divider(height: 0, indent: 56),
                       ListTile(
                         leading: const Icon(Icons.timer_outlined, size: 20),
-                        title: const Text('最小更新间隔'),
+                        title: const Text('最小同步间隔'),
                         subtitle: Text(
                           _formatInterval(model.autoRefreshIntervalMinutes),
                         ),
@@ -244,8 +244,8 @@ class SettingsPage extends StatelessWidget {
                   children: <Widget>[
                     SwitchListTile(
                       secondary: const Icon(Icons.autorenew_rounded, size: 20),
-                      title: const Text('自动检查更新'),
-                      subtitle: const Text('启动应用时静默检测新版本'),
+                      title: const Text('自动检查新版本'),
+                      subtitle: const Text('启动应用时检测是否有新版本安装包'),
                       value: model.autoCheckUpdate,
                       onChanged: model.setAutoCheckUpdate,
                     ),
