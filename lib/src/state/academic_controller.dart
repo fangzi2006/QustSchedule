@@ -260,7 +260,7 @@ class AcademicController extends ChangeNotifier {
       _academicNeedsRelogin = false;
       notifyListeners();
       if (showHint) {
-        _hints.showHint('正在更新学业数据…', scope: HintScope.academic);
+        _hints.showHint('更新中...', scope: HintScope.academic);
       }
       String? changeMsg;
 
@@ -339,14 +339,8 @@ class AcademicController extends ChangeNotifier {
           if (_isNeedLoginReader()) {
             _hints.clearAcademicHint();
           } else if (_academicError != null) {
-            if (showHint) {
-              _hints.showHint(
-                '更新失败：$_academicError',
-                error: true,
-                clearAfter: const Duration(seconds: 4),
-                scope: HintScope.academic,
-              );
-            }
+            // 学业失败统一由页面顶部红底横幅展示，收起进行中气泡避免重复报错。
+            _hints.clearAcademicHint();
           } else if (changeMsg != null) {
             _hints.clearAcademicHint();
             _hints.showAcademicUpdateHint(changeMsg);

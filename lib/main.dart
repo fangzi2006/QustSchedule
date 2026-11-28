@@ -302,7 +302,7 @@ class _BootScreen extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              '正在连接教务系统…',
+              '正在连接教务系统...',
               style: TextStyle(
                 fontSize: 13,
                 color: Theme.of(context).hintColor,

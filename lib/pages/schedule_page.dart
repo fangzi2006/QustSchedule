@@ -321,7 +321,7 @@ class _UpdateStatusButton extends StatelessWidget {
               ),
             ),
             flow.progress == null
-                ? '正在下载更新…'
+                ? '正在下载更新...'
                 : '正在下载更新 ${flow.progress!.percentage}%',
           ),
           UpdateFlowStage.readyToInstall => (

@@ -380,7 +380,7 @@ class _UpdateFlowDialogState extends State<_UpdateFlowDialog>
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  progress == null ? '连接中…' : '$percent%',
+                  progress == null ? '连接中...' : '$percent%',
                   style: const TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
@@ -635,7 +635,7 @@ class _UpdateFlowDialogState extends State<_UpdateFlowDialog>
                       : () => unawaited(_controller.executeInstall()),
                   label: Text(
                     isTriggeringInstall
-                        ? '正在准备更新…'
+                        ? '正在准备更新...'
                         : (isWindows ? '立即重启更新' : '立即安装'),
                   ),
                 ),

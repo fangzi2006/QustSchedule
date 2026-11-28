@@ -115,7 +115,7 @@ class StatusPopup extends StatelessWidget {
           return null;
         }
         if (model.status == AppStatus.signingIn) {
-          return const _PopupData(text: '登录中…', busy: true);
+          return const _PopupData(text: '登录中...', busy: true);
         }
         if (model.hints.systemGlobalHint.isNotEmpty) {
           final error = model.hints.systemGlobalHintIsError;
@@ -126,14 +126,14 @@ class StatusPopup extends StatelessWidget {
           );
         }
         if (model.status == AppStatus.loading) {
-          // 有具体文案就用它（例如"正在切换到「青岛科技大学」…"），没写才退回通用文案。
+          // 有具体文案就用它（例如"正在切换到「青岛科技大学」..."），没写才退回通用文案。
           return _PopupData(
-            text: model.message.isEmpty ? '获取中…' : model.message,
+            text: model.message.isEmpty ? '获取中...' : model.message,
             busy: true,
           );
         }
         if (model.status == AppStatus.booting) {
-          return const _PopupData(text: '连接中…', busy: true);
+          return const _PopupData(text: '连接中...', busy: true);
         }
         if (model.hints.academicUpdateHint.isNotEmpty) {
           return _PopupData(text: model.hints.academicUpdateHint);

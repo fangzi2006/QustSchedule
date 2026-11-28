@@ -434,7 +434,7 @@ class _PermissionsCard extends StatelessWidget {
             icon: Icons.notifications_outlined,
             title: '通知权限',
             value: status == null
-                ? '查询中…'
+                ? '查询中...'
                 : (canNotify ? '已允许 · 横幅与锁屏需手动开启' : '已禁止 · 无法收到任何提醒'),
             ok: canNotify,
             actionLabel: canNotify ? '去设置' : '去授权',

@@ -23,28 +23,45 @@ class UpdateProxyPage extends StatefulWidget {
 
 class _UpdateProxyPageState extends State<UpdateProxyPage> {
   final _testResults = <String, ProxyTestResult>{};
-  final _testingUrls = <String>{};
+  final _testingTasks = <String, Future<void>>{};
+  bool _testingAll = false;
 
-  Future<void> _testProxy(String url) async {
-    if (_testingUrls.contains(url)) return;
-    setState(() => _testingUrls.add(url));
-    try {
-      final result = await widget.model.testUpdateProxy(url);
-      if (!mounted) return;
-      setState(() {
-        _testResults[url] = result;
-      });
-    } finally {
-      if (mounted) {
-        setState(() => _testingUrls.remove(url));
+  Future<void> _testProxy(String url) {
+    final existing = _testingTasks[url];
+    if (existing != null) return existing;
+    late final Future<void> task;
+    task = () async {
+      try {
+        final result = await widget.model.testUpdateProxy(url);
+        if (!mounted) return;
+        setState(() {
+          _testResults[url] = result;
+        });
+      } finally {
+        _testingTasks.removeWhere((key, _) => key == url);
+        if (mounted) {
+          setState(() {});
+        }
       }
+    }();
+    _testingTasks[url] = task;
+    if (mounted) {
+      setState(() {});
     }
+    return task;
   }
 
   Future<void> _testAll() async {
-    final proxies = <String>[...widget.model.allUpdateProxies, ''];
-
-    await Future.wait(proxies.map(_testProxy));
+    if (_testingAll) return;
+    setState(() => _testingAll = true);
+    try {
+      final proxies = <String>[...widget.model.allUpdateProxies, ''];
+      await Future.wait(proxies.map(_testProxy));
+    } finally {
+      if (mounted) {
+        setState(() => _testingAll = false);
+      }
+    }
   }
 
   Future<void> _addProxy(BuildContext context) async {
@@ -115,9 +132,15 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
               Padding(
                 padding: const EdgeInsets.only(right: 6),
                 child: TactileIconButton(
-                  icon: const Icon(Icons.speed_rounded),
-                  tooltip: '测速全部节点',
-                  onPressed: _testAll,
+                  icon: _testingAll
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.speed_rounded),
+                  tooltip: _testingAll ? '正在测速...' : '测速全部节点',
+                  onPressed: _testingAll ? null : _testAll,
                 ),
               ),
               Padding(
@@ -206,7 +229,7 @@ class _UpdateProxyPageState extends State<UpdateProxyPage> {
   ) {
     final theme = Theme.of(context);
     final isSelected = proxy.trim() == selectedProxy.trim();
-    final isTesting = _testingUrls.contains(proxy);
+    final isTesting = _testingTasks.containsKey(proxy);
     final testResult = _testResults[proxy];
     final isCustom =
         proxy.isNotEmpty && widget.model.customUpdateProxies.contains(proxy);

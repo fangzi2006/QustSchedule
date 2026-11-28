@@ -263,12 +263,12 @@ void main() {
       // 3. 登录页残留提示不变成永远转的圈
       await tester.pumpWidget(const SizedBox());
       final m3 = buildModel();
-      m3.setHintForTest('登录中…');
+      m3.setHintForTest('登录中...');
       m3.setStatusForTest(AppStatus.needLogin, message: '已取消登录');
       await tester.pumpWidget(wrap(pageForStatus(m3)));
       await tester.pumpAndSettle();
       expect(find.byType(LoginPage), findsOneWidget);
-      expect(find.text('登录中…'), findsNothing);
+      expect(find.text('登录中...'), findsNothing);
       expect(find.text('已取消登录'), findsOneWidget);
 
       // 4. 登录中停在登录页，进度走弹窗
@@ -278,7 +278,7 @@ void main() {
       await tester.pumpWidget(wrap(pageForStatus(m4)));
       await tester.pump();
       expect(find.byType(LoginPage), findsOneWidget);
-      expect(find.text('登录中…'), findsOneWidget);
+      expect(find.text('登录中...'), findsOneWidget);
     });
   });
 

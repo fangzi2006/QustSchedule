@@ -94,7 +94,7 @@ void main() {
     model.weekNotifier.addListener(() => weekCount++);
     model.prefsNotifier.addListener(() => prefsCount++);
 
-    model.setHintForTest('更新中…', scope: HintScope.schedule);
+    model.setHintForTest('更新中...', scope: HintScope.schedule);
     expect(hintsCount, 1);
     expect(rootCount, 0);
     expect(routeCount, 0);

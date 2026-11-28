@@ -240,7 +240,7 @@ void main() {
       await tester.pump();
 
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
-      expect(find.text('获取中…'), findsOneWidget);
+      expect(find.text('获取中...'), findsOneWidget);
       expect(find.byType(SchedulePage), findsOneWidget);
 
       await tester.pumpWidget(const SizedBox());
@@ -1027,15 +1027,15 @@ void main() {
       );
       await tester.pumpWidget(wrap(HomeShell(model: rig)));
 
-      rig.setHintForTest('更新中…');
+      rig.setHintForTest('更新中...');
       await tester.pump();
-      expect(find.text('更新中…'), findsOneWidget);
+      expect(find.text('更新中...'), findsOneWidget);
       expect(find.text('期初课'), findsOneWidget);
       expect(find.text('第 1 周'), findsOneWidget);
       rig.clearHint();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 250));
-      expect(find.text('更新中…'), findsNothing);
+      expect(find.text('更新中...'), findsNothing);
 
       Future<double> widthFor(String hint) async {
         rig.setHintForTest(hint, scope: HintScope.schedule);
@@ -1083,12 +1083,12 @@ void main() {
       await tester.pump();
       expect(find.text('学业更新中…'), findsNothing);
 
-      rig.setHintForTest('正在重新登录…', scope: HintScope.global);
+      rig.setHintForTest('正在重新登录...', scope: HintScope.global);
       await tester.pump();
-      expect(find.text('正在重新登录…'), findsOneWidget);
+      expect(find.text('正在重新登录...'), findsOneWidget);
       rig.clearGlobalHint();
       await tester.pump();
-      expect(find.text('正在重新登录…'), findsNothing);
+      expect(find.text('正在重新登录...'), findsNothing);
 
       // 触发学业更新全局气泡并点击：自动切换到学业页并清除全局气泡
       rig.showAcademicUpdateHintForTest('考试安排有更新');

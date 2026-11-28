@@ -902,12 +902,12 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       // 后台线程状态查询立即与 260ms 滑入动画并行启动，但动画期间不提前提交 UI 状态变更。
       expect(gateway.statusCount, 1);
-      expect(find.text('查询中…'), findsWidgets);
+      expect(find.text('查询中...'), findsWidgets);
 
       await tester.pumpAndSettle();
       // 落稳瞬间直接消费并行查询结果，不发起二次查询，UI 立刻展示真实权限状态。
       expect(gateway.statusCount, 1);
-      expect(find.text('查询中…'), findsNothing);
+      expect(find.text('查询中...'), findsNothing);
 
       service.dispose();
       model.dispose();
@@ -949,7 +949,7 @@ void main() {
       await tester.pumpAndSettle();
       // 初始查询仍未返回，落稳后继续显示查询中。
       expect(gateway.statusCount, 1);
-      expect(find.text('查询中…'), findsWidgets);
+      expect(find.text('查询中...'), findsWidgets);
 
       // 慢查询在落稳后完成，UI 立即更新（scheduled = 7, exactAlarmAllowed = true）。
       firstCompleter.complete(
@@ -963,7 +963,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('查询中…'), findsNothing);
+      expect(find.text('查询中...'), findsNothing);
       expect(find.text('7 条'), findsOneWidget);
       expect(find.text('精确闹钟'), findsOneWidget);
 

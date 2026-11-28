@@ -164,13 +164,7 @@ class _AcademicPageState extends State<AcademicPage> {
               Padding(
                 padding: const EdgeInsets.only(left: 6, right: 10),
                 child: TactileIconButton(
-                  icon: model.academicLoading
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.refresh_rounded),
+                  icon: const Icon(Icons.refresh_rounded),
                   tooltip: '刷新学业数据',
                   onPressed: model.academicLoading
                       ? null

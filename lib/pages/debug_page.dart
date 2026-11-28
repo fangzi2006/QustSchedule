@@ -657,7 +657,7 @@ class _CollapsibleTextState extends State<_CollapsibleText> {
     final long = text.length > _previewLength;
     final shown = _expanded || !long
         ? text
-        : '${text.substring(0, _previewLength)}\n…';
+        : '${text.substring(0, _previewLength)}\n...';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[

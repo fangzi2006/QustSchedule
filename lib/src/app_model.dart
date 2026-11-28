@@ -671,9 +671,9 @@ class AppModel extends ChangeNotifier {
 
     scheduleState.setRefreshing(true);
     if (silent) {
-      hints.showHint('更新中…', scope: HintScope.schedule);
+      hints.showHint('更新中...', scope: HintScope.schedule);
     } else {
-      final loadingText = hasData ? '更新中…' : '获取中…';
+      final loadingText = hasData ? '更新中...' : '获取中...';
       _setStatus(AppStatus.loading, message: loadingText);
       hints.showHint(loadingText, scope: HintScope.schedule);
     }
@@ -846,7 +846,7 @@ class AppModel extends ChangeNotifier {
     final epoch = _authEpoch;
     session.username = username;
     _setStatus(AppStatus.signingIn);
-    hints.showHint('登录中…');
+    hints.showHint('登录中...');
     try {
       final state = await session.service.signIn(
         username,
@@ -1127,7 +1127,10 @@ class AppModel extends ChangeNotifier {
       final int epoch = _authEpoch;
       hints.clearGlobalHint();
       hints.clearScheduleHint();
-      _setStatus(AppStatus.loading, message: '正在切换到「${schoolLabel(baseUrl)}」…');
+      _setStatus(
+        AppStatus.loading,
+        message: '正在切换到「${schoolLabel(baseUrl)}」...',
+      );
       session.switchSchoolTarget(baseUrl);
       session.username = account;
       prefs.notifyPrefs();
@@ -1390,13 +1393,13 @@ class AppModel extends ChangeNotifier {
   void _onServiceStage(String stage) {
     if (_disposed) return;
     if (stage == ScheduleService.stageRelogin) {
-      hints.showHint('正在重新登录…', scope: HintScope.global);
+      hints.showHint('正在重新登录...', scope: HintScope.global);
     } else if (stage == ScheduleService.stageReloginFinished) {
       hints.clearGlobalHint();
     } else if (stage == ScheduleService.stageFetchingSchedule) {
       hints.clearGlobalHint();
       final hasData = scheduleState.schedule != null;
-      hints.showHint(hasData ? '更新中…' : '获取中…', scope: HintScope.schedule);
+      hints.showHint(hasData ? '更新中...' : '获取中...', scope: HintScope.schedule);
     }
   }
 

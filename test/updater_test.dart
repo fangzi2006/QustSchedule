@@ -1412,6 +1412,94 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
     });
+
+    testWidgets('UpdateProxyPage 顶栏「测速全部节点」按钮在测速期间转圈防连点，全部完成后恢复', (
+      tester,
+    ) async {
+      final gates = <String, Completer<ProxyTestResult>>{};
+      final callCounts = <String, int>{};
+      final proxyService = _GatedProxyTestUpdateService(
+        onTest: (proxyUrl) {
+          callCounts[proxyUrl] = (callCounts[proxyUrl] ?? 0) + 1;
+          return gates
+              .putIfAbsent(proxyUrl, Completer<ProxyTestResult>.new)
+              .future;
+        },
+      );
+      final model = AppModel(
+        preferences: Preferences.inMemory(),
+        updateFlow: UpdateFlowController(updateService: proxyService),
+      );
+      addTearDown(model.dispose);
+
+      await tester.pumpWidget(MaterialApp(home: UpdateProxyPage(model: model)));
+      await tester.pumpAndSettle();
+
+      final testAllBtn = find.byTooltip('测速全部节点');
+      expect(testAllBtn, findsOneWidget);
+      await tester.tap(testAllBtn);
+      await tester.pump();
+
+      // 测速期间：顶栏显示转圈且按钮禁用防连点，所有节点仅各发起一次测速
+      expect(find.byTooltip('正在测速...'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsOneWidget,
+      );
+      final appBarBusyBtn = tester.widget<IconButton>(
+        find
+            .descendant(
+              of: find.byType(AppBar),
+              matching: find.byType(IconButton),
+            )
+            .at(1),
+      );
+      expect(appBarBusyBtn.onPressed, isNull);
+
+      final allUrls = <String>[...model.allUpdateProxies, ''];
+      expect(gates.keys.toSet(), allUrls.toSet());
+
+      // 先完成除最后一个外的所有节点：顶栏仍保持转圈防连点
+      for (final url in allUrls.take(allUrls.length - 1)) {
+        gates[url]!.complete(
+          ProxyTestResult(
+            proxyUrl: url,
+            isUsable: true,
+            latencyMs: 50,
+            supportsApi: true,
+          ),
+        );
+      }
+      await tester.pump();
+      expect(find.byTooltip('正在测速...'), findsOneWidget);
+
+      // 最后一个节点也完成后：顶栏恢复测速图标与可点击态
+      final lastUrl = allUrls.last;
+      gates[lastUrl]!.complete(
+        ProxyTestResult(
+          proxyUrl: lastUrl,
+          isUsable: true,
+          latencyMs: 80,
+          supportsApi: true,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('测速全部节点'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsNothing,
+      );
+      for (final url in allUrls) {
+        expect(callCounts[url], 1);
+      }
+    });
   });
 
   group('Android 安装分支、平台弹窗差异与代理主机精确匹配', () {
@@ -2258,4 +2346,13 @@ class _MockRetryUpdateService extends UpdateService {
     calls++;
     return result;
   }
+}
+
+class _GatedProxyTestUpdateService extends UpdateService {
+  _GatedProxyTestUpdateService({required this.onTest});
+
+  final Future<ProxyTestResult> Function(String proxyUrl) onTest;
+
+  @override
+  Future<ProxyTestResult> testProxy(String proxyUrl) => onTest(proxyUrl);
 }

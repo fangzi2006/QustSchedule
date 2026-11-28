@@ -1140,4 +1140,59 @@ void main() {
     await tester.pump();
     expect(model.status, AppStatus.needLogin);
   });
+
+  testWidgets('学业页刷新按钮保持静态禁用且气泡统一「更新中...」，失败仅展顶部红底横幅不重复弹红气泡', (tester) async {
+    final examsGate = Completer<List<ExamItem>>();
+    final gradesGate = Completer<List<GradeItem>>();
+    final backend = FakeBackend()
+      ..examsBehavior = ((_, _) => examsGate.future)
+      ..gradesBehavior = ((_, _) => gradesGate.future);
+    final model = _buildTestModel(backend: backend);
+    addTearDown(model.dispose);
+    model.hydrateForTest(
+      schedule: sampleSchedule('2026-2027-1'),
+      exams: sampleExams('2026-2027-1'),
+      grades: sampleGrades('2026-2027-1'),
+    );
+
+    await tester.pumpWidget(_wrap(AcademicPage(model: model)));
+    await tester.pumpAndSettle();
+
+    final refreshBtnFinder = find.widgetWithIcon(
+      IconButton,
+      Icons.refresh_rounded,
+    );
+    expect(refreshBtnFinder, findsOneWidget);
+
+    await tester.tap(refreshBtnFinder);
+    await tester.pump();
+
+    // 1. 方案 B：顶栏刷新按钮保持静态刷新图标（仅禁用），不替换为转圈；右上角气泡统一显示「更新中...」
+    expect(refreshBtnFinder, findsOneWidget);
+    expect(tester.widget<IconButton>(refreshBtnFinder).onPressed, isNull);
+    expect(
+      find.descendant(
+        of: find.byType(AppBar),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsNothing,
+    );
+    expect(model.academicHint, '更新中...');
+    expect(find.text('更新中...'), findsOneWidget);
+
+    // 2. 失败时仅由顶部红底横幅承载错误，右上角气泡收起不重复弹红气泡
+    examsGate.completeError(
+      const AcademicError(ErrorCode.networkRetryable, '网络不稳定'),
+    );
+    gradesGate.completeError(
+      const AcademicError(ErrorCode.networkRetryable, '网络不稳定'),
+    );
+    await tester.pumpAndSettle();
+
+    expect(model.academicError, isNotNull);
+    expect(model.academicHint, isEmpty);
+    expect(find.textContaining('更新失败：'), findsNothing);
+    expect(find.widgetWithText(TextButton, '重试'), findsOneWidget);
+    expect(tester.widget<IconButton>(refreshBtnFinder).onPressed, isNotNull);
+  });
 }

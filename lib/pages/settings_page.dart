@@ -144,8 +144,8 @@ class SettingsPage extends StatelessWidget {
                     const Divider(height: 0, indent: 56),
                     SwitchListTile(
                       secondary: const Icon(Icons.sync_rounded, size: 20),
-                      title: const Text('静默更新'),
-                      subtitle: const Text('打开 App 时自动刷新课表'),
+                      title: const Text('自动同步课表与学业'),
+                      subtitle: const Text('打开 App 时自动同步数据'),
                       value: model.autoRefresh,
                       onChanged: model.setAutoRefresh,
                     ),
@@ -153,7 +153,7 @@ class SettingsPage extends StatelessWidget {
                       const Divider(height: 0, indent: 56),
                       ListTile(
                         leading: const Icon(Icons.timer_outlined, size: 20),
-                        title: const Text('最小更新间隔'),
+                        title: const Text('最小同步间隔'),
                         subtitle: Text(
                           _formatInterval(model.autoRefreshIntervalMinutes),
                         ),
@@ -704,7 +704,7 @@ class _ReminderAndWidgetCardState extends State<_ReminderAndWidgetCard>
                       icon: Icons.battery_saver_outlined,
                       title: '忽略电池优化',
                       value: status == null
-                          ? '查询中…'
+                          ? '查询中...'
                           : (status.batteryOptOut
                                 ? '已忽略'
                                 : '受省电策略限制 · 后台可能被清理'),
@@ -717,7 +717,7 @@ class _ReminderAndWidgetCardState extends State<_ReminderAndWidgetCard>
                       icon: Icons.alarm_rounded,
                       title: '精确闹钟',
                       value: status == null
-                          ? '查询中…'
+                          ? '查询中...'
                           : (status.exactAlarmAllowed
                                 ? '已允许'
                                 : '未允许 · 息屏时可能推迟数分钟'),

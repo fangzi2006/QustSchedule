@@ -343,7 +343,7 @@ void main() {
 
       expect(rig.model.status, AppStatus.ready);
       expect(rig.model.refreshing, isTrue);
-      expect(rig.model.hint, '更新中…');
+      expect(rig.model.hint, '更新中...');
       expect(rig.model.schedule, isNotNull);
 
       rig.model.clearHint();
@@ -392,13 +392,13 @@ void main() {
 
       final pending = rig.model.refresh();
       await Future<void>.delayed(Duration.zero);
-      expect(hints, contains('正在重新登录…'));
+      expect(hints, contains('正在重新登录...'));
 
       loginCompleter.complete(
         const AuthenticatedState(studentId: '20240001', studentName: '张三'),
       );
       await Future<void>.delayed(Duration.zero);
-      expect(hints.last, '更新中…');
+      expect(hints.last, '更新中...');
 
       scheduleCompleter.complete(sampleSchedule());
       await pending;
@@ -414,7 +414,7 @@ void main() {
       final pending = rig.model.loadScheduleForTest();
       await Future<void>.delayed(Duration.zero);
       expect(rig.model.status, AppStatus.loading);
-      expect(rig.model.hint, '获取中…');
+      expect(rig.model.hint, '获取中...');
       expect(rig.model.refreshing, isTrue);
 
       completer.complete(sampleSchedule());
@@ -1347,12 +1347,12 @@ void main() {
       addTearDown(model.dispose);
       model.hydrateForTest(schedule: sampleSchedule('2026-2027-1'));
 
-      model.hints.showHint('正在重新登录…', scope: HintScope.global);
+      model.hints.showHint('正在重新登录...', scope: HintScope.global);
       model.hints.showAcademicUpdateHint(
         '成绩有更新',
         duration: const Duration(milliseconds: 80),
       );
-      expect(model.globalHint, '正在重新登录…');
+      expect(model.globalHint, '正在重新登录...');
       expect(model.isAcademicUpdateHint, isFalse);
 
       // 遮挡超过 80ms 后喜报仍健在
@@ -2120,7 +2120,7 @@ void main() {
         forceRefresh: true,
         showHint: true,
       );
-      await waitUntil(() => model.globalHint == '正在重新登录…');
+      await waitUntil(() => model.globalHint == '正在重新登录...');
       expect(model.refreshing, isFalse);
       expect(model.academicLoading, isTrue);
 
